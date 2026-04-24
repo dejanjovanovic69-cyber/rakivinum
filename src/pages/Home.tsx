@@ -271,7 +271,7 @@ export default function Home() {
     });
 
     // Subscribe to ratings (to find top rating of this user)
-    const ratingQuery = query(collection(db, 'ratings'), where('userId', '==', userId));
+    const ratingQuery = query(collection(db, 'ratings'), where('userId', '==', userId), limit(200));
     const unsubscribeRatings = onSnapshot(ratingQuery, (snap) => {
       if (!snap.empty) {
         const ratings = snap.docs.map(d => d.data().rating);

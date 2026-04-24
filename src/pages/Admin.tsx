@@ -5,7 +5,7 @@ import QRCode from "qrcode";
 import { jsPDF } from "jspdf";
 import html2canvas from "html2canvas";
 import { auth, db } from "../lib/firebase";
-import { collection, doc, setDoc, serverTimestamp, addDoc, getDocs, getDoc, deleteDoc, updateDoc, query, where, Timestamp, deleteField, writeBatch } from "firebase/firestore";
+import { collection, doc, setDoc, serverTimestamp, addDoc, getDocs, getDoc, deleteDoc, updateDoc, query, where, Timestamp, deleteField, writeBatch, limit } from "firebase/firestore";
 import DistilleryAnalyticsModal from "../components/admin/DistilleryAnalyticsModal";
 import { isSuperuserEmail } from "../lib/authz";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
@@ -49,6 +49,12 @@ const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, 
 export default function Admin() {
   const normalizeBarcode = (value: unknown) => String(value || "").replace(/\D/g, "");
   const navigate = useNavigate();
+  const ADMIN_DISTILLERIES_LIMIT = 500;
+  const ADMIN_EVENTS_LIMIT = 400;
+  const ADMIN_LINKS_LIMIT = 300;
+  const ADMIN_BLOCKED_USERS_LIMIT = 1000;
+  const ADMIN_LICENSES_LIMIT = 1200;
+  const ADMIN_EVENT_PROPOSALS_LIMIT = 400;
   const [isSavingManual, setIsSavingManual] = useState(false);
   const [manualResult, setManualResult] = useState("");
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -535,7 +541,7 @@ export default function Admin() {
 
   const fetchDistilleries = async () => {
     try {
-      const snap = await getDocs(collection(db, 'distilleries'));
+      const snap = await getDocs(query(collection(db, 'distilleries'), limit(ADMIN_DISTILLERIES_LIMIT)));
       const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
       list.sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
       setDistilleries(list);
@@ -588,7 +594,7 @@ export default function Admin() {
 
   const fetchEventProposals = async () => {
     try {
-      const snap = await getDocs(collection(db, 'eventProposals'));
+      const snap = await getDocs(query(collection(db, 'eventProposals'), limit(ADMIN_EVENT_PROPOSALS_LIMIT)));
       setEventProposals(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch (err) {
       console.error("Error fetching event proposals:", err);
@@ -597,7 +603,7 @@ export default function Admin() {
 
   const fetchCommunityLinks = async () => {
     try {
-      const snap = await getDocs(collection(db, 'community_links'));
+      const snap = await getDocs(query(collection(db, 'community_links'), limit(ADMIN_LINKS_LIMIT)));
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
       list.sort((a: any, b: any) => (a.label || "").localeCompare(b.label || "", 'sr'));
       setCommunityLinks(list);
@@ -608,7 +614,7 @@ export default function Admin() {
 
   const fetchCommunityEvents = async () => {
     try {
-      const snap = await getDocs(collection(db, 'community_events'));
+      const snap = await getDocs(query(collection(db, 'community_events'), limit(ADMIN_EVENTS_LIMIT)));
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
       list.sort((a: any, b: any) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
       setCommunityEvents(list);
@@ -630,7 +636,7 @@ export default function Admin() {
 
   const fetchRecentRatings = async () => {
     try {
-      const q = query(collection(db, 'ratings')); // In production, limit and orderBy createdAt
+      const q = query(collection(db, 'ratings'), limit(300));
       const snap = await getDocs(q);
       setAllRatings(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a: any, b: any) => 
         (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0)
@@ -642,7 +648,7 @@ export default function Admin() {
 
   const fetchBlockedUsers = async () => {
     try {
-      const snap = await getDocs(collection(db, 'blocked_users'));
+      const snap = await getDocs(query(collection(db, 'blocked_users'), limit(ADMIN_BLOCKED_USERS_LIMIT)));
       setBlockedUsers(snap.docs.map(d => d.id));
     } catch (err) {
       console.error("Error fetching blocked users:", err);
@@ -694,7 +700,7 @@ export default function Admin() {
 
   const fetchLicenses = async () => {
     try {
-      const snap = await getDocs(collection(db, 'licenses'));
+      const snap = await getDocs(query(collection(db, 'licenses'), limit(ADMIN_LICENSES_LIMIT)));
       setLicenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch (err) {
       console.error("Error fetching licenses:", err);

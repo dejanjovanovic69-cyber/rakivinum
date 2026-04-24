@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { db } from "../lib/firebase";
-import { collection, query, where, getDocs, doc, getDoc, deleteDoc, onSnapshot } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc, deleteDoc, onSnapshot, limit } from "firebase/firestore";
 import { ArrowLeft, Gift, ShieldX, Loader2, Star, CheckCircle2, ChevronRight, Users } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -86,7 +86,8 @@ export default function MyClubs() {
             const qScans = query(
               collection(db, 'scans'),
               where('visitorId', '==', visitorId),
-              where('distilleryId', '==', id)
+              where('distilleryId', '==', id),
+              limit(500)
             );
             const scansSnap = await getDocs(qScans);
             currentScans = scansSnap.size;
@@ -96,7 +97,8 @@ export default function MyClubs() {
               collection(db, 'ratings'),
               where('visitorId', '==', visitorId),
               where('distilleryId', '==', id),
-              where('rating', '>=', 4.5)
+              where('rating', '>=', 4.5),
+              limit(500)
             );
             const ratingsSnap = await getDocs(qRatings);
             currentRatings = ratingsSnap.size;

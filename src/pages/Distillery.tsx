@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { auth, db } from "../lib/firebase";
-import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp, deleteDoc, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp, deleteDoc, onSnapshot, getCountFromServer, limit } from "firebase/firestore";
 import { ArrowLeft, MapPin, Globe, Loader2, Star, Hexagon, CheckCircle, Phone, Mail, Award, History, Info, Users, ImageIcon, Share2, X } from "lucide-react";
 import { cn } from "../lib/utils";
 import { recordClubMembershipAchievement } from "../lib/achievements";
@@ -87,7 +87,7 @@ export default function Distillery() {
         }
 
         // Fetch their products
-        const productsQuery = query(collection(db, 'products'), where('distilleryId', '==', id));
+        const productsQuery = query(collection(db, 'products'), where('distilleryId', '==', id), limit(300));
         const productsSnap = await getDocs(productsQuery);
         const mappedProducts = productsSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
         setProducts(mappedProducts.filter(p => p.isApproved !== false && !p.isArchivedByDistillery && p.publicLabelDisabled !== true));
@@ -121,14 +121,19 @@ export default function Distillery() {
       }
     });
 
-    const qAllMembers = query(collection(db, 'club_memberships'), where('distilleryId', '==', id));
-    const unsubCount = onSnapshot(qAllMembers, (snap) => {
-      setTotalMembers(snap.size);
-    });
+    const refreshTotalMembers = async () => {
+      try {
+        const qAllMembers = query(collection(db, 'club_memberships'), where('distilleryId', '==', id));
+        const countSnap = await getCountFromServer(qAllMembers);
+        setTotalMembers(countSnap.data().count);
+      } catch (err) {
+        console.error("Error counting members", err);
+      }
+    };
+    void refreshTotalMembers();
 
     return () => {
       unsubMember();
-      unsubCount();
     };
   }, [id]);
 
@@ -152,6 +157,11 @@ export default function Distillery() {
 
         clubs = clubs.filter((cid: string) => cid !== id);
         setIsMember(false);
+        if (id) {
+          const qAllMembers = query(collection(db, 'club_memberships'), where('distilleryId', '==', id));
+          const countSnap = await getCountFromServer(qAllMembers);
+          setTotalMembers(countSnap.data().count);
+        }
       } else {
         // JOIN CLUB
         if (clubs.length >= 5) {
@@ -176,6 +186,11 @@ export default function Distillery() {
           clubs.push(id);
         }
         setIsMember(true);
+        if (id) {
+          const qAllMembers = query(collection(db, 'club_memberships'), where('distilleryId', '==', id));
+          const countSnap = await getCountFromServer(qAllMembers);
+          setTotalMembers(countSnap.data().count);
+        }
         recordClubMembershipAchievement(clubs.length);
         alert(`Dobrodošli u ${distillery?.name} klub! Od sada ćete dobijati ekskluzivne pogodnosti ovog proizvođača.`);
       }

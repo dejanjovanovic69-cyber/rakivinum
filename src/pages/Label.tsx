@@ -262,7 +262,8 @@ export default function Label() {
 
     const qReviews = query(
       collection(db, 'ratings'),
-      where('productId', '==', id)
+      where('productId', '==', id),
+      limit(120)
     );
     const unsubReviews = onSnapshot(qReviews, (snap) => {
       const reviewsData = snap.docs.map(doc => ({
