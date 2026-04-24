@@ -5,8 +5,9 @@
 - Start work: run `npm run backup:local`
 - Before bigger refactor: run `npm run backup:local`
 - End of day: run `npm run backup:local:keep30`
+- Once per week: run `npm run backup:full`
 
-Backups are stored in `backups/` as timestamped `.zip` files.
+Backups are stored in `backups/` as timestamped snapshot folders.
 
 ## 2) What is included
 
@@ -14,7 +15,9 @@ Backups are stored in `backups/` as timestamped `.zip` files.
 - Configuration
 - Assets
 
-Not included:
+Daily mode includes only critical project parts (`src`, `public`, `scripts`, root config files).
+
+Full mode includes almost everything except:
 
 - `node_modules`
 - `dist`
