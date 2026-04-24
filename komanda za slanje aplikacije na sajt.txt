@@ -1,0 +1,1 @@
+C:\rakivinum>npm run build && firebase deploy

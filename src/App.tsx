@@ -1,0 +1,195 @@
+import { BrowserRouter as Router, Routes, Route, useNavigate } from "react-router-dom";
+import MobileLayout from "./components/layout/MobileLayout";
+import Home from "./pages/Home";
+import Workshop from "./pages/Workshop";
+import Scanner from "./pages/Scanner";
+import Community from "./pages/Community";
+import Menu from "./pages/Menu";
+import Collection from "./pages/Collection";
+import Label from "./pages/Label";
+import Admin from "./pages/Admin";
+import Distillery from "./pages/Distillery";
+import DistilleryDashboard from "./pages/DistilleryDashboard";
+import ProductAnalytics from "./pages/ProductAnalytics";
+import AdminAudit from "./pages/AdminAudit";
+import Activate from "./pages/Activate";
+import MyClubs from "./pages/MyClubs";
+import Distilleries from "./pages/Distilleries";
+import React, { useEffect, useState, useCallback } from "react";
+import AgeGate, { hasAgeGateConsent } from "./components/AgeGate";
+import { auth } from "./lib/firebase";
+import { ShieldAlert, QrCode } from "lucide-react";
+import NotificationSystem from "./components/NotificationSystem";
+import PwaManager from "./components/PwaManager";
+import { isSuperuserEmail } from "./lib/authz";
+import { extractActivateTokenFromInput, isLicensedLocalStorage } from "./lib/extractActivateToken";
+
+// Initialize Visitor ID immediately before anything renders
+if (typeof window !== 'undefined' && !localStorage.getItem('rakivinum_visitor_id')) {
+  const newVisitorId = 'v_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  localStorage.setItem('rakivinum_visitor_id', newVisitorId);
+}
+
+// The LicenseGuard now acts as a "soft" gate only for specific premium routes
+function LicenseGuard({ children }: { children: React.ReactNode }) {
+  const [isLicensed, setIsLicensed] = useState<boolean | null>(null);
+  const [paste, setPaste] = useState("");
+  const [pasteErr, setPasteErr] = useState<string | null>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const checkLicense = () => {
+      // Super admin is always licensed
+      if (isSuperuserEmail(auth.currentUser?.email)) {
+        setIsLicensed(true);
+        return;
+      }
+
+      setIsLicensed(isLicensedLocalStorage());
+    };
+
+    checkLicense();
+    window.addEventListener('storage', checkLicense);
+    window.addEventListener('rakivinum_license_changed', checkLicense);
+    const unsub = auth.onAuthStateChanged(checkLicense);
+
+    return () => {
+      window.removeEventListener('storage', checkLicense);
+      window.removeEventListener('rakivinum_license_changed', checkLicense);
+      unsub();
+    };
+  }, []);
+
+  const goActivateFromPaste = () => {
+    setPasteErr(null);
+    const token = extractActivateTokenFromInput(paste);
+    if (!token) {
+      setPasteErr("Nije prepoznat token. Nalepite pun link (…/activate?token=…) ili sam token (lic_…).");
+      return;
+    }
+    navigate(`/activate?token=${encodeURIComponent(token)}`);
+  };
+
+  if (isLicensed === null) return null;
+
+  if (!isLicensed) {
+    return (
+      <div className="min-h-screen bg-bg-base text-white flex items-center justify-center p-6 relative overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-gold-500/10 blur-[120px] rounded-full pointer-events-none" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-gold-500/10 blur-[120px] rounded-full pointer-events-none" />
+
+        <div className="max-w-sm w-full card-soft card-elevated border border-border-subtle rounded-[32px] p-8 shadow-2xl relative z-10 space-y-5 text-center">
+          <div className="w-20 h-20 bg-gold-500/10 rounded-full flex items-center justify-center mx-auto border border-gold-500/15">
+            <ShieldAlert className="w-10 h-10 text-gold-500" />
+          </div>
+          <div className="space-y-2">
+            <h1 className="text-xl font-black uppercase tracking-tight italic text-white">Premium pristup</h1>
+            <p className="text-text-secondary text-sm leading-relaxed">
+              Otključajte licencu: nalepite link iz PDF-a / mejla, ili skenirajte QR na tabu „Skeniraj“ (telefon). Na računaru najlakše je nalepiti link ispod.
+            </p>
+          </div>
+
+          <div className="space-y-3 text-left">
+            <label className="block eyebrow-label text-gold-500/90">Link ili token</label>
+            <textarea
+              value={paste}
+              onChange={(e) => {
+                setPaste(e.target.value);
+                setPasteErr(null);
+              }}
+              rows={4}
+              placeholder="https://…/activate?token=lic_…"
+              className="w-full rounded-xl border border-white/10 bg-bg-base p-3 text-sm text-white placeholder:text-text-secondary/50 focus:border-gold-500/50 focus:outline-none resize-y min-h-[88px] focus-visible:ring-2 focus-visible:ring-gold-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card"
+              autoComplete="off"
+            />
+            {pasteErr && <p className="text-xs text-red-400 leading-snug">{pasteErr}</p>}
+            <button
+              type="button"
+              onClick={goActivateFromPaste}
+              className="w-full py-4 btn-primary text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card"
+            >
+              Nastavi aktivaciju
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-bg-card/40 p-4 flex items-start gap-3 text-left">
+            <QrCode className="w-6 h-6 text-gold-500 shrink-0 mt-0.5" aria-hidden />
+            <p className="text-xs text-text-secondary leading-snug font-medium">
+              Alternativa: tab „Skeniraj“ — QR sa licence vodi direktno na aktivaciju.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => navigate("/scan")}
+              className="w-full py-2.5 btn-tertiary text-[11px] normal-case font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card"
+            >
+              Otvori skener
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className="w-full py-2 btn-tertiary text-[11px] normal-case font-medium opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card"
+            >
+              Nazad na besplatni sadržaj
+            </button>
+          </div>
+
+          <div className="pt-2 flex flex-col items-center gap-1">
+            <div className="flex items-center gap-2 text-gold-500/50">
+              <span className="w-8 h-[1px] bg-current" aria-hidden />
+              <span className="ui-pill text-gold-500/70 tracking-[0.14em]">Rakivinum Mreža</span>
+              <span className="w-8 h-[1px] bg-current" aria-hidden />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
+
+export default function App() {
+  const [ageOk, setAgeOk] = useState(hasAgeGateConsent);
+  const onAgeConfirmed = useCallback(() => setAgeOk(true), []);
+
+  if (!ageOk) {
+    return <AgeGate onConfirmed={onAgeConfirmed} />;
+  }
+
+  return (
+    <Router>
+      <NotificationSystem />
+      <PwaManager />
+      <Routes>
+        <Route path="/activate" element={<Activate />} />
+        <Route path="/admin" element={<Admin />} />
+        
+        {/* PUBLIC ROUTES - NO BURDEN */}
+        <Route path="/" element={<MobileLayout />}>
+          <Route index element={<Home />} />
+          <Route path="scan" element={<Scanner />} />
+          <Route path="radionica" element={<Workshop />} />
+          <Route path="community" element={<Community />} />
+          <Route path="menu" element={<Menu />} />
+          <Route path="my-clubs" element={<MyClubs />} />
+          <Route path="distilleries" element={<Distilleries />} />
+          <Route path="collection" element={<Collection />} />
+          
+          {/* PREMIUM ROUTES - LICENSED */}
+        </Route>
+        
+        {/* Public Full screen routes */}
+        <Route path="/label/:id" element={<Label />} />
+        <Route path="/distillery/:id" element={<Distillery />} />
+        
+        {/* Professional/B2B routes */}
+        <Route path="/distillery-dashboard" element={<LicenseGuard><DistilleryDashboard /></LicenseGuard>} />
+        <Route path="/product-analytics/:id" element={<LicenseGuard><ProductAnalytics /></LicenseGuard>} />
+        <Route path="/admin-audit" element={<LicenseGuard><AdminAudit /></LicenseGuard>} />
+      </Routes>
+    </Router>
+  );
+}

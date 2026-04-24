@@ -1,0 +1,121 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // SHARED HELPERS
+    // ===============================================================
+    /** Marker za proveru deploya (komentari u konzoli često nisu vidljivi — traži ime funkcije u Security editoru). */
+    function rakivinumLicenseActivationAllowed() {
+      return true;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == "ldjs1969@gmail.com" ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'platformAdmin')
+      );
+    }
+
+    function isDistilleryOwner(distilleryId) {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/distilleries/$(distilleryId)) &&
+             (get(/databases/$(database)/documents/distilleries/$(distilleryId)).data.ownerId == request.auth.uid ||
+              (get(/databases/$(database)/documents/distilleries/$(distilleryId)).data.email != null &&
+               get(/databases/$(database)/documents/distilleries/$(distilleryId)).data.email == request.auth.token.email));
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    // ===============================================================
+    // COLLECTION RULES (specifična pravila PRE wildcard „deny“)
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+
+      match /savedItems/{itemId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+
+    match /distilleries/{distilleryId} {
+      allow read: if true;
+      allow create: if isAdmin() || (isSignedIn() && incoming().ownerId == request.auth.uid);
+      allow update: if isAdmin() || (isSignedIn() && (existing().ownerId == request.auth.uid || (existing().email != null && existing().email == request.auth.token.email)));
+      allow delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+      allow create, delete: if isAdmin() || isDistilleryOwner(incoming().get('distilleryId', existing().get('distilleryId', '')));
+      allow update: if isAdmin() ||
+                    isDistilleryOwner(incoming().get('distilleryId', existing().get('distilleryId', ''))) ||
+                    (incoming().diff(existing()).affectedKeys().hasOnly(['averageRating', 'ratingCount']));
+    }
+
+    match /ratings/{ratingId} {
+      allow read, list: if true;
+      allow create: if true;
+      allow update: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    match /scans/{scanId} {
+      allow create: if true;
+      allow read: if isAdmin() || isDistilleryOwner(resource.data.distilleryId);
+    }
+
+    match /club_memberships/{membershipId} {
+      allow read, list: if true;
+      allow create: if incoming().visitorId is string && incoming().distilleryId is string;
+      allow delete: if true;
+    }
+
+    match /club_actions/{actionId} {
+      allow read, list: if true;
+      allow create, update, delete: if isAdmin() || isDistilleryOwner(incoming().get('distilleryId', existing().get('distilleryId', '')));
+    }
+
+    match /licenses/{licenseId} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      // Aktivacija: tajnost je nepogodljiv ID dokumenta (lic_…). Pokušaji sa granularnim
+      // pravilima (lista, int, +1) konzistentno su davali permission-denied u produkciji.
+      // Limit uređaja i dalje u aplikaciji (Activate.tsx). Kasnije: Cloud Function za aktivaciju.
+      allow update: if rakivinumLicenseActivationAllowed();
+    }
+
+    match /rating_logs/{logId} {
+      allow create: if true;
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /guest_saved_items/{itemId} {
+      allow read, list: if true;
+      allow create, update: if incoming().visitorId is string && incoming().productId is string;
+      allow delete: if true;
+    }
+
+    match /blocked_users/{userId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Default deny — NA KRAJU (wildcard ne „pregazi“ specifična pravila)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

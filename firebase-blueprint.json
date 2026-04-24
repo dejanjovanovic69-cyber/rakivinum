@@ -1,0 +1,209 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and role information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "distilleryAdmin", "platformAdmin"] },
+        "isBlocked": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["uid", "email", "role", "createdAt"]
+    },
+    "Distillery": {
+      "title": "Distillery",
+      "description": "Information about a distillery",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "region": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "isVerified": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["name", "region", "ownerId", "isVerified", "createdAt"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "A specific rakija product",
+      "type": "object",
+      "properties": {
+        "distilleryId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "description": { "type": "string" },
+        "alcoholPercentage": { "type": "number" },
+        "bottleImageUrl": { "type": "string" },
+        "averageRating": { "type": "number" },
+        "scanCount": { "type": "number" },
+        "sensoryProfile": {
+          "type": "object",
+          "properties": {
+            "aroma": { "type": "number" },
+            "taste": { "type": "number" },
+            "clarity": { "type": "number" },
+            "texture": { "type": "number" },
+            "aftertaste": { "type": "number" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["distilleryId", "name", "type", "createdAt"]
+    },
+    "Rating": {
+      "title": "Rating",
+      "description": "User rating and review for a product",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "userId": { "type": "string" },
+        "rating": { "type": "number" },
+        "reviewText": { "type": "string" },
+        "sensoryScores": {
+          "type": "object",
+          "properties": {
+            "aroma": { "type": "number" },
+            "taste": { "type": "number" },
+            "clarity": { "type": "number" },
+            "texture": { "type": "number" },
+            "aftertaste": { "type": "number" }
+          }
+        },
+        "isFlagged": { "type": "boolean" },
+        "flagReason": { "type": "string" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["productId", "userId", "rating", "createdAt"]
+    },
+    "ScanEvent": {
+      "title": "ScanEvent",
+      "description": "Anonymous tracking of QR scans",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "region": { "type": "string" },
+        "city": { "type": "string" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["productId", "createdAt"]
+    },
+    "RatingLog": {
+      "title": "RatingLog",
+      "description": "Security log for anti-fraud tracking",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "userId": { "type": "string" },
+        "rating": { "type": "number" },
+        "userAgent": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["productId", "userId", "rating", "timestamp"]
+    },
+    "BlockedUser": {
+      "title": "BlockedUser",
+      "description": "List of blocked user UIDs",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "reason": { "type": "string" },
+        "blockedAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["uid", "blockedAt"]
+    },
+    "License": {
+      "title": "License",
+      "description": "Activation tokens for the application access",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "type": { "type": "string", "enum": ["single", "multi"] },
+        "isUsed": { "type": "boolean" },
+        "usedBy": { "type": "string" },
+        "usedAt": { "type": "string", "format": "timestamp" },
+        "createdAt": { "type": "string", "format": "timestamp" },
+        "comment": { "type": "string" }
+      },
+      "required": ["token", "type", "isUsed", "createdAt"]
+    },
+    "ClubAction": {
+      "title": "ClubAction",
+      "description": "Promotion or reward action for members",
+      "type": "object",
+      "properties": {
+        "distilleryId": { "type": "string" },
+        "title": { "type": "string" },
+        "condition": { "type": "string", "enum": ["3_scans", "high_rating", "social_share", "combined_automated"] },
+        "rewardType": { "type": "string", "enum": ["voucher_code", "secret_link", "instructions"] },
+        "rewardValue": { "type": "string" },
+        "targetScans": { "type": "number" },
+        "targetRatings": { "type": "number" },
+        "durationDays": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "timestamp" },
+        "endsAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["distilleryId", "title", "condition", "rewardType", "rewardValue", "isActive", "createdAt"]
+    },
+    "ClubMembership": {
+      "title": "ClubMembership",
+      "description": "User membership in a distillery club",
+      "type": "object",
+      "properties": {
+        "visitorId": { "type": "string" },
+        "distilleryId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["visitorId", "distilleryId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "User" },
+      "description": "Collection of user profiles"
+    },
+    "/distilleries/{distilleryId}": {
+      "schema": { "$ref": "Distillery" },
+      "description": "Collection of distilleries"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "Product" },
+      "description": "Collection of rakija products"
+    },
+    "/ratings/{ratingId}": {
+      "schema": { "$ref": "Rating" },
+      "description": "Collection of product ratings"
+    },
+    "/scans/{scanId}": {
+      "schema": { "$ref": "ScanEvent" },
+      "description": "Collection of anonymous scan events"
+    },
+    "/rating_logs/{logId}": {
+      "schema": { "$ref": "RatingLog" },
+      "description": "Security logs for ratings"
+    },
+    "/blocked_users/{userId}": {
+      "schema": { "$ref": "BlockedUser" },
+      "description": "List of blocked users"
+    },
+    "/licenses/{licenseId}": {
+      "schema": { "$ref": "License" },
+      "description": "Tokens for licensing the app"
+    },
+    "/club_actions/{actionId}": {
+      "schema": { "$ref": "ClubAction" },
+      "description": "Collection of distillery promotions"
+    },
+    "/club_memberships/{membershipId}": {
+      "schema": { "$ref": "ClubMembership" },
+      "description": "Collection of user club memberships"
+    }
+  }
+}

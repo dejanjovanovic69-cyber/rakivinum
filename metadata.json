@@ -1,0 +1,9 @@
+{
+  "name": "Rakivinum - Ekosistem za Rakiju i Vino",
+  "description": "Prva digitalna platforma za senzornu analizu, proveru autentičnosti i marketing vrhunskih destilerija i vinarija. Objedinjeno tržište i digitalni pečat kvaliteta.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": []
+}

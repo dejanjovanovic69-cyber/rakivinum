@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 190" role="img" aria-label="RV">
+  <defs>
+    <linearGradient id="rvGold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f4e4a8" />
+      <stop offset="100%" stop-color="#c9a227" />
+    </linearGradient>
+  </defs>
+  <text
+    x="140"
+    y="142"
+    text-anchor="middle"
+    font-family="'Brush Script MT', 'Segoe Script', 'Lucida Handwriting', cursive"
+    font-size="146"
+    font-style="italic"
+    font-weight="700"
+    fill="url(#rvGold)"
+    stroke="#0f0f11"
+    stroke-opacity="0.55"
+    stroke-width="2.2"
+    paint-order="stroke fill"
+    letter-spacing="0"
+  >RV</text>
+</svg>
