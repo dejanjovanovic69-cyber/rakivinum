@@ -6,6 +6,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { collection, onSnapshot, query, where, getDocs, limit } from "firebase/firestore";
 import { cn } from "../lib/utils";
 import { isQuotaError, readCache, writeCache } from "../lib/resilience";
+import { fetchPublicDistilleries, fetchPublicProducts } from "../lib/dataService";
 
 export default function Home() {
   const [savedCount, setSavedCount] = useState<number | "-">("-");
@@ -39,10 +40,14 @@ export default function Home() {
 
     const fetchDistilleries = async () => {
       try {
-        const snap = await getDocs(collection(db, 'distilleries'));
+        const distilleries = await fetchPublicDistilleries({
+          limitCount: 250,
+          cacheKey: "rakivinum_cache_home_distillery_list_v1",
+          ttlMs: 30 * 60 * 1000,
+        });
         const map: Record<string, string> = {};
-        snap.forEach(d => {
-          map[d.id] = d.data().name;
+        distilleries.forEach((d: any) => {
+          map[d.id] = String(d.name || "");
         });
         setDistilleryMap(map);
         writeCache("rakivinum_cache_home_distillery_map_v1", map, 30 * 60 * 1000);
@@ -130,35 +135,28 @@ export default function Home() {
     const fetchDailyRecommendation = async () => {
       setIsLoadingRec(true);
       try {
-        const [prodSnap, distSnap] = await Promise.all([
-          getDocs(collection(db, 'products')),
-          getDocs(collection(db, 'distilleries')),
+        const [products, distilleries] = await Promise.all([
+          fetchPublicProducts({
+            limitCount: 300,
+            cacheKey: "rakivinum_cache_home_products_v1",
+            ttlMs: 15 * 60 * 1000,
+          }),
+          fetchPublicDistilleries({
+            limitCount: 250,
+            cacheKey: "rakivinum_cache_home_distilleries_for_rec_v1",
+            ttlMs: 30 * 60 * 1000,
+          }),
         ]);
-        if (!prodSnap.empty) {
-          const allProducts = prodSnap.docs.map(d => ({ id: d.id, ...d.data() as any }));
-          const publicDistilleryIds = new Set(
-            distSnap.docs
-              .filter((d) => {
-                const x = d.data() as any;
-                return !x.isArchived && x.isVerified === true;
-              })
-              .map((d) => d.id)
-          );
-          const products = allProducts.filter(
-            (p) =>
-              p.isApproved !== false &&
-              !p.isArchivedByDistillery &&
-              p.publicLabelDisabled !== true &&
-              p.distilleryId &&
-              publicDistilleryIds.has(p.distilleryId)
-          );
+        if (products.length > 0) {
+          const publicDistilleryIds = new Set(distilleries.map((d: any) => d.id));
+          const eligibleProducts = products.filter((p: any) => p.distilleryId && publicDistilleryIds.has(p.distilleryId));
           const normalize = (v: unknown) => String(v || "").toLowerCase();
           const isWine = (p: any) => {
             const text = `${normalize(p.type)} ${normalize(p.category)} ${normalize(p.name)}`;
             return text.includes("vino") || text.includes("wine");
           };
-          const winePool = products.filter(isWine);
-          const rakijaPool = products.filter((p) => !isWine(p));
+          const winePool = eligibleProducts.filter(isWine);
+          const rakijaPool = eligibleProducts.filter((p) => !isWine(p));
 
           const pickFromPool = (pool: any[], historyKey: string) => {
             if (pool.length === 0) return null;
@@ -214,8 +212,12 @@ export default function Home() {
     // Fetch Distilleries
     const fetchDistilleries = async () => {
       try {
-        const distSnap = await getDocs(query(collection(db, 'distilleries'), limit(5)));
-        const topDistilleries = distSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const allDistilleries = await fetchPublicDistilleries({
+          limitCount: 120,
+          cacheKey: "rakivinum_cache_home_distilleries_v1",
+          ttlMs: 30 * 60 * 1000,
+        });
+        const topDistilleries = allDistilleries.slice(0, 5);
         setDistilleries(topDistilleries);
         writeCache("rakivinum_cache_home_distilleries_v1", topDistilleries, 30 * 60 * 1000);
       } catch (e) {

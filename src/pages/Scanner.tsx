@@ -252,21 +252,8 @@ export default function Scanner() {
           }
         }
 
-        if (!finalProductId) {
-          // Robust fallback: normalize barcode and match client-side
-          // Handles values like "860-123 4567890", numeric Firestore fields, etc.
-          if (scannedBarcode) {
-            const allProductsSnap = await getDocs(collection(db, 'products'));
-            const matched = allProductsSnap.docs.find((d) => {
-              const data = d.data() as any;
-              return normalizeBarcode(data.barcodeNormalized || data.barcode) === scannedBarcode;
-            });
-            if (matched) {
-              finalProductId = matched.id;
-              finalProductData = matched.data();
-            }
-          }
-        }
+        // NOTE: intentionally no "fetch all products" fallback.
+        // Full-collection reads are too expensive at scale and can exhaust quota quickly.
       }
 
       if (!finalProductId) {

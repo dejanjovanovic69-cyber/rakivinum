@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { db } from "../lib/firebase";
-import { collection, getDocs } from "firebase/firestore";
 import { ArrowLeft, MapPin, Loader2, ChevronRight, Award, Search, X } from "lucide-react";
-import { isQuotaError, readCache, writeCache } from "../lib/resilience";
+import { isQuotaError } from "../lib/resilience";
+import { fetchPublicDistilleries } from "../lib/dataService";
 
 export default function Distilleries() {
   const navigate = useNavigate();
@@ -23,17 +22,15 @@ export default function Distilleries() {
   useEffect(() => {
     async function fetchDistilleries() {
       try {
-        const snap = await getDocs(collection(db, 'distilleries'));
-        const publicDistilleries = snap.docs
-          .map(d => ({ id: d.id, ...d.data() } as any))
-          .filter(d => !d.isArchived && d.isVerified === true);
+        const publicDistilleries = await fetchPublicDistilleries({
+          limitCount: 300,
+          cacheKey: "rakivinum_cache_distilleries_page_v1",
+          ttlMs: 30 * 60 * 1000,
+        });
         setDistilleries(publicDistilleries);
-        writeCache("rakivinum_cache_distilleries_page_v1", publicDistilleries, 30 * 60 * 1000);
       } catch (err) {
         console.error(err);
         if (isQuotaError(err)) setQuotaExceeded(true);
-        const cachedDistilleries = readCache<any[]>("rakivinum_cache_distilleries_page_v1");
-        if (cachedDistilleries) setDistilleries(cachedDistilleries);
       } finally {
         setIsLoading(false);
       }

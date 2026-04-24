@@ -249,7 +249,7 @@ export default function Menu() {
     let mounted = true;
     const loadHelpLinks = async () => {
       try {
-        const snap = await getDocs(collection(db, "community_links"));
+        const snap = await getDocs(query(collection(db, "community_links"), limit(80)));
         const rows = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as any) }))
           .filter((x: any) => typeof x?.url === "string" && x.url.trim().length > 0)

@@ -2,9 +2,10 @@ import { Users as UsersIcon, ChevronRight, MapPin, Star, Loader2, MessageCircle,
 import { useNavigate, useLocation } from "react-router-dom";
 import React, { useState, useEffect } from "react";
 import { db } from "../lib/firebase";
-import { collection, query, orderBy, limit, onSnapshot, getDocs, doc, updateDoc } from "firebase/firestore";
+import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc } from "firebase/firestore";
 import { cn } from "../lib/utils";
-import { isQuotaError, readCache, writeCache } from "../lib/resilience";
+import { isQuotaError } from "../lib/resilience";
+import { fetchCommunityEvents, fetchPublicDistilleries, fetchPublicProducts } from "../lib/dataService";
 
 function safeStr(v: unknown): string {
   if (typeof v === "string") return v;
@@ -17,6 +18,9 @@ function safeStr(v: unknown): string {
 }
 
 export default function Community() {
+  const PRODUCTS_FETCH_LIMIT = 350;
+  const DISTILLERIES_FETCH_LIMIT = 220;
+  const EVENTS_FETCH_LIMIT = 60;
   const [ratings, setRatings] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -83,20 +87,20 @@ export default function Community() {
       try {
         // Fetch independently so one failing query does not blank the whole screen.
         const [prodResult, distResult] = await Promise.allSettled([
-          getDocs(collection(db, "products")),
-          getDocs(collection(db, "distilleries")),
+          fetchPublicProducts({
+            limitCount: PRODUCTS_FETCH_LIMIT,
+            cacheKey: "rakivinum_cache_community_products_v1",
+            ttlMs: 15 * 60 * 1000,
+          }),
+          fetchPublicDistilleries({
+            limitCount: DISTILLERIES_FETCH_LIMIT,
+            cacheKey: "rakivinum_cache_community_distilleries_v1",
+            ttlMs: 15 * 60 * 1000,
+          }),
         ]);
 
         if (prodResult.status === "fulfilled") {
-          const prodData = prodResult.value.docs.map((d) => ({ id: d.id, ...(d.data() as any), _type: "product" }));
-          const publicProducts = prodData.filter(
-            (p: any) =>
-              p.isApproved !== false &&
-              !p.isArchivedByDistillery &&
-              p.publicLabelDisabled !== true,
-          );
-          setProducts(publicProducts);
-          writeCache("rakivinum_cache_community_products_v1", publicProducts, 15 * 60 * 1000);
+          setProducts(prodResult.value);
         } else {
           console.error("Error fetching products:", prodResult.reason);
           if (isQuotaError(prodResult.reason)) setQuotaExceeded(true);
@@ -105,10 +109,7 @@ export default function Community() {
         }
 
         if (distResult.status === "fulfilled") {
-          const distData = distResult.value.docs.map((d) => ({ id: d.id, ...d.data(), _type: "distillery" } as any));
-          const publicDistilleries = distData.filter((d: any) => !d.isArchived && d.isVerified === true);
-          setDistilleries(publicDistilleries);
-          writeCache("rakivinum_cache_community_distilleries_v1", publicDistilleries, 15 * 60 * 1000);
+          setDistilleries(distResult.value);
         } else {
           console.error("Error fetching distilleries:", distResult.reason);
           if (isQuotaError(distResult.reason)) setQuotaExceeded(true);
@@ -123,12 +124,12 @@ export default function Community() {
       }
 
       try {
-        const eventsSnapshot = await getDocs(collection(db, "community_events"));
-        const events = eventsSnapshot.docs
-          .map((d) => ({ id: d.id, ...d.data() as any }))
-          .sort((a: any, b: any) => String(b.eventDate || "").localeCompare(String(a.eventDate || "")));
+        const events = await fetchCommunityEvents({
+          limitCount: EVENTS_FETCH_LIMIT,
+          cacheKey: "rakivinum_cache_community_events_v1",
+          ttlMs: 15 * 60 * 1000,
+        });
         setCommunityEvents(events);
-        writeCache("rakivinum_cache_community_events_v1", events, 15 * 60 * 1000);
       } catch (err) {
         if (isQuotaError(err)) setQuotaExceeded(true);
         const cachedEvents = readCache<any[]>("rakivinum_cache_community_events_v1");
