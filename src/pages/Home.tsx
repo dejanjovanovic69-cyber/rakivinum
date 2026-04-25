@@ -1,56 +1,132 @@
 import { ArrowRight, Trophy, Droplet, Flame, ArrowUpRight, Sparkles, Star, Clock, Download, ShieldAlert, X, Gift, Ticket, CheckCircle2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { auth, db } from "../lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, onSnapshot, query, where, getDocs, limit } from "firebase/firestore";
+import { collection, query, where, getDocs, getCountFromServer, orderBy, limit } from "firebase/firestore";
 import { cn } from "../lib/utils";
 import { isQuotaError, readCache, writeCache } from "../lib/resilience";
-import { fetchPublicDistilleries, fetchPublicProducts } from "../lib/dataService";
+import {
+  fetchPublicClubActions,
+  fetchPublicClubMembershipsByVisitorId,
+  fetchPublicDistilleries,
+  fetchPublicLicenseByToken,
+  fetchPublicProductById,
+  fetchPublicProducts,
+} from "../lib/dataService";
+import { shouldRunRefresh } from "../lib/refreshGate";
+import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { meterDbRead } from "../lib/requestMeter";
+
+type ProductLite = {
+  id: string;
+  name?: string;
+  type?: string;
+  category?: string;
+  image?: string;
+  bottleImageUrl?: string;
+  distilleryId?: string;
+  averageRating?: number;
+};
+
+type DistilleryLite = {
+  id: string;
+  name?: string;
+};
+
+type RecentScanItem = {
+  id: string;
+  name?: string;
+  type?: string;
+  image?: string;
+};
+
+type ClubActionLite = {
+  id: string;
+  title?: string;
+  distilleryId?: string;
+  rewardType?: string;
+  isActive?: boolean;
+  endsAt?: { toDate?: () => Date } | string | number | Date;
+  createdAt?: { toDate?: () => Date } | string | number | Date;
+  condition?: string;
+  conditionLabel?: string;
+  targetScans?: number;
+  targetRatings?: number;
+  targetValue?: number;
+};
 
 export default function Home() {
+  const location = useLocation();
+  const homeReturnTo = `${location.pathname}${location.search}`;
+  const labelHref = (productId: string) => `/label/${productId}?rt=${encodeURIComponent(homeReturnTo)}`;
+  const persistLabelReturn = () => {
+    try {
+      sessionStorage.setItem("rakivinum_last_label_return_v1", homeReturnTo);
+    } catch {
+      // ignore storage errors
+    }
+  };
   const [savedCount, setSavedCount] = useState<number | "-">("-");
   const [topRating, setTopRating] = useState<number | null>(null);
-  const [lastSavedProduct, setLastSavedProduct] = useState<any>(null);
-  const [recommendedRakija, setRecommendedRakija] = useState<any>(null);
-  const [recommendedVino, setRecommendedVino] = useState<any>(null);
-  const [distilleries, setDistilleries] = useState<any[]>([]);
+  const [lastSavedProduct, setLastSavedProduct] = useState<ProductLite | null>(null);
+  const [recommendedRakija, setRecommendedRakija] = useState<ProductLite | null>(null);
+  const [recommendedVino, setRecommendedVino] = useState<ProductLite | null>(null);
+  const [distilleries, setDistilleries] = useState<DistilleryLite[]>([]);
   const [isLoadingRec, setIsLoadingRec] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
-  const [recentScans, setRecentScans] = useState<any[]>([]);
+  const [recentScans, setRecentScans] = useState<RecentScanItem[]>([]);
   const [licenseWarning, setLicenseWarning] = useState<string | null>(null);
   const [joinedClubs, setJoinedClubs] = useState<string[]>([]);
-  const [activeActions, setActiveActions] = useState<any[]>([]);
+  const [activeActions, setActiveActions] = useState<ClubActionLite[]>([]);
   const [distilleryMap, setDistilleryMap] = useState<Record<string, string>>({});
   const [quotaExceeded, setQuotaExceeded] = useState(false);
+  const toDateSafe = (value: unknown): Date => {
+    if (value && typeof (value as { toDate?: () => Date }).toDate === "function") {
+      const d = (value as { toDate?: () => Date }).toDate?.();
+      return d instanceof Date ? d : new Date(0);
+    }
+    if (value instanceof Date) return value;
+    const d = new Date((value || 0) as string | number | Date);
+    return Number.isNaN(d.getTime()) ? new Date(0) : d;
+  };
 
   useEffect(() => {
     const visitorId = localStorage.getItem('rakivinum_visitor_id');
-    
-    // REAL-TIME MEMBERSHIPS
-    const qMembers = query(collection(db, 'club_memberships'), where('visitorId', '==', visitorId));
-    const unsubMembers = onSnapshot(qMembers, (snap) => {
-      const clubs = snap.docs.map(d => d.data().distilleryId);
-      setJoinedClubs(clubs);
-      localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
-    }, (err) => {
-      console.error("Error fetching memberships:", err);
-      if (isQuotaError(err)) setQuotaExceeded(true);
-    });
+    const clubsCacheKey = visitorId ? `rakivinum_cache_home_clubs_${visitorId}_v1` : null;
+    const actionsCacheKey = "rakivinum_cache_home_actions_v1";
+
+    const refreshMemberships = async () => {
+      if (!visitorId) return;
+      try {
+        const rows = await fetchPublicClubMembershipsByVisitorId(visitorId, 30);
+        const clubs = rows.map((d) => d.distilleryId).filter((x): x is string => typeof x === "string" && x.trim() !== "");
+        setJoinedClubs(clubs);
+        localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
+        if (clubsCacheKey) writeCache(clubsCacheKey, clubs, REFRESH_INTERVAL.USER_LIGHT_1H);
+      } catch (err) {
+        console.error("Error fetching memberships:", err);
+        if (isQuotaError(err)) setQuotaExceeded(true);
+        if (clubsCacheKey) {
+          const cached = readCache<string[]>(clubsCacheKey);
+          if (cached) setJoinedClubs(cached);
+        }
+      }
+    };
 
     const fetchDistilleries = async () => {
       try {
         const distilleries = await fetchPublicDistilleries({
           limitCount: 250,
           cacheKey: "rakivinum_cache_home_distillery_list_v1",
-          ttlMs: 30 * 60 * 1000,
+          ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
         });
         const map: Record<string, string> = {};
-        distilleries.forEach((d: any) => {
+        distilleries.forEach((d: DistilleryLite) => {
           map[d.id] = String(d.name || "");
         });
         setDistilleryMap(map);
-        writeCache("rakivinum_cache_home_distillery_map_v1", map, 30 * 60 * 1000);
+        writeCache("rakivinum_cache_home_distillery_map_v1", map, CACHE_TTL.HOME_DISTILLERY_MAP_6H);
       } catch (e) {
         console.error("Error fetching distillery map", e);
         if (isQuotaError(e)) setQuotaExceeded(true);
@@ -60,29 +136,55 @@ export default function Home() {
     };
     fetchDistilleries();
 
-    // Fetch all active actions for now
-    const qActions = query(collection(db, 'club_actions'), where('isActive', '==', true), limit(20));
-    const unsubActions = onSnapshot(qActions, (snap) => {
-      const actions = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-        .filter((action: any) => {
-          if (!action.endsAt) return true;
-          const end = action.endsAt.toDate ? action.endsAt.toDate() : new Date(action.endsAt);
-          return end > new Date();
-        })
-        .sort((a: any, b: any) => {
-          const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : (a.createdAt || 0);
-          const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : (b.createdAt || 0);
-          return dateB - dateA;
-        });
-      setActiveActions(actions);
-    }, (err) => {
-      console.error("Error fetching active actions:", err);
-      if (isQuotaError(err)) setQuotaExceeded(true);
-    });
+    const refreshActions = async () => {
+      try {
+        const actions = await fetchPublicClubActions(20) as ClubActionLite[];
+        const filteredActions = actions
+          .filter((action) => {
+            if (!action.endsAt) return true;
+            const end = toDateSafe(action.endsAt);
+            return end > new Date();
+          })
+          .sort((a, b) => {
+            const dateA = toDateSafe(a.createdAt).getTime();
+            const dateB = toDateSafe(b.createdAt).getTime();
+            return dateB - dateA;
+          });
+        setActiveActions(filteredActions);
+        writeCache(actionsCacheKey, filteredActions, REFRESH_INTERVAL.USER_LIGHT_1H);
+      } catch (err) {
+        console.error("Error fetching active actions:", err);
+        if (isQuotaError(err)) setQuotaExceeded(true);
+        const cached = readCache<ClubActionLite[]>(actionsCacheKey);
+        if (cached) setActiveActions(cached);
+      }
+    };
+
+    const cachedClubs = clubsCacheKey ? readCache<string[]>(clubsCacheKey) : null;
+    if (cachedClubs) setJoinedClubs(cachedClubs);
+    const cachedActions = readCache<ClubActionLite[]>(actionsCacheKey);
+    if (cachedActions) setActiveActions(cachedActions);
+
+    const shouldWarmNow = shouldRunRefresh("home:initial-clubs-actions", REFRESH_INTERVAL.USER_LIGHT_1H);
+    if (!cachedClubs || shouldWarmNow) void refreshMemberships();
+    if (!cachedActions || shouldWarmNow) void refreshActions();
+
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!shouldRunRefresh("home:focus-clubs-actions", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      void refreshMemberships();
+      void refreshActions();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener('focus', onFocusRefresh);
+    document.addEventListener('visibilitychange', onVisibilityRefresh);
 
     return () => {
-      unsubMembers();
-      unsubActions();
+      window.removeEventListener('focus', onFocusRefresh);
+      document.removeEventListener('visibilitychange', onVisibilityRefresh);
     };
   }, []);
 
@@ -92,18 +194,15 @@ export default function Home() {
       if (!token) return;
 
       try {
-        const snap = await getDocs(query(collection(db, 'licenses'), where('token', '==', token)));
-        if (!snap.empty) {
-          const lic = snap.docs[0].data();
-          if (lic.expiresAt) {
-            const expiry = lic.expiresAt.toDate ? lic.expiresAt.toDate() : new Date(lic.expiresAt);
-            const daysLeft = Math.ceil((expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-            
-            if (daysLeft <= 0) {
-              setLicenseWarning("Vaša licenca je istekla. Obratite se administratoru za produženje.");
-            } else if (daysLeft <= 30) {
-              setLicenseWarning(`Vaša licenca ističe za ${daysLeft} dana (${expiry.toLocaleDateString('sr-RS')}). Kontaktirajte administratora za produženje.`);
-            }
+        const lic = await fetchPublicLicenseByToken(token);
+        if (lic?.expiresAt) {
+          const expiry = toDateSafe(lic.expiresAt);
+          const daysLeft = Math.ceil((expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+
+          if (daysLeft <= 0) {
+            setLicenseWarning("Vaša licenca je istekla. Obratite se administratoru za produženje.");
+          } else if (daysLeft <= 30) {
+            setLicenseWarning(`Vaša licenca ističe za ${daysLeft} dana (${expiry.toLocaleDateString('sr-RS')}). Kontaktirajte administratora za produženje.`);
           }
         }
       } catch (e) {
@@ -139,26 +238,26 @@ export default function Home() {
           fetchPublicProducts({
             limitCount: 300,
             cacheKey: "rakivinum_cache_home_products_v1",
-            ttlMs: 15 * 60 * 1000,
+            ttlMs: CACHE_TTL.HOME_RECOMMENDATIONS_6H,
           }),
           fetchPublicDistilleries({
             limitCount: 250,
             cacheKey: "rakivinum_cache_home_distilleries_for_rec_v1",
-            ttlMs: 30 * 60 * 1000,
+            ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
           }),
         ]);
         if (products.length > 0) {
-          const publicDistilleryIds = new Set(distilleries.map((d: any) => d.id));
-          const eligibleProducts = products.filter((p: any) => p.distilleryId && publicDistilleryIds.has(p.distilleryId));
+          const publicDistilleryIds = new Set(distilleries.map((d: DistilleryLite) => d.id));
+          const eligibleProducts = (products as ProductLite[]).filter((p) => p.distilleryId && publicDistilleryIds.has(p.distilleryId));
           const normalize = (v: unknown) => String(v || "").toLowerCase();
-          const isWine = (p: any) => {
+          const isWine = (p: ProductLite) => {
             const text = `${normalize(p.type)} ${normalize(p.category)} ${normalize(p.name)}`;
             return text.includes("vino") || text.includes("wine");
           };
           const winePool = eligibleProducts.filter(isWine);
           const rakijaPool = eligibleProducts.filter((p) => !isWine(p));
 
-          const pickFromPool = (pool: any[], historyKey: string) => {
+          const pickFromPool = (pool: ProductLite[], historyKey: string): ProductLite | null => {
             if (pool.length === 0) return null;
             const today = new Date().toISOString().split('T')[0];
             const raw = localStorage.getItem(historyKey) || "[]";
@@ -194,12 +293,12 @@ export default function Home() {
           writeCache("rakivinum_cache_home_recommendation_v1", {
             rakija: pickedRakija,
             vino: pickedVino,
-          }, 15 * 60 * 1000);
+          }, CACHE_TTL.HOME_RECOMMENDATIONS_6H);
         }
       } catch (e) {
         console.error("Error fetching recommendation:", e);
         if (isQuotaError(e)) setQuotaExceeded(true);
-        const cachedRec = readCache<{ rakija: any; vino: any }>("rakivinum_cache_home_recommendation_v1");
+        const cachedRec = readCache<{ rakija: ProductLite | null; vino: ProductLite | null }>("rakivinum_cache_home_recommendation_v1");
         if (cachedRec) {
           setRecommendedRakija(cachedRec.rakija || null);
           setRecommendedVino(cachedRec.vino || null);
@@ -215,21 +314,23 @@ export default function Home() {
         const allDistilleries = await fetchPublicDistilleries({
           limitCount: 120,
           cacheKey: "rakivinum_cache_home_distilleries_v1",
-          ttlMs: 30 * 60 * 1000,
+          ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
         });
         const topDistilleries = allDistilleries.slice(0, 5);
         setDistilleries(topDistilleries);
-        writeCache("rakivinum_cache_home_distilleries_v1", topDistilleries, 30 * 60 * 1000);
+        writeCache("rakivinum_cache_home_distilleries_v1", topDistilleries, CACHE_TTL.DISTILLERY_LIST_6H);
       } catch (e) {
         console.error("Error fetching homepage distilleries:", e);
         if (isQuotaError(e)) setQuotaExceeded(true);
-        const cachedDistilleries = readCache<any[]>("rakivinum_cache_home_distilleries_v1");
+        const cachedDistilleries = readCache<DistilleryLite[]>("rakivinum_cache_home_distilleries_v1");
         if (cachedDistilleries) setDistilleries(cachedDistilleries);
       }
     };
 
     fetchDailyRecommendation();
     fetchDistilleries();
+
+    const userStatsCacheKey = userId ? `rakivinum_cache_home_user_stats_${userId}_v1` : null;
 
     if (!userId) {
       setSavedCount("-");
@@ -238,55 +339,103 @@ export default function Home() {
       return;
     }
 
-    // Subscribe to saved items
-    const savedRef = collection(db, 'users', userId, 'savedItems');
-    const unsubscribeSaved = onSnapshot(savedRef, async (snap) => {
-      setSavedCount(snap.size);
-      if (!snap.empty) {
-        // Sort in memory
-        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[];
-        docs.sort((a: any, b: any) => {
-          const tA = a.createdAt?.toMillis?.() || 0;
-          const tB = b.createdAt?.toMillis?.() || 0;
-          return tB - tA; // descending
-        });
-        
-        const lastId = docs[0].productId;
-        // Fetch last product details
-        try {
-          const prodSnap = await getDocs(query(collection(db, 'products'), where('__name__', '==', lastId)));
-          if (!prodSnap.empty) {
-            setLastSavedProduct({ id: prodSnap.docs[0].id, ...prodSnap.docs[0].data() });
-          }
-        } catch (e) {
-          console.error("Error fetching last product", e);
-          if (isQuotaError(e)) setQuotaExceeded(true);
-        }
-      } else {
-        setLastSavedProduct(null);
-      }
-    }, (error) => {
-      console.error("Error fetching saved items:", error);
-      if (isQuotaError(error)) setQuotaExceeded(true);
-    });
+    const refreshUserStats = async () => {
+      let nextSavedCount: number | "-" = "-";
+      let nextTopRating: number | null = null;
+      let nextLastSavedProduct: ProductLite | null = null;
+      try {
+        const savedCol = collection(db, "users", userId, "savedItems");
+        const countSnap = await getCountFromServer(savedCol);
+        meterDbRead("home:user_saved_count", 1);
+        nextSavedCount = countSnap.data().count;
+        setSavedCount(nextSavedCount);
 
-    // Subscribe to ratings (to find top rating of this user)
-    const ratingQuery = query(collection(db, 'ratings'), where('userId', '==', userId), limit(200));
-    const unsubscribeRatings = onSnapshot(ratingQuery, (snap) => {
-      if (!snap.empty) {
-        const ratings = snap.docs.map(d => d.data().rating);
-        setTopRating(Math.max(...ratings));
-      } else {
-        setTopRating(null);
+        const recentSnap = await getDocs(query(savedCol, orderBy("createdAt", "desc"), limit(1)));
+        meterDbRead("home:user_saved_recent", recentSnap.size);
+        if (recentSnap.empty) {
+          nextLastSavedProduct = null;
+          setLastSavedProduct(null);
+        } else {
+          const row = recentSnap.docs[0].data() as { productId?: string };
+          const lastId = row?.productId;
+          if (!lastId) {
+            nextLastSavedProduct = null;
+            setLastSavedProduct(null);
+          } else {
+            const pub = await fetchPublicProductById(lastId);
+            if (pub) {
+              nextLastSavedProduct = { id: pub.id, ...pub } as ProductLite;
+              setLastSavedProduct(nextLastSavedProduct);
+            } else {
+              const prodSnap = await getDocs(query(collection(db, "products"), where("__name__", "==", lastId), limit(1)));
+              meterDbRead("home:user_saved_product", prodSnap.size);
+              if (!prodSnap.empty) {
+                nextLastSavedProduct = { id: prodSnap.docs[0].id, ...prodSnap.docs[0].data() } as ProductLite;
+                setLastSavedProduct(nextLastSavedProduct);
+              } else {
+                nextLastSavedProduct = null;
+                setLastSavedProduct(null);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching saved items:", error);
+        if (isQuotaError(error)) setQuotaExceeded(true);
       }
-    }, (error) => {
-      console.error("Error fetching ratings:", error);
-      if (isQuotaError(error)) setQuotaExceeded(true);
-    });
+
+      try {
+        const ratingQuery = query(collection(db, 'ratings'), where('userId', '==', userId), limit(200));
+        const snap = await getDocs(ratingQuery);
+        meterDbRead("home:user_ratings", snap.size);
+        if (!snap.empty) {
+          const ratings = snap.docs.map(d => d.data().rating);
+          nextTopRating = Math.max(...ratings);
+          setTopRating(nextTopRating);
+        } else {
+          nextTopRating = null;
+          setTopRating(null);
+        }
+      } catch (error) {
+        console.error("Error fetching ratings:", error);
+        if (isQuotaError(error)) setQuotaExceeded(true);
+      }
+
+      if (userStatsCacheKey) {
+        writeCache(userStatsCacheKey, {
+          savedCount: nextSavedCount,
+          topRating: nextTopRating,
+          lastSavedProduct: nextLastSavedProduct,
+        }, REFRESH_INTERVAL.USER_LIGHT_1H);
+      }
+    };
+
+    const cachedUserStats = userStatsCacheKey
+      ? readCache<{ savedCount: number | "-"; topRating: number | null; lastSavedProduct: ProductLite | null }>(userStatsCacheKey)
+      : null;
+    if (cachedUserStats) {
+      setSavedCount(cachedUserStats.savedCount);
+      setTopRating(cachedUserStats.topRating);
+      setLastSavedProduct(cachedUserStats.lastSavedProduct);
+    }
+    if (!cachedUserStats || shouldRunRefresh(`home:user-stats-initial:${userId}`, REFRESH_INTERVAL.USER_LIGHT_1H)) {
+      void refreshUserStats();
+    }
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!shouldRunRefresh("home:user-stats", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      void refreshUserStats();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener('focus', onFocusRefresh);
+    document.addEventListener('visibilitychange', onVisibilityRefresh);
 
     return () => {
-      unsubscribeSaved();
-      unsubscribeRatings();
+      window.removeEventListener('focus', onFocusRefresh);
+      document.removeEventListener('visibilitychange', onVisibilityRefresh);
     };
   }, [userId]);
 
@@ -374,7 +523,9 @@ export default function Home() {
           <div className="space-y-3">
             {recommendedRakija && (
               <Link
-                to={`/label/${recommendedRakija.id}`}
+                to={labelHref(recommendedRakija.id)}
+                state={{ returnTo: homeReturnTo }}
+                onClick={persistLabelReturn}
                 className="block group rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
               >
                 <div className="card-soft card-elevated card-interactive border-gold-500/25 p-4">
@@ -397,7 +548,9 @@ export default function Home() {
             )}
             {recommendedVino && (
               <Link
-                to={`/label/${recommendedVino.id}`}
+                to={labelHref(recommendedVino.id)}
+                state={{ returnTo: homeReturnTo }}
+                onClick={persistLabelReturn}
                 className="block group rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
               >
                 <div className="card-soft card-elevated card-interactive border-purple-500/25 p-4 hover:border-purple-500/50">
@@ -552,7 +705,9 @@ export default function Home() {
             {recentScans.map((item) => (
               <Link
                 key={item.id}
-                to={`/label/${item.id}`}
+                to={labelHref(item.id)}
+                state={{ returnTo: homeReturnTo }}
+                onClick={persistLabelReturn}
                 className="min-w-[120px] w-[120px] card-soft card-elevated card-interactive p-3 snap-center hover:border-gold-500/35 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
               >
                 <div className="aspect-[2/3] rounded-xl overflow-hidden bg-black mb-2 border border-white/5">

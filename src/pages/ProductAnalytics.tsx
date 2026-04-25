@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   Star,
@@ -29,6 +29,7 @@ import {
 import { cn } from "../lib/utils";
 import { db } from "../lib/firebase";
 import { collection, doc, getDoc, getDocs, limit, query, where } from "firebase/firestore";
+import { fetchPublicProductById, fetchPublicProductRatingSummary, fetchPublicProductRatings } from "../lib/dataService";
 
 type RatingDoc = {
   rating: number;
@@ -65,6 +66,20 @@ function formatRelativeSr(date: Date): string {
 export default function ProductAnalytics() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const goBackSafe = () => {
+    const navState = location.state as { returnTo?: string } | null;
+    if (navState?.returnTo) {
+      navigate(navState.returnTo);
+      return;
+    }
+    const rt = new URLSearchParams(location.search).get("rt");
+    if (rt) {
+      navigate(rt);
+      return;
+    }
+    navigate("/admin", { replace: true });
+  };
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [product, setProduct] = useState<{
@@ -88,28 +103,68 @@ export default function ProductAnalytics() {
       setLoading(true);
       setError(null);
       try {
-        const pRef = doc(db, "products", id);
-        const pSnap = await getDoc(pRef);
+        const edgeProduct = await fetchPublicProductById(id);
+        const summary = await fetchPublicProductRatingSummary(id);
         if (cancelled) return;
-        if (!pSnap.exists()) {
-          setProduct(null);
-          setError("Proizvod nije pronađen.");
-          setLoading(false);
-          return;
-        }
-        const pdata = pSnap.data() as Record<string, unknown>;
-        setProduct({
-          name: (pdata.name as string) || "Proizvod",
-          scanCount: Number(pdata.scanCount) || 0,
-          averageRating: typeof pdata.averageRating === "number" ? pdata.averageRating : undefined,
-          ratingCount: typeof pdata.ratingCount === "number" ? pdata.ratingCount : undefined,
-        });
 
-        const rQ = query(collection(db, "ratings"), where("productId", "==", id), limit(200));
-        const rSnap = await getDocs(rQ);
+        if (!edgeProduct) {
+          const pRef = doc(db, "products", id);
+          const pSnap = await getDoc(pRef);
+          if (cancelled) return;
+          if (!pSnap.exists()) {
+            setProduct(null);
+            setError("Proizvod nije pronađen.");
+            setLoading(false);
+            return;
+          }
+          const pdata = pSnap.data() as Record<string, unknown>;
+          setProduct({
+            name: (pdata.name as string) || "Proizvod",
+            scanCount: Number(summary?.scanCount ?? pdata.scanCount) || 0,
+            averageRating:
+              typeof summary?.averageRating === "number"
+                ? summary.averageRating
+                : typeof pdata.averageRating === "number"
+                  ? pdata.averageRating
+                  : undefined,
+            ratingCount:
+              typeof summary?.ratingCount === "number"
+                ? summary.ratingCount
+                : typeof pdata.ratingCount === "number"
+                  ? pdata.ratingCount
+                  : undefined,
+          });
+        } else {
+          const pdata = edgeProduct as Record<string, unknown>;
+          setProduct({
+            name: (pdata.name as string) || "Proizvod",
+            scanCount: Number(summary?.scanCount ?? pdata.scanCount) || 0,
+            averageRating:
+              typeof summary?.averageRating === "number"
+                ? summary.averageRating
+                : typeof pdata.averageRating === "number"
+                  ? pdata.averageRating
+                  : undefined,
+            ratingCount:
+              typeof summary?.ratingCount === "number"
+                ? summary.ratingCount
+                : typeof pdata.ratingCount === "number"
+                  ? pdata.ratingCount
+                  : undefined,
+          });
+        }
+
         if (cancelled) return;
-        const list = rSnap.docs.map((d) => d.data() as RatingDoc);
-        setRatings(list);
+        const list = await fetchPublicProductRatings(id, 200);
+        if (cancelled) return;
+        setRatings(
+          list.map((r) => ({
+            rating: typeof r.rating === "number" ? r.rating : Number(r.rating) || 0,
+            reviewText: (r.reviewText ?? r.comment ?? null) as string | null | undefined,
+            createdAt: r.createdAt as RatingDoc["createdAt"],
+            sensoryScores: r.sensoryScores as RatingDoc["sensoryScores"],
+          })),
+        );
 
         const clusters = new Map<string, number>();
         try {
@@ -276,7 +331,7 @@ export default function ProductAnalytics() {
         <p className="text-text-secondary text-sm">{error || "Proizvod nije pronađen."}</p>
         <button
           type="button"
-          onClick={() => navigate(-1)}
+          onClick={goBackSafe}
           className="text-gold-500 text-xs font-bold uppercase"
         >
           Nazad
@@ -333,7 +388,7 @@ export default function ProductAnalytics() {
       </div>
 
       <div className="flex items-center justify-between">
-        <button type="button" onClick={() => navigate(-1)} className="p-2 -ml-2 text-text-secondary">
+        <button type="button" onClick={goBackSafe} className="p-2 -ml-2 text-text-secondary">
           <ArrowLeft className="w-6 h-6" />
         </button>
         <div className="text-center min-w-0 flex-1 px-2">

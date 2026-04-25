@@ -1,0 +1,717 @@
+type Env = {
+  FIREBASE_PROJECT_ID?: string;
+  FIRESTORE_DATABASE_ID?: string;
+  GCP_CLIENT_EMAIL?: string;
+  GCP_PRIVATE_KEY?: string;
+};
+
+type FirestoreValue =
+  | { stringValue: string }
+  | { integerValue: string }
+  | { doubleValue: number }
+  | { booleanValue: boolean }
+  | { nullValue: null }
+  | { timestampValue: string }
+  | { mapValue: { fields?: Record<string, FirestoreValue> } }
+  | { arrayValue: { values?: FirestoreValue[] } };
+
+type FirestoreDoc = {
+  name: string;
+  fields?: Record<string, FirestoreValue>;
+};
+
+const jsonHeaders = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "public, max-age=120, s-maxage=3600",
+};
+
+const GCP_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const FIRESTORE_SCOPE = "https://www.googleapis.com/auth/datastore";
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_REQUESTS = 120;
+const EDGE_CACHE_TTL_SECONDS = 120;
+
+let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
+let rateLimitState = new Map<string, { count: number; resetAt: number }>();
+
+function getClientIp(request: Request): string {
+  const fromCf = String(request.headers.get("cf-connecting-ip") || "").trim();
+  if (fromCf) return fromCf;
+  const forwarded = String(request.headers.get("x-forwarded-for") || "").split(",")[0]?.trim();
+  return forwarded || "unknown";
+}
+
+function isRateLimited(request: Request, url: URL): boolean {
+  const ip = getClientIp(request);
+  const key = `${ip}:${url.pathname}`;
+  const now = Date.now();
+  const row = rateLimitState.get(key);
+  if (!row || now >= row.resetAt) {
+    rateLimitState.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return false;
+  }
+  row.count += 1;
+  if (row.count > RATE_LIMIT_MAX_REQUESTS) return true;
+
+  // Best-effort cleanup so this in-memory map does not grow forever.
+  if (rateLimitState.size > 8000) {
+    const next = new Map<string, { count: number; resetAt: number }>();
+    rateLimitState.forEach((value, entryKey) => {
+      if (value.resetAt > now) next.set(entryKey, value);
+    });
+    rateLimitState = next;
+  }
+  return false;
+}
+
+function withDefaultHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  if (!headers.has("content-type")) headers.set("content-type", "application/json; charset=utf-8");
+  if (!headers.has("cache-control")) headers.set("cache-control", "public, max-age=120, s-maxage=3600");
+  return new Response(response.body, { status: response.status, headers });
+}
+
+async function servePublicCached(
+  request: Request,
+  handler: () => Promise<Response>,
+): Promise<Response> {
+  const cache = caches.default;
+  const cacheKey = new Request(request.url, { method: "GET" });
+  const hit = await cache.match(cacheKey);
+  if (hit) return withDefaultHeaders(hit);
+
+  const fresh = await handler();
+  if (fresh.ok) {
+    const headers = new Headers(fresh.headers);
+    headers.set("cache-control", `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=3600`);
+    const responseToCache = new Response(fresh.body, { status: fresh.status, headers });
+    await cache.put(cacheKey, responseToCache.clone());
+    return responseToCache;
+  }
+  return withDefaultHeaders(fresh);
+}
+
+function decodeFirestoreValue(value: FirestoreValue | undefined): unknown {
+  if (!value) return null;
+  if ("stringValue" in value) return value.stringValue;
+  if ("integerValue" in value) return Number(value.integerValue || 0);
+  if ("doubleValue" in value) return Number(value.doubleValue || 0);
+  if ("booleanValue" in value) return Boolean(value.booleanValue);
+  if ("nullValue" in value) return null;
+  if ("timestampValue" in value) return value.timestampValue;
+  if ("mapValue" in value) {
+    const out: Record<string, unknown> = {};
+    const fields = value.mapValue?.fields || {};
+    Object.entries(fields).forEach(([k, v]) => {
+      out[k] = decodeFirestoreValue(v);
+    });
+    return out;
+  }
+  if ("arrayValue" in value) {
+    return (value.arrayValue?.values || []).map((v) => decodeFirestoreValue(v));
+  }
+  return null;
+}
+
+function decodeDocument(doc: FirestoreDoc): Record<string, unknown> {
+  const id = String(doc.name || "").split("/").pop() || "";
+  const out: Record<string, unknown> = { id };
+  const fields = doc.fields || {};
+  Object.entries(fields).forEach(([k, v]) => {
+    out[k] = decodeFirestoreValue(v);
+  });
+  return out;
+}
+
+function parseLimit(url: URL, fallback: number, max: number): number {
+  const n = Number(url.searchParams.get("limit") || fallback);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(max, Math.floor(n));
+}
+
+function asText(value: unknown): string | undefined {
+  const v = String(value ?? "").trim();
+  return v ? v : undefined;
+}
+
+function sanitizeImageUrl(value: unknown): string | undefined {
+  const v = asText(value);
+  if (!v) return undefined;
+  // Avoid returning huge inline base64 blobs in list endpoints.
+  if (v.startsWith("data:")) return undefined;
+  return v;
+}
+
+function toDistilleryListItem(row: Record<string, unknown>): Record<string, unknown> {
+  const location = (row.location && typeof row.location === "object" ? row.location : {}) as Record<string, unknown>;
+  const city = asText(location.city);
+  const address = asText(location.address);
+  return {
+    id: asText(row.id) || "",
+    name: asText(row.name) || "",
+    region: asText(row.region),
+    isVerified: row.isVerified === true,
+    logoUrl: sanitizeImageUrl(row.logoUrl),
+    location: city || address ? { city, address } : undefined,
+  };
+}
+
+function toProductListItem(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: asText(row.id) || "",
+    name: asText(row.name) || "",
+    type: asText(row.type),
+    distilleryId: asText(row.distilleryId),
+    alcoholPercentage: typeof row.alcoholPercentage === "number" ? row.alcoholPercentage : row.alcoholPercentage,
+    averageRating: typeof row.averageRating === "number" ? row.averageRating : row.averageRating,
+    bottleImageUrl: sanitizeImageUrl(row.bottleImageUrl),
+    image: sanitizeImageUrl(row.image),
+    isApproved: row.isApproved !== false,
+    isArchivedByDistillery: row.isArchivedByDistillery === true,
+    publicLabelDisabled: row.publicLabelDisabled === true,
+  };
+}
+
+function toProductScannerHit(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...toProductListItem(row),
+    barcode: row.barcode,
+    barcodeNormalized: row.barcodeNormalized,
+  };
+}
+
+function isPublicProductRow(row: Record<string, unknown>): boolean {
+  return (
+    row.isApproved !== false && row.isArchivedByDistillery !== true && row.publicLabelDisabled !== true
+  );
+}
+
+function toNumberOrZero(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function toProductRatingSummary(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    productId: asText(row.id) || "",
+    averageRating: toNumberOrZero(row.averageRating),
+    ratingCount: Math.max(0, Math.floor(toNumberOrZero(row.ratingCount))),
+    scanCount: Math.max(0, Math.floor(toNumberOrZero(row.scanCount))),
+    conversionRate:
+      toNumberOrZero(row.scanCount) > 0
+        ? Math.round((toNumberOrZero(row.ratingCount) / toNumberOrZero(row.scanCount)) * 10000) / 100
+        : 0,
+  };
+}
+
+function toCommunityRatingItem(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: asText(row.id) || "",
+    productId: asText(row.productId) || "",
+    productName: asText(row.productName),
+    productImage: sanitizeImageUrl(row.productImage) || sanitizeImageUrl(row.productBottleImage) || sanitizeImageUrl(row.image),
+    rating: toNumberOrZero(row.rating),
+    reviewText: asText(row.reviewText) || asText(row.comment),
+    comment: asText(row.comment),
+    userLocation: asText(row.userLocation),
+    createdAt: row.createdAt ?? null,
+    isFlagged: row.isFlagged === true,
+  };
+}
+
+function toCommunityLinkItem(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: asText(row.id) || "",
+    label: asText(row.label) || "Link",
+    url: asText(row.url) || "",
+  };
+}
+
+function toProductRatingItem(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: asText(row.id) || "",
+    rating: toNumberOrZero(row.rating),
+    reviewText: asText(row.reviewText),
+    comment: asText(row.comment),
+    userLocation: asText(row.userLocation),
+    createdAt: row.createdAt ?? null,
+    sensoryScores: row.sensoryScores ?? null,
+  };
+}
+
+function toClubActionItem(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: asText(row.id) || "",
+    title: asText(row.title),
+    distilleryId: asText(row.distilleryId),
+    rewardType: asText(row.rewardType),
+    rewardValue: asText(row.rewardValue),
+    isActive: row.isActive === true,
+    endsAt: row.endsAt ?? null,
+    createdAt: row.createdAt ?? null,
+    condition: asText(row.condition),
+    conditionLabel: asText(row.conditionLabel),
+    targetScans: toNumberOrZero(row.targetScans),
+    targetRatings: toNumberOrZero(row.targetRatings),
+    targetValue: toNumberOrZero(row.targetValue),
+  };
+}
+
+function toClubMembershipItem(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: asText(row.id) || "",
+    visitorId: asText(row.visitorId),
+    distilleryId: asText(row.distilleryId),
+    createdAt: row.createdAt ?? null,
+  };
+}
+
+function toLicenseItem(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: asText(row.id) || "",
+    token: asText(row.token),
+    expiresAt: row.expiresAt ?? null,
+    status: asText(row.status),
+    plan: asText(row.plan),
+  };
+}
+
+function base64UrlEncodeBytes(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlEncodeText(value: string): string {
+  return base64UrlEncodeBytes(new TextEncoder().encode(value));
+}
+
+function normalizePrivateKey(raw: string): string {
+  return raw.replace(/\\n/g, "\n").trim();
+}
+
+function pemToArrayBuffer(pem: string): ArrayBuffer {
+  const cleaned = pem
+    .replace("-----BEGIN PRIVATE KEY-----", "")
+    .replace("-----END PRIVATE KEY-----", "")
+    .replace(/\s+/g, "");
+  const binary = atob(cleaned);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function createSignedJwt(clientEmail: string, privateKeyPem: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const payload = {
+    iss: clientEmail,
+    scope: FIRESTORE_SCOPE,
+    aud: GCP_TOKEN_URL,
+    iat: now,
+    exp: now + 3600,
+  };
+
+  const encodedHeader = base64UrlEncodeText(JSON.stringify(header));
+  const encodedPayload = base64UrlEncodeText(JSON.stringify(payload));
+  const unsigned = `${encodedHeader}.${encodedPayload}`;
+
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    pemToArrayBuffer(privateKeyPem),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned));
+  const encodedSignature = base64UrlEncodeBytes(new Uint8Array(signature));
+  return `${unsigned}.${encodedSignature}`;
+}
+
+async function getAccessToken(env: Env): Promise<string> {
+  if (cachedAccessToken && Date.now() < cachedAccessToken.expiresAtMs - 60_000) {
+    return cachedAccessToken.token;
+  }
+
+  const clientEmail = String(env.GCP_CLIENT_EMAIL || "").trim();
+  const privateKey = String(env.GCP_PRIVATE_KEY || "").trim();
+  if (!clientEmail || !privateKey) {
+    throw new Error("Missing GCP_CLIENT_EMAIL or GCP_PRIVATE_KEY");
+  }
+
+  const assertion = await createSignedJwt(clientEmail, normalizePrivateKey(privateKey));
+  const body = new URLSearchParams({
+    grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    assertion,
+  });
+
+  const tokenRes = await fetch(GCP_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!tokenRes.ok) {
+    const txt = await tokenRes.text();
+    throw new Error(`OAuth token error ${tokenRes.status}: ${txt.slice(0, 240)}`);
+  }
+
+  const tokenJson = (await tokenRes.json()) as { access_token?: string; expires_in?: number };
+  const token = String(tokenJson.access_token || "");
+  const expiresIn = Number(tokenJson.expires_in || 3600);
+  if (!token) throw new Error("OAuth token missing access_token");
+
+  cachedAccessToken = {
+    token,
+    expiresAtMs: Date.now() + Math.max(300, expiresIn) * 1000,
+  };
+  return token;
+}
+
+async function fetchCollection(env: Env, collectionName: string, pageSize: number): Promise<Record<string, unknown>[]> {
+  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  if (!projectId) {
+    throw new Error("Missing FIREBASE_PROJECT_ID");
+  }
+  const accessToken = await getAccessToken(env);
+
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collectionName)}?pageSize=${pageSize}`;
+  const res = await fetch(endpoint, {
+    method: "GET",
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Firestore REST error ${res.status}: ${body.slice(0, 240)}`);
+  }
+  const data = (await res.json()) as { documents?: FirestoreDoc[] };
+  return (data.documents || []).map(decodeDocument);
+}
+
+async function fetchDocumentById(
+  env: Env,
+  collectionName: string,
+  docId: string,
+): Promise<Record<string, unknown> | null> {
+  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  if (!projectId) {
+    throw new Error("Missing FIREBASE_PROJECT_ID");
+  }
+  const accessToken = await getAccessToken(env);
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collectionName)}/${encodeURIComponent(docId)}`;
+  const res = await fetch(endpoint, {
+    method: "GET",
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Firestore REST error ${res.status}: ${body.slice(0, 240)}`);
+  }
+  const doc = (await res.json()) as FirestoreDoc;
+  return decodeDocument(doc);
+}
+
+async function fetchCollectionWhereEquals(
+  env: Env,
+  collectionName: string,
+  fieldName: string,
+  fieldValue: string,
+  pageSize: number,
+): Promise<Record<string, unknown>[]> {
+  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
+  const accessToken = await getAccessToken(env);
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:runQuery`;
+  const body = {
+    structuredQuery: {
+      from: [{ collectionId: collectionName }],
+      where: {
+        fieldFilter: {
+          field: { fieldPath: fieldName },
+          op: "EQUAL",
+          value: { stringValue: fieldValue },
+        },
+      },
+      limit: pageSize,
+    },
+  };
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Firestore REST runQuery error ${res.status}: ${txt.slice(0, 240)}`);
+  }
+  const rows = (await res.json()) as Array<{ document?: FirestoreDoc }>;
+  return rows
+    .filter((r) => r.document)
+    .map((r) => decodeDocument(r.document as FirestoreDoc));
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    try {
+      if (request.method !== "GET") {
+        return new Response(JSON.stringify({ error: "method_not_allowed" }), {
+          status: 405,
+          headers: jsonHeaders,
+        });
+      }
+
+      if (url.pathname === "/health") {
+        return new Response(JSON.stringify({ ok: true, service: "rakivinum-api" }), {
+          headers: jsonHeaders,
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/")) {
+        if (isRateLimited(request, url)) {
+          return new Response(
+            JSON.stringify({ error: "rate_limited", message: "Too many requests. Try again shortly." }),
+            {
+              status: 429,
+              headers: {
+                ...jsonHeaders,
+                "retry-after": "60",
+              },
+            },
+          );
+        }
+      }
+
+      if (url.pathname === "/api/public/distilleries") {
+        return servePublicCached(request, async () => {
+          const limitCount = parseLimit(url, 250, 800);
+          const rows = await fetchCollection(env, "distilleries", limitCount);
+          const filtered = rows.filter((d) => d.isArchived !== true && d.isVerified === true);
+          const lightItems = filtered.map((row) => toDistilleryListItem(row));
+          return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname === "/api/public/products") {
+        return servePublicCached(request, async () => {
+          const limitCount = parseLimit(url, 350, 1000);
+          const rows = await fetchCollection(env, "products", limitCount);
+          const filtered = rows.filter(
+            (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
+          );
+          const lightItems = filtered.map((row) => toProductListItem(row));
+          return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname === "/api/public/community-events") {
+        return servePublicCached(request, async () => {
+          const limitCount = parseLimit(url, 60, 400);
+          const rows = await fetchCollection(env, "community_events", limitCount);
+          const sorted = rows.sort((a, b) => String(b.eventDate || "").localeCompare(String(a.eventDate || "")));
+          return new Response(JSON.stringify({ items: sorted }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname === "/api/public/community-links") {
+        return servePublicCached(request, async () => {
+          const limitCount = parseLimit(url, 80, 200);
+          const rows = await fetchCollection(env, "community_links", limitCount);
+          const items = rows
+            .filter((r) => String(asText(r.url) || "").trim().length > 0)
+            .map((r) => toCommunityLinkItem(r))
+            .sort((a, b) => String(a.label || "").localeCompare(String(b.label || ""), "sr"));
+          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname === "/api/public/ratings-feed") {
+        return servePublicCached(request, async () => {
+          const limitCount = parseLimit(url, 20, 80);
+          const rows = await fetchCollection(env, "ratings", 120);
+          const filtered = rows
+            .filter((r) => r.isFlagged !== true)
+            .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+            .slice(0, limitCount)
+            .map((row) => toCommunityRatingItem(row));
+          return new Response(JSON.stringify({ items: filtered }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname === "/api/public/club-actions") {
+        return servePublicCached(request, async () => {
+          const limitCount = parseLimit(url, 20, 80);
+          const rows = await fetchCollection(env, "club_actions", 120);
+          const items = rows
+            .filter((r) => r.isActive === true)
+            .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+            .slice(0, limitCount)
+            .map((r) => toClubActionItem(r));
+          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/club-memberships/")) {
+        return servePublicCached(request, async () => {
+          const visitorId = decodeURIComponent(url.pathname.replace("/api/public/club-memberships/", "").trim());
+          if (!visitorId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
+          const limitCount = parseLimit(url, 30, 120);
+          const rows = await fetchCollectionWhereEquals(env, "club_memberships", "visitorId", visitorId, limitCount);
+          const items = rows.map((r) => toClubMembershipItem(r)).filter((r) => String(r.distilleryId || "").trim() !== "");
+          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/license/")) {
+        return servePublicCached(request, async () => {
+          const token = decodeURIComponent(url.pathname.replace("/api/public/license/", "").trim());
+          if (!token) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
+          const rows = await fetchCollectionWhereEquals(env, "licenses", "token", token, 1);
+          const item = rows.length > 0 ? toLicenseItem(rows[0]) : null;
+          return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/distillery/")) {
+        return servePublicCached(request, async () => {
+          const id = decodeURIComponent(url.pathname.replace("/api/public/distillery/", "").trim());
+          if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
+          const row = await fetchDocumentById(env, "distilleries", id);
+          const item = row && row.isArchived !== true && row.isVerified === true ? row : null;
+          return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/products-by-distillery/")) {
+        return servePublicCached(request, async () => {
+          const distilleryId = decodeURIComponent(
+            url.pathname.replace("/api/public/products-by-distillery/", "").trim(),
+          );
+          if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
+          const limitCount = parseLimit(url, 300, 500);
+          const rows = await fetchCollectionWhereEquals(env, "products", "distilleryId", distilleryId, limitCount);
+          const filtered = rows.filter(
+            (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
+          );
+          const lightItems = filtered.map((row) => toProductListItem(row));
+          return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/club-actions-by-distillery/")) {
+        return servePublicCached(request, async () => {
+          const distilleryId = decodeURIComponent(
+            url.pathname.replace("/api/public/club-actions-by-distillery/", "").trim(),
+          );
+          if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
+          const limitCount = parseLimit(url, 40, 120);
+          const fetchCap = Math.min(200, Math.max(limitCount * 3, 80));
+          const rows = await fetchCollectionWhereEquals(env, "club_actions", "distilleryId", distilleryId, fetchCap);
+          const items = rows
+            .filter((r) => r.isActive === true)
+            .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+            .slice(0, limitCount)
+            .map((r) => toClubActionItem(r));
+          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/club-membership-count/")) {
+        return servePublicCached(request, async () => {
+          const distilleryId = decodeURIComponent(
+            url.pathname.replace("/api/public/club-membership-count/", "").trim(),
+          );
+          if (!distilleryId) return new Response(JSON.stringify({ count: 0 }), { headers: jsonHeaders });
+          const limitCount = parseLimit(url, 2500, 5000);
+          const rows = await fetchCollectionWhereEquals(env, "club_memberships", "distilleryId", distilleryId, limitCount);
+          const count = rows.length;
+          const capped = count >= limitCount;
+          return new Response(JSON.stringify({ count, capped }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname === "/api/public/product-lookup") {
+        return servePublicCached(request, async () => {
+          const n = String(url.searchParams.get("n") || "").trim();
+          const r = String(url.searchParams.get("r") || "").trim();
+          const tryField = async (field: string, val: string): Promise<Record<string, unknown> | null> => {
+            if (!val) return null;
+            const rows = await fetchCollectionWhereEquals(env, "products", field, val, 8);
+            for (const row of rows) {
+              if (isPublicProductRow(row)) return toProductScannerHit(row);
+            }
+            return null;
+          };
+          let item: Record<string, unknown> | null = null;
+          if (n) {
+            item = await tryField("barcodeNormalized", n);
+            if (!item) item = await tryField("barcode", n);
+          }
+          if (!item && r) item = await tryField("barcode", r);
+          return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/product/")) {
+        return servePublicCached(request, async () => {
+          const id = decodeURIComponent(url.pathname.replace("/api/public/product/", "").trim());
+          if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
+          const row = await fetchDocumentById(env, "products", id);
+          const item = row &&
+            row.isApproved !== false &&
+            row.isArchivedByDistillery !== true &&
+            row.publicLabelDisabled !== true
+            ? row
+            : null;
+          return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/ratings-summary/")) {
+        return servePublicCached(request, async () => {
+          const productId = decodeURIComponent(url.pathname.replace("/api/public/ratings-summary/", "").trim());
+          if (!productId) {
+            return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
+          }
+          const row = await fetchDocumentById(env, "products", productId);
+          const isPublic = row &&
+            row.isApproved !== false &&
+            row.isArchivedByDistillery !== true &&
+            row.publicLabelDisabled !== true;
+          const item = isPublic ? toProductRatingSummary(row) : null;
+          return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
+        });
+      }
+
+      if (url.pathname.startsWith("/api/public/product-ratings/")) {
+        return servePublicCached(request, async () => {
+          const productId = decodeURIComponent(url.pathname.replace("/api/public/product-ratings/", "").trim());
+          if (!productId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
+          const limitCount = parseLimit(url, 200, 400);
+          const rows = await fetchCollectionWhereEquals(env, "ratings", "productId", productId, limitCount);
+          const items = rows
+            .filter((r) => r.isFlagged !== true)
+            .map((r) => toProductRatingItem(r));
+          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
+        });
+      }
+
+      return new Response("Not Found", { status: 404 });
+    } catch (err) {
+      return new Response(
+        JSON.stringify({
+          error: "edge_api_error",
+          message: String((err as Error)?.message || err),
+        }),
+        { status: 500, headers: jsonHeaders },
+      );
+    }
+  },
+};
+

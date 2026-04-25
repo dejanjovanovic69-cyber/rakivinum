@@ -1,23 +1,73 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Bookmark, Trash2, ChevronRight, Info, Star } from "lucide-react";
 import { auth, db } from "../lib/firebase";
-import { collection, query, getDocs, doc, getDoc, deleteDoc, where } from "firebase/firestore";
+import { collection, query, getDocs, doc, getDoc, deleteDoc, where, orderBy, limit } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { getOrCreateVisitorId } from "../lib/visitorIdentity";
+import { readCache, writeCache } from "../lib/resilience";
+import { REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { meterDbRead } from "../lib/requestMeter";
+import { fetchPublicProductById } from "../lib/dataService";
+
+type PendingQueueItem = { id: string };
+type AuthUserLite = { uid: string } | null;
+type SavedListItem = {
+  id: string;
+  productId: string;
+  createdAt?: { seconds?: number };
+  isGuest?: boolean;
+};
+type CollectionProduct = {
+  id: string;
+  name?: string;
+  type?: string;
+  image?: string;
+  bottleImageUrl?: string;
+  averageRating?: number;
+  alcoholPercentage?: number;
+};
+type CollectionItem = SavedListItem & { product: CollectionProduct };
 
 export default function Collection() {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<CollectionItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<AuthUserLite>(null);
   const navigate = useNavigate();
+  const location = useLocation();
+  const goBackSafe = () => {
+    const navState = location.state as { returnTo?: string } | null;
+    if (navState?.returnTo) {
+      navigate(navState.returnTo);
+      return;
+    }
+    const rt = new URLSearchParams(location.search).get("rt");
+    if (rt) {
+      navigate(rt);
+      return;
+    }
+    navigate("/", { replace: true });
+  };
+  const returnToCollection = `${location.pathname}${location.search}`;
+  const openLabelWithReturn = (productId: string) => {
+    try {
+      sessionStorage.setItem("rakivinum_last_label_return_v1", returnToCollection);
+    } catch {
+      // ignore storage errors
+    }
+    navigate(`/label/${productId}?rt=${encodeURIComponent(returnToCollection)}`, {
+      state: { returnTo: returnToCollection },
+    });
+  };
 
   const removePendingRatingEntry = (productId: string) => {
     try {
       const raw = localStorage.getItem("rakivinum_pending_ratings") || "[]";
       const parsed = JSON.parse(raw);
-      const queue = Array.isArray(parsed) ? parsed : [];
-      const next = queue.filter((x: any) => x?.id !== productId);
+      const queue: PendingQueueItem[] = Array.isArray(parsed)
+        ? parsed.filter((x): x is PendingQueueItem => !!x && typeof x.id === "string")
+        : [];
+      const next = queue.filter((x) => x.id !== productId);
       localStorage.setItem("rakivinum_pending_ratings", JSON.stringify(next));
       if (next.length > 0) {
         localStorage.setItem("rakivinum_pending_rating", JSON.stringify(next[0]));
@@ -43,18 +93,28 @@ export default function Collection() {
   useEffect(() => {
     const fetchCollection = async () => {
       setLoading(true);
+      const identityKey = user?.uid || `guest:${getOrCreateVisitorId()}`;
+      const cacheKey = `rakivinum_cache_collection_items_${identityKey}_v1`;
+      const cachedItems = readCache<CollectionItem[]>(cacheKey);
+      if (cachedItems) {
+        setItems(cachedItems);
+        setLoading(false);
+        if (!cachedItems.length) return;
+      }
       
-      let savedList: any[] = [];
+      let savedList: SavedListItem[] = [];
       
       if (user) {
-        const colRef = collection(db, 'users', user.uid, 'savedItems');
-        const snapshot = await getDocs(colRef);
+        const colRef = collection(db, "users", user.uid, "savedItems");
+        const snapshot = await getDocs(query(colRef, orderBy("createdAt", "desc"), limit(300)));
+        meterDbRead("collection:user_saved_items", snapshot.size);
         savedList = snapshot.docs.map(d => ({ id: d.id, productId: d.data().productId, createdAt: d.data().createdAt }));
       } else {
         const visitorId = getOrCreateVisitorId();
         const guestSnap = await getDocs(
-          query(collection(db, "guest_saved_items"), where("visitorId", "==", visitorId))
+          query(collection(db, "guest_saved_items"), where("visitorId", "==", visitorId), limit(300)),
         );
+        meterDbRead("collection:guest_saved_items", guestSnap.size);
         const remoteGuestList = guestSnap.docs.map((d) => ({
           id: d.id,
           productId: d.data().productId,
@@ -62,11 +122,11 @@ export default function Collection() {
           createdAt: d.data().createdAt,
         }));
         const historyStr = localStorage.getItem('rakivinum_guest_collection') || '[]';
-        let localGuestList: any[] = [];
+        let localGuestList: SavedListItem[] = [];
         try {
           const guestIds = JSON.parse(historyStr);
           if (Array.isArray(guestIds)) {
-            localGuestList = guestIds.map((id) => ({
+            localGuestList = guestIds.map((id): SavedListItem => ({
               id: `${visitorId}_${id}`,
               productId: id,
               isGuest: true,
@@ -75,7 +135,7 @@ export default function Collection() {
         } catch (e) {
           console.error("Error parsing local guest collection", e);
         }
-        const byProduct = new Map<string, any>();
+        const byProduct = new Map<string, SavedListItem>();
         [...remoteGuestList, ...localGuestList].forEach((item) => {
           if (!item?.productId) return;
           byProduct.set(String(item.productId), item);
@@ -85,6 +145,7 @@ export default function Collection() {
 
       if (savedList.length === 0) {
         setItems([]);
+        writeCache(cacheKey, [], REFRESH_INTERVAL.USER_LIGHT_1H);
         setLoading(false);
         return;
       }
@@ -92,25 +153,32 @@ export default function Collection() {
       // Fetch product basic details for each saved item
       const detailedItems = await Promise.all(
         savedList.map(async (saved) => {
-          const prodSnap = await getDoc(doc(db, 'products', saved.productId));
+          const pub = await fetchPublicProductById(saved.productId);
+          if (pub) {
+            return { ...saved, product: { id: pub.id, ...pub } as CollectionProduct };
+          }
+          const prodSnap = await getDoc(doc(db, "products", saved.productId));
+          meterDbRead("collection:product_doc", 1);
           if (prodSnap.exists()) {
             return {
               ...saved,
-              product: { id: prodSnap.id, ...prodSnap.data() }
+              product: { id: prodSnap.id, ...prodSnap.data() } as CollectionProduct,
             };
           }
           return null;
-        })
+        }),
       );
 
-      setItems(detailedItems.filter(i => i !== null));
+      const nextItems = detailedItems.filter((i): i is CollectionItem => i !== null);
+      setItems(nextItems);
+      writeCache(cacheKey, nextItems, REFRESH_INTERVAL.USER_LIGHT_1H);
       setLoading(false);
     };
 
     fetchCollection();
   }, [user]);
 
-  const removeItem = async (e: React.MouseEvent, item: any) => {
+  const removeItem = async (e: React.MouseEvent, item: CollectionItem) => {
     e.stopPropagation();
     
     if (item.isGuest) {
@@ -215,7 +283,7 @@ export default function Collection() {
       <div className="p-4 sm:p-6 flex items-center gap-3 sm:gap-4 sticky top-0 bg-bg-base/80 backdrop-blur-xl z-30 border-b border-white/5">
         <button
           type="button"
-          onClick={() => navigate(-1)}
+          onClick={goBackSafe}
           className="w-12 h-12 flex items-center justify-center rounded-2xl bg-white/5 border border-white/10 text-white hover:bg-gold-500 hover:text-black transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
         >
           <ArrowLeft className="w-6 h-6" />
@@ -258,11 +326,11 @@ export default function Collection() {
                 key={item.id}
                 role="button"
                 tabIndex={0}
-                onClick={() => navigate(`/label/${item.product.id}`)}
+                onClick={() => openLabelWithReturn(item.product.id)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    navigate(`/label/${item.product.id}`);
+                    openLabelWithReturn(item.product.id);
                   }
                 }}
                 className="group relative card-soft card-elevated border border-white/8 rounded-[28px] sm:rounded-[32px] p-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6 active:scale-[0.99] sm:active:scale-[0.98] transition-all overflow-hidden hover:border-gold-500/30 cursor-pointer touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"

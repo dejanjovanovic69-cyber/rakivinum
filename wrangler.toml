@@ -1,0 +1,13 @@
+name = "rakivinum-api"
+main = "workers/index.ts"
+compatibility_date = "2026-04-25"
+
+[observability]
+enabled = true
+
+# Postavi ove varijable kroz:
+# `wrangler secret put FIREBASE_PROJECT_ID`
+# `wrangler secret put FIRESTORE_DATABASE_ID`
+# `wrangler secret put GCP_CLIENT_EMAIL`
+# `wrangler secret put GCP_PRIVATE_KEY`
+

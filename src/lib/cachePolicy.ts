@@ -1,0 +1,14 @@
+export const CACHE_TTL = {
+  CATALOG_24H: 24 * 60 * 60 * 1000,
+  DISTILLERY_LIST_6H: 6 * 60 * 60 * 1000,
+  PRODUCTS_6H: 6 * 60 * 60 * 1000,
+  COMMUNITY_EVENTS_6H: 6 * 60 * 60 * 1000,
+  HOME_RECOMMENDATIONS_6H: 6 * 60 * 60 * 1000,
+  HOME_DISTILLERY_MAP_6H: 6 * 60 * 60 * 1000,
+} as const;
+
+export const REFRESH_INTERVAL = {
+  USER_LIGHT_1H: 60 * 60 * 1000,
+  ADMIN_PANEL_10M: 10 * 60 * 1000,
+} as const;
+

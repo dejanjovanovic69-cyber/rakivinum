@@ -1,22 +1,51 @@
 import { QrCode, Camera, Loader2, MapPin, Search, X } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { db } from "../lib/firebase";
-import { getDoc, query, where, getDocs } from "firebase/firestore";
+import { query, where, getDocs, collection, limit } from "firebase/firestore";
+import { fetchPublicProductByBarcodeLookup, fetchPublicProducts, fetchScannerProductById } from "../lib/dataService";
 import { extractActivateTokenFromInput } from '../lib/extractActivateToken';
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { BarcodeFormat, DecodeHintType, NotFoundException } from "@zxing/library";
 import { logProductScan } from "../lib/logProductScan";
+import { meterDbRead } from "../lib/requestMeter";
+import { CACHE_TTL } from "../lib/cachePolicy";
+
+type PendingRatingEntry = {
+  id: string;
+  name: string;
+  timestamp: number;
+};
+
+type ProductLookupData = {
+  name?: unknown;
+  distilleryId?: string;
+  type?: string;
+  isArchivedByDistillery?: boolean;
+  publicLabelDisabled?: boolean;
+  barcode?: unknown;
+  barcodeNormalized?: unknown;
+};
+
+type DetectorResult = { rawValue?: string };
+type BarcodeDetectorInstance = {
+  detect: (source: HTMLVideoElement) => Promise<DetectorResult[]>;
+};
+type BarcodeDetectorStatic = {
+  new (options: { formats: string[] }): BarcodeDetectorInstance;
+  getSupportedFormats?: () => Promise<string[]>;
+};
 
 export default function Scanner() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scannerHint, setScannerHint] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const detectorRef = useRef<any>(null);
+  const detectorRef = useRef<BarcodeDetectorInstance | null>(null);
   const detectLoopRef = useRef<number | null>(null);
   const lastDetectAtRef = useRef(0);
   const scanLockRef = useRef(false);
@@ -32,13 +61,15 @@ export default function Scanner() {
     }
     return "";
   };
-  const updatePendingQueue = (entry: { id: string; name: string; timestamp: number }) => {
+  const updatePendingQueue = (entry: PendingRatingEntry) => {
     localStorage.setItem('rakivinum_pending_rating', JSON.stringify(entry));
     try {
       const queueRaw = localStorage.getItem('rakivinum_pending_ratings') || '[]';
       const queue = JSON.parse(queueRaw);
-      const safeQueue = Array.isArray(queue) ? queue : [];
-      const withoutSame = safeQueue.filter((x: any) => x?.id !== entry.id);
+      const safeQueue: PendingRatingEntry[] = Array.isArray(queue)
+        ? queue.filter((x): x is PendingRatingEntry => !!x && typeof x.id === "string" && typeof x.name === "string" && typeof x.timestamp === "number")
+        : [];
+      const withoutSame = safeQueue.filter((x) => x.id !== entry.id);
       withoutSame.unshift(entry);
       localStorage.setItem('rakivinum_pending_ratings', JSON.stringify(withoutSame.slice(0, 20)));
       window.dispatchEvent(new Event('rakivinum_pending_ratings_changed'));
@@ -51,7 +82,7 @@ export default function Scanner() {
   useEffect(() => {
     const checkBarcodeSupport = async () => {
       try {
-        const detector = (window as any).BarcodeDetector;
+        const detector = (window as unknown as { BarcodeDetector?: BarcodeDetectorStatic }).BarcodeDetector;
         if (!detector?.getSupportedFormats) {
           setScannerHint("Vaš browser može biti ograničen za klasične barkodove. QR obično radi pouzdano.");
           return;
@@ -79,7 +110,7 @@ export default function Scanner() {
             width: { ideal: 1280 },
             height: { ideal: 720 },
             frameRate: { ideal: 30 },
-            advanced: [{ focusMode: "continuous" } as any, { torch: false } as any],
+            advanced: [{ focusMode: "continuous" }, { torch: false }] as unknown as MediaTrackConstraintSet[],
           },
           audio: false,
         };
@@ -88,7 +119,7 @@ export default function Scanner() {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
 
-        const Detector = (window as any).BarcodeDetector;
+        const Detector = (window as unknown as { BarcodeDetector?: BarcodeDetectorStatic }).BarcodeDetector;
         if (Detector) {
           detectorRef.current = new Detector({
             formats: ["qr_code", "ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "itf"],
@@ -140,7 +171,7 @@ export default function Scanner() {
         });
         readerRef.current = reader;
 
-        const decodeCb = (result: any, err: any) => {
+        const decodeCb = (result: { getText: () => string } | null, err: unknown) => {
           if (result && !scanLockRef.current) {
             scanLockRef.current = true;
             void handleScanSuccess(result.getText()).finally(() => {
@@ -155,8 +186,16 @@ export default function Scanner() {
           }
         };
 
-        if (typeof (reader as any).decodeFromConstraints === "function") {
-          await (reader as any).decodeFromConstraints(constraints, videoRef.current, decodeCb);
+        const readerWithConstraints = reader as BrowserMultiFormatReader & {
+          decodeFromConstraints?: (
+            constraints: MediaStreamConstraints,
+            videoElement: HTMLVideoElement,
+            callback: (result: { getText: () => string } | null, err: unknown) => void
+          ) => Promise<void>;
+        };
+
+        if (typeof readerWithConstraints.decodeFromConstraints === "function") {
+          await readerWithConstraints.decodeFromConstraints(constraints, videoRef.current, decodeCb);
         } else {
           const devices = await BrowserMultiFormatReader.listVideoInputDevices();
           const preferred =
@@ -181,7 +220,8 @@ export default function Scanner() {
         if (detectLoopRef.current) {
           cancelAnimationFrame(detectLoopRef.current);
         }
-        readerRef.current?.reset();
+        const r = readerRef.current as BrowserMultiFormatReader & { reset?: () => void };
+        r?.reset?.();
         mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       } catch {
         // ignore cleanup issues
@@ -219,32 +259,51 @@ export default function Scanner() {
       }
       productId = decodeURIComponent(String(productId || "").trim());
 
-      // Check if product exists by ID first
-      const productDoc = await getDoc(doc(db, 'products', productId));
-      
-      let finalProductId = "";
-      let finalProductData: any = null;
+      // Check if product exists by ID first (Worker-first when edge returns public item; else jedan getDoc)
+      const productRow = await fetchScannerProductById(productId);
 
-      if (productDoc.exists()) {
-        finalProductId = productDoc.id;
-        finalProductData = productDoc.data();
+      let finalProductId = "";
+      let finalProductData: ProductLookupData | null = null;
+
+      if (productRow) {
+        finalProductId = productRow.id;
+        finalProductData = productRow as ProductLookupData;
       } else {
         const scannedBarcode = normalizeBarcode(scannedText);
 
+        const edgeBarcodeHit = await fetchPublicProductByBarcodeLookup(scannedBarcode, st);
+        if (edgeBarcodeHit) {
+          finalProductId = edgeBarcodeHit.id;
+          finalProductData = edgeBarcodeHit as ProductLookupData;
+        }
+
         // Preferred lookup: normalized barcode (fast + format-safe)
-        if (scannedBarcode) {
-          const qNorm = query(collection(db, 'products'), where("barcodeNormalized", "==", scannedBarcode));
+        if (!finalProductId && scannedBarcode) {
+          const qNorm = query(collection(db, "products"), where("barcodeNormalized", "==", scannedBarcode), limit(5));
           const normSnap = await getDocs(qNorm);
+          meterDbRead("scanner:barcode_normalized_lookup", normSnap.size);
           if (!normSnap.empty) {
             finalProductId = normSnap.docs[0].id;
             finalProductData = normSnap.docs[0].data();
           }
         }
 
-        // Fallback: Search by Barcode field
+        // Fallback A: some records keep digits in raw `barcode` field.
+        if (!finalProductId && scannedBarcode) {
+          const qDigits = query(collection(db, "products"), where("barcode", "==", scannedBarcode), limit(5));
+          const digitsSnap = await getDocs(qDigits);
+          meterDbRead("scanner:barcode_digits_lookup", digitsSnap.size);
+          if (!digitsSnap.empty) {
+            finalProductId = digitsSnap.docs[0].id;
+            finalProductData = digitsSnap.docs[0].data();
+          }
+        }
+
+        // Fallback B: exact raw text match (legacy records / QR payloads).
         if (!finalProductId) {
-          const q = query(collection(db, 'products'), where("barcode", "==", scannedText));
+          const q = query(collection(db, "products"), where("barcode", "==", st), limit(5));
           const querySnapshot = await getDocs(q);
+          meterDbRead("scanner:barcode_raw_lookup", querySnapshot.size);
           
           if (!querySnapshot.empty) {
             finalProductId = querySnapshot.docs[0].id;
@@ -252,8 +311,25 @@ export default function Scanner() {
           }
         }
 
-        // NOTE: intentionally no "fetch all products" fallback.
-        // Full-collection reads are too expensive at scale and can exhaust quota quickly.
+        if (!finalProductId) {
+          // Robust fallback: normalize barcode and match client-side.
+          // Handles values like "860-123 4567890", numeric Firestore fields, etc.
+          if (scannedBarcode) {
+            const catalog = await fetchPublicProducts({
+              limitCount: 900,
+              cacheKey: "rakivinum_cache_scanner_barcode_fallback_v1",
+              ttlMs: CACHE_TTL.PRODUCTS_6H,
+            });
+            const hit = catalog.find((row) => {
+              const data = row as ProductLookupData;
+              return normalizeBarcode(data.barcodeNormalized || data.barcode) === scannedBarcode;
+            });
+            if (hit?.id) {
+              finalProductId = hit.id;
+              finalProductData = hit as ProductLookupData;
+            }
+          }
+        }
       }
 
       if (!finalProductId) {
@@ -281,9 +357,17 @@ export default function Scanner() {
       };
       updatePendingQueue(pendingEntry);
       setIsScanning(false);
-      navigate(`/label/${finalProductId}`, { state: { fromInAppScanner: true } });
+      const returnTo = `${location.pathname}${location.search}`;
+      try {
+        sessionStorage.setItem("rakivinum_last_label_return_v1", returnTo);
+      } catch {
+        // ignore storage errors
+      }
+      navigate(`/label/${finalProductId}?rt=${encodeURIComponent(returnTo)}`, {
+        state: { fromInAppScanner: true, returnTo },
+      });
       void logProductScan(finalProductId, finalProductData, "barcode_scan");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Scan processing error", err);
       setError("Greška pri obradi skeniranja.");
       setIsScanning(false);

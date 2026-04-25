@@ -1,9 +1,35 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { db } from "../lib/firebase";
-import { collection, query, where, getDocs, doc, getDoc, deleteDoc, onSnapshot, limit } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, getDoc, deleteDoc, limit } from "firebase/firestore";
 import { ArrowLeft, Gift, ShieldX, Loader2, Star, CheckCircle2, ChevronRight, Users } from "lucide-react";
 import { cn } from "../lib/utils";
+import {
+  fetchPublicClubActionsForDistillery,
+  fetchPublicClubMembershipsByVisitorId,
+  fetchPublicDistilleryById,
+} from "../lib/dataService";
+
+type ClubTarget = { label: string; current: number; target: number };
+type ClubAction = {
+  id: string;
+  title?: string;
+  condition?: string;
+  targetScans?: number;
+  targetRatings?: number;
+  targetValue?: number;
+  conditionLabel?: string;
+  rewardValue?: string;
+  progress: number;
+  targets: ClubTarget[];
+  endsAt?: { toDate?: () => Date } | string | Date;
+};
+type ClubRow = {
+  id: string;
+  name: string;
+  logoUrl: string;
+  actions: ClubAction[];
+};
 
 /** Firestore / legacy podaci ponekad imaju mapu lokacije umesto stringa — React ne sme renderovati objekat kao dete. */
 function safeReactText(value: unknown): string {
@@ -28,7 +54,21 @@ function safeCount(value: unknown): number {
 
 export default function MyClubs() {
   const navigate = useNavigate();
-  const [clubs, setClubs] = useState<any[]>([]);
+  const location = useLocation();
+  const goBackSafe = () => {
+    const navState = location.state as { returnTo?: string } | null;
+    if (navState?.returnTo) {
+      navigate(navState.returnTo);
+      return;
+    }
+    const rt = new URLSearchParams(location.search).get("rt");
+    if (rt) {
+      navigate(rt);
+      return;
+    }
+    navigate("/", { replace: true });
+  };
+  const [clubs, setClubs] = useState<ClubRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const visitorId = localStorage.getItem('rakivinum_visitor_id');
 
@@ -41,10 +81,8 @@ export default function MyClubs() {
     const fetchClubs = async () => {
       setIsLoading(true);
       try {
-        // Fetch memberships from Firestore FIRST
-        const qMemberships = query(collection(db, 'club_memberships'), where('visitorId', '==', visitorId));
-        const membershipSnap = await getDocs(qMemberships);
-        const joinedClubsIds = membershipSnap.docs.map(doc => doc.data().distilleryId);
+        const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);
+        const joinedClubsIds = memberships.map((m) => m.distilleryId).filter((x): x is string => typeof x === "string" && x.length > 0);
         
         // Secondary fallback to local storage
         const storageKey = `clubs_${visitorId}`;
@@ -57,28 +95,24 @@ export default function MyClubs() {
           return;
         }
 
-        const clubsData: any[] = [];
+        const clubsData: ClubRow[] = [];
 
         for (const id of allIds) {
-          // Fetch Distillery Info
-          const dRef = doc(db, 'distilleries', id);
-          const dSnap = await getDoc(dRef);
-          
-          if (!dSnap.exists()) continue;
+          let distillery: Record<string, unknown> | null = (await fetchPublicDistilleryById(id)) as Record<
+            string,
+            unknown
+          > | null;
+          if (!distillery) {
+            const dSnap = await getDoc(doc(db, "distilleries", id));
+            if (!dSnap.exists()) continue;
+            distillery = { id: dSnap.id, ...dSnap.data() };
+          }
 
-          const distillery = { id: dSnap.id, ...dSnap.data() };
-          
-          // Fetch Active Actions for this club
-          const qActions = query(
-            collection(db, 'club_actions'), 
-            where('distilleryId', '==', id),
-            where('isActive', '==', true)
-          );
-          const actionsSnap = await getDocs(qActions);
-          const actions = actionsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          const actionRows = await fetchPublicClubActionsForDistillery(id, 60);
+          const actions: ClubAction[] = actionRows.map((row) => ({ id: row.id, ...(row as object) } as ClubAction));
 
           // Calculate Progress for each action
-          const actionsWithProgress = await Promise.all(actions.map(async (action: any) => {
+          const actionsWithProgress = await Promise.all(actions.map(async (action) => {
             let currentScans = 0;
             let currentRatings = 0;
             
@@ -104,7 +138,7 @@ export default function MyClubs() {
             currentRatings = ratingsSnap.size;
 
             let progress = 0;
-            let targets = [];
+            let targets: ClubTarget[] = [];
             
             if (action.condition === 'combined_automated') {
               const scanProgress = Math.min(currentScans / (action.targetScans || 1), 1);
@@ -129,25 +163,27 @@ export default function MyClubs() {
             };
           }));
 
+          const distilleryIdStr = String((distillery as { id?: unknown }).id ?? id);
           clubsData.push({
-            ...distillery,
-            name: safeReactText((distillery as any)?.name) || "Destilerija",
-            logoUrl: typeof (distillery as any)?.logoUrl === "string" ? (distillery as any).logoUrl : "",
-            actions: actionsWithProgress.map((a: any) => ({
+            ...(distillery as Record<string, unknown>),
+            id: distilleryIdStr,
+            name: safeReactText((distillery as { name?: unknown })?.name) || "Destilerija",
+            logoUrl: typeof (distillery as { logoUrl?: unknown })?.logoUrl === "string" ? String((distillery as { logoUrl?: unknown }).logoUrl) : "",
+            actions: actionsWithProgress.map((a) => ({
               ...a,
               title: safeReactText(a?.title) || "Akcija",
               conditionLabel: safeReactText(a?.conditionLabel),
               rewardValue: safeReactText(a?.rewardValue),
               progress: Math.max(0, Math.min(100, safeCount(a?.progress))),
               targets: Array.isArray(a?.targets)
-                ? a.targets.map((t: any) => ({
+                ? a.targets.map((t: { label?: unknown; current?: unknown; target?: unknown }) => ({
                     label: safeReactText(t?.label) || "Cilj",
                     current: safeCount(t?.current),
                     target: Math.max(1, safeCount(t?.target)),
                   }))
                 : [],
             })),
-          });
+          } as ClubRow);
         }
 
         setClubs(clubsData);
@@ -171,16 +207,12 @@ export default function MyClubs() {
       joined = joined.filter((id: string) => id !== distilleryId);
       localStorage.setItem(storageKey, JSON.stringify(joined));
 
-      // Update Firestore
-      const q = query(
-        collection(db, 'club_memberships'), 
-        where('visitorId', '==', visitorId), 
-        where('distilleryId', '==', distilleryId)
-      );
-      const snap = await getDocs(q);
-      snap.forEach(async (d) => {
-        await deleteDoc(doc(db, 'club_memberships', d.id));
-      });
+      const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
+      for (const m of memberships) {
+        if (m.distilleryId === distilleryId && m.id) {
+          await deleteDoc(doc(db, "club_memberships", m.id));
+        }
+      }
 
       // Update State
       setClubs(prev => prev.filter(c => c.id !== distilleryId));
@@ -237,7 +269,7 @@ export default function MyClubs() {
         <div className="flex items-center gap-4">
           <button
             type="button"
-            onClick={() => navigate(-1)}
+            onClick={goBackSafe}
             className="p-3 card-soft card-elevated border border-white/10 rounded-2xl text-text-secondary hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -317,9 +349,11 @@ export default function MyClubs() {
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {club.actions.map((action: any) => {
+                      {club.actions.map((action) => {
                         const isCompleted = action.progress >= 100;
-                        const dateEnd = action.endsAt?.toDate ? action.endsAt.toDate() : new Date(action.endsAt);
+                        const dateEnd = action.endsAt && typeof (action.endsAt as { toDate?: () => Date }).toDate === "function"
+                          ? (action.endsAt as { toDate?: () => Date }).toDate?.() || new Date(0)
+                          : new Date((action.endsAt || 0) as string | number | Date);
                         const isExpired = dateEnd < new Date() && !isCompleted;
                         const daysLeft = Math.ceil((dateEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 
@@ -355,7 +389,7 @@ export default function MyClubs() {
 
                              {/* Detailed Targets */}
                              <div className="flex gap-4">
-                               {action.targets.map((t: any, idx: number) => (
+                              {action.targets.map((t, idx: number) => (
                                  <div key={idx} className="flex-1">
                                     <div className="flex justify-between text-[8px] uppercase font-bold text-text-secondary mb-1">
                                        <span>{t.label}</span>

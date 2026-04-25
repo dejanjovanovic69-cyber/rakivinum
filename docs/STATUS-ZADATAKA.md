@@ -1,0 +1,152 @@
+# Rakivinum — status zadataka i „gde smo stali“
+
+**Poslednji zapis:** 2026-04-26 (noćni krug) — Worker **`product-lookup`** (barkod) + **`club-membership-count`**; `fetchPublicProductByBarcodeLookup`, `fetchPublicClubMembershipCount`; **`Scanner`** i **`Distillery`** (članstvo + broj članova + join/leave) worker-first gde ima smisla; smoke + `CLOUDFLARE-PHASE2-WORKER` ažurirani. Deploy: `npm run cf:deploy:resilient` kada si na mreži.
+
+Ovaj fajl služi da **sledeći put** odmah znaš šta je urađeno i šta ostaje, bez kopanja po četu. Ažuriraj ga ukratko posle većih promena.
+
+**Šta da napišeš Cursoru na početku sledećeg rada:**  
+„Prvo pročitaj `docs/STATUS-ZADATAKA.md` i nastavi od tamo.“
+
+**Brza lokalna provera (bez eksternih testera):**  
+`npm run cf:smoke:edge` (proverava health + glavne public Worker rute i vraća status/latenciju/payload size).
+
+**Resilient deploy (kad Cloudflare vrati 500/10500):**  
+`npm run cf:deploy:resilient` (retry Worker deploy + Pages deploy sa `functions` workaround-om).
+
+---
+
+## Gde smo stigli (kratko)
+
+- **Cloudflare Pages (Faza 1):** produkcioni deploy radi na `rakivinum.pages.dev`; rutiranje i `F5` rade ispravno.
+- **Firestore stabilizacija:** permission-denied greske su znacajno smanjene kroz fallback-best-effort pristup (`presence`, `guest save`, `scanCount` feature flag).
+- **Cache/refresh standard:** centralizovan policy (`cachePolicy.ts`) + uklonjen agresivni interval refresh sa glavnih stranica.
+- **Label tok:** uklonjen oslonac na nepostojeci `submitRatingSecure` cloud function po default-u; ostavljen fallback preko Firestore transaction.
+- **Read optimizacije:** cache-first prosiren na `Home`, `Distillery`, `AdminAudit`, `DistilleryDashboard`, `Collection`; dodat dev read-meter (`requestMeter`).
+- **Cloudflare Worker (Faza 2 priprema):**
+  - Worker deployovan: `https://rakivinum-api.ldjs1969.workers.dev`
+  - endpointi spremni: `/health`, `/api/public/distilleries`, `/api/public/products`, `/api/public/community-events`
+  - frontend `dataService` ima worker-first + firebase fallback mehanizam.
+- **Faza 2 status (VERIFIED):**
+  - Worker auth zavrsen preko service account OAuth (JWT) toka.
+  - `api/public/*` endpointi vracaju podatke.
+  - Pages redeploy uradjen sa ukljucenim `VITE_EDGE_API_BASE`.
+  - Korisnicki smoke test prosao (app radi normalno).
+- **Faza 3 status (read migracije — TRENUTNI SCOPE ZAVRSEN):**
+  - novi endpointi: `/api/public/distillery/:id`, `/api/public/product/:id`, `/api/public/ratings-summary/:productId`
+  - `distilleries` i `products` list endpointi vracaju light payload (bez base64 image blob-ova)
+  - Worker public GET rute imaju best-effort rate-limit + edge cache
+  - `ProductAnalytics` koristi Worker-first summary tok (uz Firebase fallback)
+  - `Community` reviews feed koristi Worker-first tok preko `/api/public/ratings-feed` (uz Firebase fallback)
+  - `ProductAnalytics` koristi Worker-first i za listu ocena preko `/api/public/product-ratings/:productId` (uz Firebase fallback)
+  - `Home` aktivne akcije/pogodnosti koriste Worker-first tok preko `/api/public/club-actions` (uz Firebase fallback)
+  - `Home` članstva i licenca koriste Worker-first tokove preko `/api/public/club-memberships/:visitorId` i `/api/public/license/:token` (uz Firebase fallback)
+
+- **Firestore / kvota:** `limit()` na upitima, keš/dedup (`dataService`, `resilience`), smanjeni `onSnapshot` gde nije neophodno, `refreshGate` za `focus` burst (`Home`, `Menu`, `Distillery`, itd.).
+- **Zajednica (`Community`):** ocene (feed) više nisu teški `onSnapshot` — kontrolisan `getDocs` + periodično/fokus osvežavanje + gate.
+- **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (keš/dedup), bez `getDocs` cele `products` kolekcije.
+- **Početna (`Home`):** sačuvano — `getCountFromServer` + poslednji artikal preko `orderBy(createdAt)+limit(1)`; fokus na korisničke statistike sa gate-om.
+- **Kolekcija (`Collection`):** učitavanje sačuvanog sa `limit` (+ `orderBy` za ulogovanog).
+- **Admin / audit / dashboard:** manje real-time slušanje gde je bilo skupo; kontrolisani refresh; prisustvo (online broj) za superadmin; paginacija brisanja proizvoda pri brisanju destilerije.
+- **Admin arhiva / verifikacija proizvoda:** masovni update ide **stranicama** sa `orderBy(documentId())` + `startAfter` (ne beskonačna petlja po istom `where`).
+- **Destilerija dashboard / analitika modal:** dodatni `limit` na upitima (vlasnik/email destilerije, proizvodi, ocene po chunk-u).
+- **Moji klubovi / stranica destilerije:** `limit` na članstvima i akcijama; uklonjen nekorišćen import.
+- **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
+- **TypeScript:** širok prolaz smanjenja `any` na kritičnim stranicama (raniji krugovi).
+- **Dokumentacija u repou:** ovaj fajl + komentar u `src/lib/refreshGate.ts` koji ovde vodi.
+
+---
+
+## Obavezno sledeći put (operativa)
+
+0. **Cloudflare trenutno stanje (stabilno):**
+   - Pages produkcija je aktivna i stabilna.
+   - Worker OAuth auth radi i `VITE_EDGE_API_BASE` je ukljucen u produkciji.
+   - Public read saobracaj ide Worker-first gde je pokriven endpointima.
+
+1. **Najbolji sledeci korak (bez rizika):**
+   - [ZAVRSENO] Deploy Worker-a sa novim endpointima:
+     - `/api/public/distillery/:id`
+     - `/api/public/product/:id`
+   - [ZAVRSENO] Frontend `Distillery` koristi worker-first tok za profil i katalog proizvoda.
+   - [ZAVRSENO] Smoke test prosao (`distilleries -> distillery -> label -> nazad`).
+   - [ZAVRSENO] Uveden rate-limit + edge cache na `api/public/*` rutama.
+   - [ZAVRSENO] Dodat analytics/public snapshot endpoint (`ratings-summary`).
+   - [ZAVRSENO] Migriran jos 1 skupi read tok na Worker-first (`Community` ratings feed).
+   - [SLEDECE] Stabilizacija + merenje Firestore usage trenda naredna 24h.
+   - [SLEDECE] Samo po potrebi dodavati nove endpoint-e (ako metrika pokaze usko grlo).
+   - [ZAVRSENO] Prvi krug audita: Scanner (`fetchScannerProductById`), Menu (članstva + destilerije + **community_links**), Collection/Home (proizvod preko `fetchPublicProductById`); detalj `docs/FIRESTORE-READ-AUDIT.md`.
+
+2. **Hosting (frontend) na Firebase (legacy fallback):** poslednji uspešan deploy samo hostinga:  
+   `firebase deploy --only hosting` → URL u konzoli projekta (npr. `*.web.app`).  
+   Kompletan `firebase deploy --only firestore` ovde može da padne sa **403 / billing** ako GCP projekat nema uključeno naplaćivanje za Firestore API — indeksi i pravila onda deploy-uj na projekat gde Firestore već radi, ili uključi billing za taj projekat.
+
+3. **Deploy Firestore indeksa** (dodat u `firestore.indexes.json`):
+   - kolekcija `products`: polja `distilleryId` + `__name__` (za admin paginaciju arhive/verifikacije).
+   - Komanda (iz korena projekta):  
+     `firebase deploy --only firestore:indexes`  
+   - Bez ovoga admin upiti sa `orderBy(documentId())` mogu da prijave *missing index* u konzoli.
+
+4. **Brzi smoke na telefonu** (kad budeš na mreži): Zajednica (tabovi + Pretraga) → etiketa → strelica nazad → skener (1D ako imaš primer) → Meni.
+
+---
+
+## NEXT 5 STEPS (najjednostavnije)
+
+1. **Stabilizacija 24h (bez velikih izmena)**  
+   - Pages ostaje aktivan na `rakivinum.pages.dev`.
+   - Worker ostaje aktivan za public read rute.
+
+2. **Merenje efekta (Firestore usage pre/posle)**  
+   - uporediti trend reads/writes nakon ukljucenja Worker read sloja.
+
+3. **Prosiriti Worker read pokrivenost**  
+   - [PRVI KORAK ZAVRSEN] dodat endpoint `distillery/:id` + frontend migracija Distillery read toka.
+   - [DODATNO ZAVRSENO] dodat endpoint `product/:id`.
+   - [ZAVRSENO] dodat endpoint `ratings-summary/:productId` i verifikovan u produkciji.
+
+4. **Uvesti rate-limit + edge cache pravila po endpointu**  
+   - [ZAVRSENO] Worker ima best-effort IP/path rate-limit i edge cache za public GET rute.
+
+5. **Nastavak Faze 3 (postepeno backend odvajanje od Firebase klijenta)**  
+   - [ZAVRSENO U TRENUTNOM SCOPE-U] migracija glavnih read tokova na Worker kao default, uz fallback.
+   - [ZAVRSENO] `Community` ratings feed prebacen na Worker-first read.
+   - [SLEDECE NA REDU] uraditi merenje efekta (reads/writes trend pre/posle) i eventualno jos jedan analytics snapshot endpoint samo ako bude potrebe.
+
+---
+
+## Cursor — Plan & Usage (kada piše 100% Included)
+
+- **Pauza par dana** obično **ne vraća** uključenu kvotu unazad — reset ide po datumu iz **Plan & Usage** („resets on …“), ne po „odmoru od alata“.
+- **Manje / kraće Agent sesije** = manje **daljeg** pritiska na kvotu dok god Cursor još pušta rad; **ne nadoknaduje** ono što je već potrošeno u tom ciklusu.
+- **Mali test da proveriš granicu:** jedan **kratak Agent** zadatak (jedna jasna izmena u jednom ili malo fajlova), npr. jedna rečenica u `README`, jedna TS greška iz Problems panela, jedno kratko preimenovanje + pozivi. Ako odmah traži **upgrade / on-demand / limit** → verovatno si na **tvrdoj** granici za Agent; ako prođe → još uvek radi neki režim, ali štedljivo.
+- Za zvanično stanje naloga i sporije: **Cursor support** + screenshot **Plan & Usage** (ne Firebase).
+
+---
+
+## Pre-sajam — spremnost za ~1000 ljudi (checklist)
+
+Cilj: **pikovi tokom dana** (sajam / gužva u kafićima) bez pada zbog **Spark kvote** i bez iznenađenja na računu. Kod je već vučen ka manje „šumovskim“ read-ovima; ovo je **operativa + plan**.
+
+1. **Plan (Blaze):** pre ozbiljnog događaja uključi **Blaze** na pravom GCP/Firebase projektu (onaj gde živi baza i sajt koji ljudi koriste). Spark **50K read / dan** može da zakuca servis pri piku, i to **nije** isto što i „biće skuplo“.
+2. **Zaštita od iznenađenja:** u **Google Cloud → Billing → Budgets & alerts** postavi budžet (npr. **10–20 €**) + email upozorenje. To ne sprečava naplatu, ali **ranije vidiš** skok.
+3. **Grupni test pre sajma:** **5–10 telefona** istovremeno isti scenario kao posetioci: sken → detalj proizvoda → ocena / omiljeno → nazad → meni / zajednica. Traži **pucanje**, beskonačno učitavanje, ili konzolu punu grešaka.
+4. **Merenje u konzoli:** prati **Firestore → Usage** (reads / writes / real-time) i po potrebi **Google Cloud → Monitoring → Metrics Explorer** za tačniji vremenski opseg. Uzmi u obzir da **usage grafikon** može malo da odstupa od **Billing** linije — za evre gledaj **Billing report**.
+5. **Paralelno sa unosom / devom:** izbegavaj **localhost sa prod Firebase** dok traje javni događaj (ili uopšte kad hoćeš nizak šum) — to je istorijski pravilo **velikih dnevnih read-ova** na grafikonu.
+6. **Posle testa:** ako vidiš anomaliju (jedan korisnik = hiljade read-ova u minuti), zabeleži vreme + ekran i to adresiraj u kodu (često: petlja refetch-a, preširok query, višak `onSnapshot`).
+
+---
+
+## Backlog „kad stigneš“ (nije blokirajuće)
+
+- Još jedan prolaz: da li negde ostaje `getDocs` bez `limit` na velikim kolekcijama.
+- Provera da li postoje drugi `while` + isti `where` bez kurzora (isti anti-pattern kao ranije na adminu).
+- Po želji: kratki `CHANGELOG` ili git tag posle deploy-a (čisto za tvoju evidenciju).
+
+---
+
+## Kako da znaš „dokle smo“ ubuduće
+
+1. Otvori **`docs/STATUS-ZADATAKA.md`** (ovaj fajl).
+2. U kodu, polazna tačka za anti-burst refetch je **`src/lib/refreshGate.ts`** (u komentaru ispod stoji link na ovaj fajl).
+
+Ako želiš drugačiji naziv ili lokacija (npr. samo `NAPREDAK.md` u korenu), preimenuj i ažuriraj jednu referencu u `refreshGate.ts`.

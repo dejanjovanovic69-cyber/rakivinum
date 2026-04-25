@@ -1,26 +1,100 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { auth, db } from "../lib/firebase";
-import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp, deleteDoc, onSnapshot, getCountFromServer, limit } from "firebase/firestore";
+import { doc, collection, addDoc, serverTimestamp, deleteDoc } from "firebase/firestore";
 import { ArrowLeft, MapPin, Globe, Loader2, Star, Hexagon, CheckCircle, Phone, Mail, Award, History, Info, Users, ImageIcon, Share2, X } from "lucide-react";
 import { cn } from "../lib/utils";
 import { recordClubMembershipAchievement } from "../lib/achievements";
+import { shouldRunRefresh } from "../lib/refreshGate";
+import { REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { readCache, writeCache } from "../lib/resilience";
+import {
+  fetchPublicClubMembershipCount,
+  fetchPublicClubMembershipsByVisitorId,
+  fetchPublicDistilleryById,
+  fetchPublicProductsByDistilleryId,
+} from "../lib/dataService";
+
+type DistilleryProfile = {
+  id: string;
+  name?: string;
+  logoUrl?: string;
+  mapsUrl?: string;
+  website?: string;
+  phone?: string;
+  email?: string;
+  isArchived?: boolean;
+  isVerified?: boolean;
+  region?: string;
+  story?: string;
+  description?: string;
+  specificNotes?: string;
+  galleryImages?: string[];
+  location?: {
+    city?: string;
+    address?: string;
+  };
+  contact?: {
+    website?: string;
+    phone?: string;
+    email?: string;
+  };
+};
+
+type ProductCard = {
+  id: string;
+  name?: string;
+  type?: string;
+  image?: string;
+  bottleImageUrl?: string;
+  alcoholPercentage?: number;
+  averageRating?: number;
+  isApproved?: boolean;
+  isArchivedByDistillery?: boolean;
+  publicLabelDisabled?: boolean;
+};
 
 export default function Distillery() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const buildReturnTo = (tab: "products" | "about") => `/distillery/${id}?tab=${tab}`;
+  const openLabelWithReturn = (productId: string) => {
+    const returnTo = buildReturnTo(activeTab);
+    try {
+      sessionStorage.setItem("rakivinum_last_label_return_v1", returnTo);
+    } catch {
+      // ignore storage errors
+    }
+    navigate(`/label/${productId}?rt=${encodeURIComponent(returnTo)}`, {
+      state: { returnTo },
+    });
+  };
   const goBackSafe = () => {
-    if (window.history.length > 1) {
-      navigate(-1);
+    const navState = location.state as { returnTo?: string } | null;
+    if (navState?.returnTo) {
+      navigate(navState.returnTo);
       return;
     }
-    navigate("/", { replace: true });
+    const returnToFromQuery = new URLSearchParams(location.search).get("rt");
+    if (returnToFromQuery) {
+      navigate(returnToFromQuery);
+      return;
+    }
+    navigate("/distilleries", { replace: true });
   };
   
-  const [distillery, setDistillery] = useState<any>(null);
-  const [products, setProducts] = useState<any[]>([]);
+  const [distillery, setDistillery] = useState<DistilleryProfile | null>(null);
+  const [products, setProducts] = useState<ProductCard[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'products' | 'about'>('products');
+  useEffect(() => {
+    const tab = new URLSearchParams(location.search).get("tab");
+    if (tab === "about" || tab === "products") {
+      setActiveTab(tab);
+    }
+  }, [location.search]);
+
   const [isMember, setIsMember] = useState(false);
   const [totalMembers, setTotalMembers] = useState<number | null>(null);
   const [activeGalleryImage, setActiveGalleryImage] = useState<string | null>(null);
@@ -43,8 +117,9 @@ export default function Distillery() {
         });
         return;
       }
-    } catch (err: any) {
-      if (String(err?.name || "").toLowerCase().includes("abort")) return;
+    } catch (err: unknown) {
+      const e = err as { name?: string } | null;
+      if (String(e?.name || "").toLowerCase().includes("abort")) return;
       console.warn("Native share failed, fallback to clipboard", err);
     }
 
@@ -59,16 +134,18 @@ export default function Distillery() {
 
   useEffect(() => {
     const visitorId = localStorage.getItem('rakivinum_visitor_id');
+    const profileCacheKey = id ? `rakivinum_cache_distillery_profile_${id}_v1` : null;
+    const productsCacheKey = id ? `rakivinum_cache_distillery_products_${id}_v1` : null;
+    const memberCountCacheKey = id ? `rakivinum_cache_distillery_member_count_${id}_v1` : null;
+    const membershipCacheKey = id && visitorId ? `rakivinum_cache_distillery_membership_${id}_${visitorId}_v1` : null;
     
-    async function fetchData() {
+    async function fetchData(background = false) {
       if (!id) return;
-      setIsLoading(true);
+      if (!background) setIsLoading(true);
       try {
         // Fetch Distillery Profile
-        const docRef = doc(db, 'distilleries', id);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          const dData = { id: docSnap.id, ...docSnap.data() } as any;
+        const dData = await fetchPublicDistilleryById(id) as DistilleryProfile | null;
+        if (dData) {
           if (dData.isArchived) {
             setDistillery(null);
             setProducts([]);
@@ -80,6 +157,7 @@ export default function Distillery() {
             return;
           }
           setDistillery(dData);
+          if (profileCacheKey) writeCache(profileCacheKey, dData, REFRESH_INTERVAL.USER_LIGHT_1H);
         } else {
           setDistillery(null);
           setProducts([]);
@@ -87,53 +165,92 @@ export default function Distillery() {
         }
 
         // Fetch their products
-        const productsQuery = query(collection(db, 'products'), where('distilleryId', '==', id), limit(300));
-        const productsSnap = await getDocs(productsQuery);
-        const mappedProducts = productsSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
-        setProducts(mappedProducts.filter(p => p.isApproved !== false && !p.isArchivedByDistillery && p.publicLabelDisabled !== true));
+        const filteredProducts = await fetchPublicProductsByDistilleryId(id, 300) as ProductCard[];
+        setProducts(filteredProducts);
+        if (productsCacheKey) writeCache(productsCacheKey, filteredProducts, REFRESH_INTERVAL.USER_LIGHT_1H);
       } catch (err) {
         console.error("Error fetching distillery data", err);
+        const cachedProfile = profileCacheKey ? readCache<DistilleryProfile>(profileCacheKey) : null;
+        const cachedProducts = productsCacheKey ? readCache<ProductCard[]>(productsCacheKey) : null;
+        if (cachedProfile) setDistillery(cachedProfile);
+        if (cachedProducts) setProducts(cachedProducts);
       } finally {
-        setIsLoading(false);
+        if (!background) setIsLoading(false);
       }
     }
     
-    fetchData();
-
-    // REAL-TIME SYNC FOR MEMBERSHIP & COUNT
+    // Controlled refresh for membership & count (lower read pressure than live listener).
     if (!id) return;
-    const qMember = query(collection(db, 'club_memberships'), where('visitorId', '==', visitorId), where('distilleryId', '==', id));
-    const unsubMember = onSnapshot(qMember, (snap) => {
-      setIsMember(!snap.empty);
-      
-      const storageKey = `clubs_${visitorId}`;
-      let clubs = JSON.parse(localStorage.getItem(storageKey) || '[]');
-      if (!snap.empty) {
-        if (!clubs.includes(id)) {
-          clubs.push(id);
-          localStorage.setItem(storageKey, JSON.stringify(clubs));
+    const refreshMembership = async () => {
+      try {
+        if (!visitorId || !id) {
+          setIsMember(false);
+          return;
         }
-      } else {
-        if (clubs.includes(id)) {
+        const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 60);
+        const joined = memberships.some((m) => m.distilleryId === id);
+        setIsMember(joined);
+        if (membershipCacheKey) writeCache(membershipCacheKey, joined, REFRESH_INTERVAL.USER_LIGHT_1H);
+
+        const storageKey = `clubs_${visitorId}`;
+        let clubs = JSON.parse(localStorage.getItem(storageKey) || "[]");
+        if (joined) {
+          if (!clubs.includes(id)) {
+            clubs.push(id);
+            localStorage.setItem(storageKey, JSON.stringify(clubs));
+          }
+        } else if (clubs.includes(id)) {
           clubs = clubs.filter((c: string) => c !== id);
           localStorage.setItem(storageKey, JSON.stringify(clubs));
         }
+      } catch (err) {
+        console.error("Error refreshing membership", err);
+        const cachedMembership = membershipCacheKey ? readCache<boolean>(membershipCacheKey) : null;
+        if (typeof cachedMembership === "boolean") setIsMember(cachedMembership);
       }
-    });
+    };
 
     const refreshTotalMembers = async () => {
       try {
-        const qAllMembers = query(collection(db, 'club_memberships'), where('distilleryId', '==', id));
-        const countSnap = await getCountFromServer(qAllMembers);
-        setTotalMembers(countSnap.data().count);
+        const count = await fetchPublicClubMembershipCount(id);
+        setTotalMembers(count);
+        if (memberCountCacheKey) writeCache(memberCountCacheKey, count, REFRESH_INTERVAL.USER_LIGHT_1H);
       } catch (err) {
         console.error("Error counting members", err);
+        const cachedCount = memberCountCacheKey ? readCache<number>(memberCountCacheKey) : null;
+        if (typeof cachedCount === "number") setTotalMembers(cachedCount);
       }
     };
-    void refreshTotalMembers();
+    const cachedProfile = profileCacheKey ? readCache<DistilleryProfile>(profileCacheKey) : null;
+    const cachedProducts = productsCacheKey ? readCache<ProductCard[]>(productsCacheKey) : null;
+    const cachedMembership = membershipCacheKey ? readCache<boolean>(membershipCacheKey) : null;
+    const cachedCount = memberCountCacheKey ? readCache<number>(memberCountCacheKey) : null;
+    if (cachedProfile) setDistillery(cachedProfile);
+    if (cachedProducts) setProducts(cachedProducts);
+    if (cachedProfile) setIsLoading(false);
+    if (typeof cachedMembership === "boolean") setIsMember(cachedMembership);
+    if (typeof cachedCount === "number") setTotalMembers(cachedCount);
+
+    const shouldWarmNow = shouldRunRefresh(`distillery:${id || "unknown"}:initial`, REFRESH_INTERVAL.USER_LIGHT_1H);
+    if (!cachedProfile || !cachedProducts || shouldWarmNow) void fetchData(Boolean(cachedProfile));
+    if (typeof cachedMembership !== "boolean" || shouldWarmNow) void refreshMembership();
+    if (typeof cachedCount !== "number" || shouldWarmNow) void refreshTotalMembers();
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!shouldRunRefresh(`distillery:${id || "unknown"}:members-focus`, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      void refreshMembership();
+      void refreshTotalMembers();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
 
     return () => {
-      unsubMember();
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
   }, [id]);
 
@@ -141,26 +258,26 @@ export default function Distillery() {
 
   const toggleClubMembership = async () => {
     if (isJoining) return;
-    const visitorId = localStorage.getItem('rakivinum_visitor_id');
+    const visitorId = localStorage.getItem("rakivinum_visitor_id");
+    if (!visitorId) {
+      alert("Potreban je identifikator uređaja za članstvo u klubu.");
+      return;
+    }
     const storageKey = `clubs_${visitorId}`;
-    let clubs = JSON.parse(localStorage.getItem(storageKey) || '[]');
-    
+    let clubs = JSON.parse(localStorage.getItem(storageKey) || "[]");
+
     setIsJoining(true);
     try {
       if (isMember) {
         // LEAVE CLUB
-        const q = query(collection(db, 'club_memberships'), where('visitorId', '==', visitorId), where('distilleryId', '==', id));
-        const snap = await getDocs(q);
-        
-        const deletePromises = snap.docs.map(d => deleteDoc(doc(db, 'club_memberships', d.id)));
-        await Promise.all(deletePromises);
+        const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
+        const toRemove = memberships.filter((m) => m.distilleryId === id && m.id);
+        await Promise.all(toRemove.map((m) => deleteDoc(doc(db, "club_memberships", String(m.id)))));
 
         clubs = clubs.filter((cid: string) => cid !== id);
         setIsMember(false);
         if (id) {
-          const qAllMembers = query(collection(db, 'club_memberships'), where('distilleryId', '==', id));
-          const countSnap = await getCountFromServer(qAllMembers);
-          setTotalMembers(countSnap.data().count);
+          setTotalMembers(await fetchPublicClubMembershipCount(id));
         }
       } else {
         // JOIN CLUB
@@ -170,15 +287,13 @@ export default function Distillery() {
           return;
         }
 
-        // CHECK IF ALREADY IN DB
-        const qExist = query(collection(db, 'club_memberships'), where('visitorId', '==', visitorId), where('distilleryId', '==', id));
-        const existSnap = await getDocs(qExist);
-        
-        if (existSnap.empty) {
-          await addDoc(collection(db, 'club_memberships'), {
+        const existing = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
+        const already = existing.some((m) => m.distilleryId === id);
+        if (!already) {
+          await addDoc(collection(db, "club_memberships"), {
             visitorId,
             distilleryId: id,
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
           });
         }
 
@@ -187,9 +302,7 @@ export default function Distillery() {
         }
         setIsMember(true);
         if (id) {
-          const qAllMembers = query(collection(db, 'club_memberships'), where('distilleryId', '==', id));
-          const countSnap = await getCountFromServer(qAllMembers);
-          setTotalMembers(countSnap.data().count);
+          setTotalMembers(await fetchPublicClubMembershipCount(id));
         }
         recordClubMembershipAchievement(clubs.length);
         alert(`Dobrodošli u ${distillery?.name} klub! Od sada ćete dobijati ekskluzivne pogodnosti ovog proizvođača.`);
@@ -309,7 +422,10 @@ export default function Distillery() {
       <div className="p-4 flex gap-2 border-b border-white/10 bg-bg-card-elevated/85 sticky top-0 z-30 backdrop-blur-xl">
         <button
           type="button"
-          onClick={() => setActiveTab("products")}
+          onClick={() => {
+            setActiveTab("products");
+            navigate(buildReturnTo("products"), { replace: true });
+          }}
           className={`flex-1 py-3 px-4 rounded-xl text-[13px] font-black uppercase tracking-widest transition-all duration-200 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card-elevated ${
             activeTab === "products"
               ? "bg-gold-500 text-black shadow-lg shadow-gold-500/20"
@@ -320,7 +436,10 @@ export default function Distillery() {
         </button>
         <button
           type="button"
-          onClick={() => setActiveTab("about")}
+          onClick={() => {
+            setActiveTab("about");
+            navigate(buildReturnTo("about"), { replace: true });
+          }}
           className={`flex-1 py-3 px-4 rounded-xl text-[13px] font-black uppercase tracking-widest transition-all duration-200 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card-elevated ${
             activeTab === "about"
               ? "bg-gold-500 text-black shadow-lg shadow-gold-500/20"
@@ -348,7 +467,7 @@ export default function Distillery() {
                        {products.filter(p => !p.type?.toLowerCase().includes('vino') && !p.type?.toLowerCase().includes('wine')).map(prod => (
                          <div 
                            key={prod.id}
-                           onClick={() => navigate(`/label/${prod.id}`)}
+                          onClick={() => openLabelWithReturn(prod.id)}
                            className="card-soft card-elevated card-interactive rounded-3xl p-4 flex flex-col items-center gap-3 cursor-pointer hover:border-gold-500/60 hover:scale-[1.02] text-center group shadow-md"
                          >
                            <div className="h-32 w-20 relative rounded-lg overflow-hidden bg-black group-hover:drop-shadow-[0_10px_15px_rgba(212,175,55,0.2)] transition-all">
@@ -383,7 +502,7 @@ export default function Distillery() {
                        {products.filter(p => p.type?.toLowerCase().includes('vino') || p.type?.toLowerCase().includes('wine')).map(prod => (
                          <div 
                            key={prod.id}
-                           onClick={() => navigate(`/label/${prod.id}`)}
+                          onClick={() => openLabelWithReturn(prod.id)}
                            className="card-soft card-elevated card-interactive rounded-3xl p-4 flex flex-col items-center gap-3 cursor-pointer hover:border-gold-500/60 hover:scale-[1.02] text-center group shadow-md"
                          >
                            <div className="h-32 w-20 relative rounded-lg overflow-hidden bg-black group-hover:drop-shadow-[0_10px_15px_rgba(212,175,55,0.2)] transition-all">

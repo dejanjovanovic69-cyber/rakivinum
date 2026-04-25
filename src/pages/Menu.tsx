@@ -2,7 +2,7 @@ import { Settings, Moon, Bell, Shield, Wallet, Book, LogOut, Database, BarChart3
 import React, { useEffect, useState } from "react";
 import { app, auth, db } from "../lib/firebase";
 import { getFirebaseRedirectResultOnce } from "../lib/firebaseRedirectResult";
-import { collection, query, where, getDocs, limit, updateDoc, doc, getDoc, onSnapshot, serverTimestamp } from "firebase/firestore";
+import { collection, query, where, getDocs, limit, updateDoc, doc, getDoc, serverTimestamp } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   GoogleAuthProvider,
@@ -17,6 +17,9 @@ import {
 import { useNavigate } from "react-router-dom";
 import { isSuperuserEmail } from "../lib/authz";
 import { normalizeLicenseToken } from "../lib/extractActivateToken";
+import { shouldRunRefresh } from "../lib/refreshGate";
+import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { fetchCommunityLinks, fetchPublicClubMembershipsByVisitorId, fetchPublicDistilleryById } from "../lib/dataService";
 import {
   ACHIEVEMENT_EVENT_NAME,
   BADGE_DEFS,
@@ -34,6 +37,25 @@ const BADGE_RARITY_SR: Record<BadgeRarity, string> = {
   emerald: "Smaragd",
   ruby: "Rubin",
   obsidian: "Opsidijan",
+};
+
+type BeforeInstallPromptEventLike = Event & {
+  prompt: () => Promise<void>;
+  userChoice?: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
+
+type DistilleryOwnershipRow = {
+  isArchived?: boolean;
+  ownerId?: string;
+};
+
+type PendingRatingQueueItem = {
+  id: string;
+  timestamp?: number;
+};
+
+type LicenseDoc = {
+  activatedDevices?: string[];
 };
 
 /** Zvanična višebojna „G“ (bez spoljne zavisnosti). */
@@ -119,7 +141,7 @@ export default function Menu() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isNotifEnabled, setIsNotifEnabled] = useState(true);
   const [distilleryId, setDistilleryId] = useState<string | null>(null);
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEventLike | null>(null);
   const [modalContent, setModalContent] = useState<{ title: string, content?: React.ReactNode, kind?: "guide" } | null>(null);
   const [guideTab, setGuideTab] = useState<"guide" | "badges">("guide");
   const [pendingRatingsCount, setPendingRatingsCount] = useState(0);
@@ -130,7 +152,7 @@ export default function Menu() {
   const [helpLinks, setHelpLinks] = useState<{ id: string; label: string; url: string }[]>([]);
   const [helpLinksReady, setHelpLinksReady] = useState(false);
   const navigate = useNavigate();
-  const getFnErrorCode = (err: any) => String(err?.code || "");
+  const getFnErrorCode = (err: unknown) => String((err as { code?: unknown } | null)?.code || "");
 
   const handleInstallApp = () => {
     window.dispatchEvent(new CustomEvent('rakivinum_trigger_install'));
@@ -193,7 +215,7 @@ export default function Menu() {
           const ownerSnap = await getDocs(qByOwner);
           if (!ownerSnap.empty) {
             const ownerDoc = ownerSnap.docs[0];
-            const ownerData = ownerDoc.data() as any;
+            const ownerData = ownerDoc.data() as DistilleryOwnershipRow;
             if (ownerData?.isArchived) {
               setDistilleryId(null);
               return;
@@ -214,7 +236,7 @@ export default function Menu() {
             const emailSnap = await getDocs(qByEmail);
             if (!emailSnap.empty) {
               const distDoc = emailSnap.docs[0];
-              const distData = distDoc.data() as any;
+              const distData = distDoc.data() as DistilleryOwnershipRow;
               if (distData?.isArchived) {
                 setDistilleryId(null);
                 return;
@@ -249,17 +271,20 @@ export default function Menu() {
     let mounted = true;
     const loadHelpLinks = async () => {
       try {
-        const snap = await getDocs(query(collection(db, "community_links"), limit(80)));
-        const rows = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as any) }))
-          .filter((x: any) => typeof x?.url === "string" && x.url.trim().length > 0)
-          .map((x: any) => ({
-            id: String(x.id),
-            label: String(x.label || "Link"),
-            url: String(x.url),
-          }))
-          .sort((a, b) => a.label.localeCompare(b.label, "sr"));
-        if (mounted) setHelpLinks(rows);
+        const rows = await fetchCommunityLinks({
+          limitCount: 80,
+          cacheKey: "rakivinum_cache_menu_help_links_v1",
+          ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
+        });
+        if (mounted) {
+          setHelpLinks(
+            rows.map((x) => ({
+              id: String(x.id),
+              label: String(x.label || "Link"),
+              url: String(x.url),
+            })),
+          );
+        }
       } catch {
         if (mounted) setHelpLinks([]);
       } finally {
@@ -310,9 +335,12 @@ export default function Menu() {
       const rows = await Promise.all(
         ids.map(async (id) => {
           try {
-            const dSnap = await getDoc(doc(db, "distilleries", id));
-            if (!dSnap.exists()) return null;
-            const data = dSnap.data() as any;
+            let data = (await fetchPublicDistilleryById(id)) as (DistilleryOwnershipRow & { name?: string }) | null;
+            if (!data) {
+              const dSnap = await getDoc(doc(db, "distilleries", id));
+              if (!dSnap.exists()) return null;
+              data = dSnap.data() as DistilleryOwnershipRow & { name?: string };
+            }
             if (data?.isArchived) return null;
             const name = String(data?.name || "").trim() || "Klub";
             return { id, name };
@@ -325,22 +353,38 @@ export default function Menu() {
       setJoinedClubsMenuReady(true);
     };
 
-    const qMembers = query(collection(db, "club_memberships"), where("visitorId", "==", visitorId));
-    const unsub = onSnapshot(
-      qMembers,
-      (snap) => {
-        const fromFs = snap.docs.map((d) => d.data().distilleryId).filter((x): x is string => typeof x === "string" && x.length > 0);
+    const refreshJoinedClubs = async () => {
+      try {
+        const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);
+        const fromFs = memberships
+          .map((m) => m.distilleryId)
+          .filter((x): x is string => typeof x === "string" && x.length > 0);
         const merged = mergeIdsFromFirestore(fromFs);
-        void resolveClubRows(merged);
-      },
-      (err) => {
-        console.warn("Menu: club_memberships snapshot", err);
+        await resolveClubRows(merged);
+      } catch (err) {
+        console.warn("Menu: club_memberships refresh", err);
         const merged = mergeIdsFromFirestore([]);
-        void resolveClubRows(merged);
-      },
-    );
+        await resolveClubRows(merged);
+      }
+    };
 
-    return () => unsub();
+    void refreshJoinedClubs();
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!shouldRunRefresh("menu:focus-joined-clubs", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      void refreshJoinedClubs();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
+
+    return () => {
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
+    };
   }, []);
 
   useEffect(() => {
@@ -351,13 +395,13 @@ export default function Menu() {
         const now = Date.now();
         const seen = new Set<string>();
         const safeQueue = (Array.isArray(parsed) ? parsed : [])
-          .filter((x: any) => x && typeof x.id === "string" && x.id.trim().length > 0)
-          .filter((x: any) => {
+          .filter((x): x is PendingRatingQueueItem => !!x && typeof (x as PendingRatingQueueItem).id === "string" && (x as PendingRatingQueueItem).id.trim().length > 0)
+          .filter((x) => {
             const ts = Number(x?.timestamp || 0);
             // auto-clean stale reminders older than 14 days
             return !Number.isNaN(ts) && ts > 0 && now - ts <= 14 * 24 * 60 * 60 * 1000;
           })
-          .filter((x: any) => {
+          .filter((x) => {
             if (seen.has(x.id)) return false;
             seen.add(x.id);
             return true;
@@ -472,29 +516,31 @@ export default function Menu() {
       try {
         await signInWithPopup(auth, provider);
         return;
-      } catch (e: any) {
-        if (popupBlockedCodes.has(e?.code)) {
+      } catch (e: unknown) {
+        const err = e as { code?: string; message?: string } | null;
+        if (popupBlockedCodes.has(err?.code || "")) {
           await signInWithRedirect(auth, googleProvider());
           return;
         }
-        if (e?.code === 'auth/popup-closed-by-user' || e?.code === 'auth/cancelled-popup-requested') {
+        if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-requested') {
           return;
         }
-        if (e?.code === 'auth/unauthorized-domain') {
-          showDomainError(e.message);
+        if (err?.code === 'auth/unauthorized-domain') {
+          showDomainError(err.message);
           return;
         }
         throw e;
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Login Error:', error);
+      const err = error as { code?: string; message?: string } | null;
 
-      if (error.code === 'auth/unauthorized-domain') {
-        showDomainError(error.message);
+      if (err?.code === 'auth/unauthorized-domain') {
+        showDomainError(err.message);
         return;
       }
 
-      alert(`Greška: ${error.message || 'Pokušajte ponovo.'}`);
+      alert(`Greška: ${err?.message || 'Pokušajte ponovo.'}`);
     }
   };
 
@@ -594,7 +640,7 @@ export default function Menu() {
                       const snap = await getDocs(query(collection(db, "licenses"), where("token", "==", token), limit(1)));
                       const targetDoc = snap.empty ? null : snap.docs[0];
                       const ref = targetDoc ? doc(db, "licenses", targetDoc.id) : licenseRef;
-                      const data = targetDoc?.data() as any;
+                      const data = targetDoc?.data() as LicenseDoc | undefined;
                       const current = Array.isArray(data?.activatedDevices) ? data.activatedDevices : [];
                       const updated = current.filter((x: string) => x !== visitorId);
                       await updateDoc(ref, {
@@ -609,7 +655,7 @@ export default function Menu() {
                       const fn = getFunctions(app, "us-central1");
                       const deactivate = httpsCallable(fn, "deactivateLicenseDevice");
                       await deactivate({ token, visitorId });
-                    } catch (fnErr: any) {
+                    } catch (fnErr: unknown) {
                       const code = getFnErrorCode(fnErr);
                       const infraFailure = [
                         "functions/not-found",
@@ -628,9 +674,9 @@ export default function Menu() {
                     window.dispatchEvent(new Event("rakivinum_license_changed"));
                     setModalContent(null);
                     alert("Uređaj je uspešno odjavljen sa licence.");
-                  } catch (e: any) {
+                  } catch (e: unknown) {
                     console.error("Deactivate license error:", e);
-                    alert(`Neuspešna odjava licence: ${e?.message || "Pokušajte ponovo."}`);
+                    alert(`Neuspešna odjava licence: ${(e as { message?: string } | null)?.message || "Pokušajte ponovo."}`);
                   }
                 }}
                 className="w-full py-3 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-xl text-xs font-black uppercase tracking-widest border border-red-500/30"
