@@ -96,6 +96,7 @@ export default function Distillery() {
   }, [location.search]);
 
   const [isMember, setIsMember] = useState(false);
+  const [membershipDocId, setMembershipDocId] = useState<string | null>(null);
   const [totalMembers, setTotalMembers] = useState<number | null>(null);
   const [activeGalleryImage, setActiveGalleryImage] = useState<string | null>(null);
   const resolvedMapsUrl =
@@ -185,11 +186,14 @@ export default function Distillery() {
       try {
         if (!visitorId || !id) {
           setIsMember(false);
+          setMembershipDocId(null);
           return;
         }
         const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 60);
-        const joined = memberships.some((m) => m.distilleryId === id);
+        const membershipRow = memberships.find((m) => m.distilleryId === id);
+        const joined = Boolean(membershipRow);
         setIsMember(joined);
+        setMembershipDocId(typeof membershipRow?.id === "string" ? membershipRow.id : null);
         if (membershipCacheKey) writeCache(membershipCacheKey, joined, REFRESH_INTERVAL.USER_LIGHT_1H);
 
         const storageKey = `clubs_${visitorId}`;
@@ -207,6 +211,7 @@ export default function Distillery() {
         console.error("Error refreshing membership", err);
         const cachedMembership = membershipCacheKey ? readCache<boolean>(membershipCacheKey) : null;
         if (typeof cachedMembership === "boolean") setIsMember(cachedMembership);
+        if (cachedMembership === false) setMembershipDocId(null);
       }
     };
 
@@ -270,12 +275,17 @@ export default function Distillery() {
     try {
       if (isMember) {
         // LEAVE CLUB
-        const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
-        const toRemove = memberships.filter((m) => m.distilleryId === id && m.id);
-        await Promise.all(toRemove.map((m) => deleteDoc(doc(db, "club_memberships", String(m.id)))));
+        if (membershipDocId) {
+          await deleteDoc(doc(db, "club_memberships", membershipDocId));
+        } else {
+          const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
+          const toRemove = memberships.filter((m) => m.distilleryId === id && m.id);
+          await Promise.all(toRemove.map((m) => deleteDoc(doc(db, "club_memberships", String(m.id)))));
+        }
 
         clubs = clubs.filter((cid: string) => cid !== id);
         setIsMember(false);
+        setMembershipDocId(null);
         if (id) {
           setTotalMembers(await fetchPublicClubMembershipCount(id));
         }
@@ -288,13 +298,17 @@ export default function Distillery() {
         }
 
         const existing = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
-        const already = existing.some((m) => m.distilleryId === id);
+        const existingMatch = existing.find((m) => m.distilleryId === id);
+        const already = Boolean(existingMatch);
         if (!already) {
-          await addDoc(collection(db, "club_memberships"), {
+          const newRef = await addDoc(collection(db, "club_memberships"), {
             visitorId,
             distilleryId: id,
             createdAt: serverTimestamp(),
           });
+          setMembershipDocId(newRef.id);
+        } else {
+          setMembershipDocId(typeof existingMatch?.id === "string" ? existingMatch.id : null);
         }
 
         if (id && !clubs.includes(id)) {

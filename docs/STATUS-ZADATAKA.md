@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+++++) - `Scanner` optimizovan za numerički barkod: preskače nepotreban početni ID lookup i dupli `barcode == rawText` upit kada je raw već isti digits barkod.
+**Poslednji zapis:** 2026-04-26 (popodne++++++) - `Distillery` membership optimizovan: čuva se `membershipDocId` iz već učitanih članstava, pa "napusti klub" ne radi dodatni membership read kada ID već postoji.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -51,6 +51,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Destilerija dashboard / analitika modal:** dodatni `limit` na upitima (vlasnik/email destilerije, proizvodi, ocene po chunk-u).
 - **Moji klubovi / stranica destilerije:** `limit` na clanstvima i akcijama; napredak u `MyClubs` vise ne radi 2 upita po klubu vec 2 agregatna upita po ekranu (`scans` + `ratings`) sa lokalnim grupisanjem po destileriji; fallback za distilerije je batched (`documentId in`) umesto pojedinacnih `getDoc`.
 - **Meni (joined klubovi):** fallback za destilerije je batch (`documentId in`) umesto pojedinacnih `getDoc` poziva kada edge podaci nisu dostupni.
+- **Destilerija (`Distillery`) članstvo:** pri "leave club" koristi se već poznat `membershipDocId` (kada je dostupan), pa se izbegava dodatni membership read.
 - **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
 - **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).
 - **Dokumentacija u repou:** ovaj fajl + komentar u `src/lib/refreshGate.ts` koji ovde vodi.
