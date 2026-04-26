@@ -50,6 +50,7 @@ export default function Scanner() {
   const lastDetectAtRef = useRef(0);
   const scanLockRef = useRef(false);
   const normalizeBarcode = (value: unknown) => String(value || "").replace(/\D/g, "");
+  const looksLikeProductId = (value: string): boolean => /^[A-Za-z0-9_-]{8,64}$/.test(String(value || "").trim());
   const safeText = (value: unknown): string => {
     if (typeof value === "string") return value;
     if (typeof value === "number" && Number.isFinite(value)) return String(value);
@@ -263,8 +264,9 @@ export default function Scanner() {
       }
       productId = decodeURIComponent(String(productId || "").trim());
 
-      // Avoid unnecessary ID read for plain numeric barcode scans.
-      const shouldTryDirectIdLookup = isLabelUrl || !rawLooksLikeDigitsBarcode;
+      // Avoid unnecessary ID read for plain barcodes / arbitrary QR text.
+      const shouldTryDirectIdLookup =
+        isLabelUrl || (!rawLooksLikeDigitsBarcode && looksLikeProductId(productId));
       const productRow = shouldTryDirectIdLookup ? await fetchScannerProductById(productId) : null;
 
       let finalProductId = "";
