@@ -22,14 +22,15 @@ type FirestoreDoc = {
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
-  "cache-control": "public, max-age=120, s-maxage=3600",
+  "cache-control": "public, max-age=300, s-maxage=7200",
 };
 
 const GCP_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const FIRESTORE_SCOPE = "https://www.googleapis.com/auth/datastore";
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 120;
-const EDGE_CACHE_TTL_SECONDS = 120;
+/** Koliko Worker `caches.default` drži identičan GET pre novog Firestore poziva (isti URL = 0 novih read-ova u tom prozoru). */
+const EDGE_CACHE_TTL_SECONDS = 900;
 
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
 let rateLimitState = new Map<string, { count: number; resetAt: number }>();
@@ -67,7 +68,7 @@ function isRateLimited(request: Request, url: URL): boolean {
 function withDefaultHeaders(response: Response): Response {
   const headers = new Headers(response.headers);
   if (!headers.has("content-type")) headers.set("content-type", "application/json; charset=utf-8");
-  if (!headers.has("cache-control")) headers.set("cache-control", "public, max-age=120, s-maxage=3600");
+  if (!headers.has("cache-control")) headers.set("cache-control", "public, max-age=300, s-maxage=7200");
   return new Response(response.body, { status: response.status, headers });
 }
 
@@ -83,7 +84,7 @@ async function servePublicCached(
   const fresh = await handler();
   if (fresh.ok) {
     const headers = new Headers(fresh.headers);
-    headers.set("cache-control", `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=3600`);
+    headers.set("cache-control", `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=7200`);
     const responseToCache = new Response(fresh.body, { status: fresh.status, headers });
     await cache.put(cacheKey, responseToCache.clone());
     return responseToCache;
@@ -553,7 +554,7 @@ export default {
 
       if (url.pathname === "/api/public/distilleries") {
         return servePublicCached(request, async () => {
-          const limitCount = parseLimit(url, 250, 800);
+          const limitCount = parseLimit(url, 250, 400);
           const rows = await fetchCollection(env, "distilleries", limitCount);
           const filtered = rows.filter((d) => d.isArchived !== true && d.isVerified === true);
           const lightItems = filtered.map((row) => toDistilleryListItem(row));
@@ -582,7 +583,7 @@ export default {
 
       if (url.pathname === "/api/public/products") {
         return servePublicCached(request, async () => {
-          const limitCount = parseLimit(url, 350, 1000);
+          const limitCount = parseLimit(url, 300, 500);
           const rows = await fetchCollection(env, "products", limitCount);
           const filtered = rows.filter(
             (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
@@ -594,7 +595,7 @@ export default {
 
       if (url.pathname === "/api/public/community-events") {
         return servePublicCached(request, async () => {
-          const limitCount = parseLimit(url, 60, 400);
+          const limitCount = parseLimit(url, 60, 200);
           const rows = await fetchCollection(env, "community_events", limitCount);
           const sorted = rows.sort((a, b) => String(b.eventDate || "").localeCompare(String(a.eventDate || "")));
           return new Response(JSON.stringify({ items: sorted }), { headers: jsonHeaders });
@@ -676,7 +677,7 @@ export default {
             url.pathname.replace("/api/public/products-by-distillery/", "").trim(),
           );
           if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
-          const limitCount = parseLimit(url, 300, 500);
+          const limitCount = parseLimit(url, 250, 400);
           const rows = await fetchCollectionWhereEquals(env, "products", "distilleryId", distilleryId, limitCount);
           const filtered = rows.filter(
             (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
@@ -772,7 +773,7 @@ export default {
         return servePublicCached(request, async () => {
           const productId = decodeURIComponent(url.pathname.replace("/api/public/product-ratings/", "").trim());
           if (!productId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
-          const limitCount = parseLimit(url, 200, 400);
+          const limitCount = parseLimit(url, 150, 300);
           const rows = await fetchCollectionWhereEquals(env, "ratings", "productId", productId, limitCount);
           const items = rows
             .filter((r) => r.isFlagged !== true)
@@ -785,7 +786,7 @@ export default {
         return servePublicCached(request, async () => {
           const productId = decodeURIComponent(url.pathname.replace("/api/public/scan-clusters/", "").trim());
           if (!productId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
-          const sampleSize = parseLimit(url, 300, 800);
+          const sampleSize = parseLimit(url, 200, 500);
           const clusterLimit = parseLimit(url, 5, 20);
           const rows = await fetchCollectionWhereEquals(env, "scans", "productId", productId, sampleSize);
           const items = toScanClusterItems(rows, clusterLimit);
