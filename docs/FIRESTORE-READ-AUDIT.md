@@ -70,7 +70,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 | Read | Napomena |
 |------|----------|
 | `users/.../savedItems`, `guest_saved_items` | Korisnički — Firestore. |
-| Enrich proizvoda | **`fetchPublicProductById`**, zatim **`getDoc`** samo ako treba pun red (npr. nejavno). |
+| Enrich proizvoda | **`fetchPublicProductById`**, zatim batched Firestore fallback (`where(documentId(), "in", chunk)`) za stavke koje nisu dostupne kroz public read. |
 
 ---
 
@@ -171,7 +171,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 
 1. **Scanner:** [urađeno] ID + barkod preko Worker-a gde je moguće.
 2. **Menu:** [urađeno] članstva, destilerije, community links.
-3. **Collection / Home:** [urađeno] enrich / poslednji artikal preko `dataService` + pojedinačni `getDoc` gde treba.
+3. **Collection / Home:** [urađeno] enrich / poslednji artikal preko `dataService` + batched fallback (`documentId in`) gde treba.
 4. **ProductAnalytics:** geo skenovi — [urađeno] Worker `scan-clusters`; proizvod preko `fetchScannerProductById`.
 5. **`community_links`:** [urađeno] Worker + `fetchCommunityLinks` + Menu.
 

@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+) - `Menu` joined-clubs fallback optimizovan: umesto `getDoc` po destileriji koristi batched `where(documentId(), "in", ...)` kada edge vrati `null`.
+**Poslednji zapis:** 2026-04-26 (popodne++) - `Collection` fallback optimizovan: umesto `getDoc(products/{id})` po stavci koristi batched `where(documentId(), "in", ...)` za proizvode koje public read ne vrati.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -45,7 +45,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Zajednica (`Community`):** ocene (feed) vise nisu teski `onSnapshot` - kontrolisan `getDocs` + periodicno/fokus osvezavanje + gate.
 - **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (kes/dedup), bez `getDocs` cele `products` kolekcije.
 - **Pocetna (`Home`):** sacuvano - `getCountFromServer` + poslednji artikal preko `orderBy(createdAt)+limit(1)`; fokus na korisnicke statistike sa gate-om.
-- **Kolekcija (`Collection`):** ucitavanje sacuvanog sa `limit` (+ `orderBy` za ulogovanog).
+- **Kolekcija (`Collection`):** ucitavanje sacuvanog sa `limit` (+ `orderBy` za ulogovanog); fallback za product detalje je batched (`documentId in`) umesto pojedinacnih `getDoc`.
 - **Admin / audit / dashboard:** manje real-time slusanje gde je bilo skupo; kontrolisani refresh; prisustvo (online broj) za superadmin; paginacija brisanja proizvoda pri brisanju destilerije.
 - **Admin arhiva / verifikacija proizvoda:** masovni update ide **stranicama** sa `orderBy(documentId())` + `startAfter` (ne beskonacna petlja po istom `where`).
 - **Destilerija dashboard / analitika modal:** dodatni `limit` na upitima (vlasnik/email destilerije, proizvodi, ocene po chunk-u).

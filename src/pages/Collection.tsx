@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Bookmark, Trash2, ChevronRight, Info, Star } from "lucide-react";
 import { auth, db } from "../lib/firebase";
-import { collection, query, getDocs, doc, getDoc, deleteDoc, where, orderBy, limit } from "firebase/firestore";
+import { collection, query, getDocs, doc, deleteDoc, where, orderBy, limit, documentId } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { getOrCreateVisitorId } from "../lib/visitorIdentity";
 import { readCache, writeCache } from "../lib/resilience";
@@ -150,26 +150,39 @@ export default function Collection() {
         return;
       }
       
-      // Fetch product basic details for each saved item
-      const detailedItems = await Promise.all(
+      // Resolve public rows first; fallback Firestore fetch is batched for misses.
+      const withPublic = await Promise.all(
         savedList.map(async (saved) => {
           const pub = await fetchPublicProductById(saved.productId);
-          if (pub) {
-            return { ...saved, product: { id: pub.id, ...pub } as CollectionProduct };
-          }
-          const prodSnap = await getDoc(doc(db, "products", saved.productId));
-          meterDbRead("collection:product_doc", 1);
-          if (prodSnap.exists()) {
-            return {
-              ...saved,
-              product: { id: prodSnap.id, ...prodSnap.data() } as CollectionProduct,
-            };
-          }
-          return null;
+          return { saved, pub };
         }),
       );
+      const fallbackIds = Array.from(
+        new Set(
+          withPublic
+            .filter((x) => !x.pub)
+            .map((x) => String(x.saved.productId || "").trim())
+            .filter(Boolean),
+        ),
+      );
+      const fallbackById = new Map<string, CollectionProduct>();
+      for (let i = 0; i < fallbackIds.length; i += 10) {
+        const chunk = fallbackIds.slice(i, i + 10);
+        const snap = await getDocs(query(collection(db, "products"), where(documentId(), "in", chunk)));
+        meterDbRead("collection:product_docs_batch", snap.size);
+        snap.forEach((d) => {
+          fallbackById.set(d.id, { id: d.id, ...d.data() } as CollectionProduct);
+        });
+      }
 
-      const nextItems = detailedItems.filter((i): i is CollectionItem => i !== null);
+      const nextItems = withPublic
+        .map(({ saved, pub }) => {
+          if (pub) return { ...saved, product: { id: pub.id, ...pub } as CollectionProduct };
+          const fallback = fallbackById.get(saved.productId);
+          if (fallback) return { ...saved, product: fallback };
+          return null;
+        })
+        .filter((i): i is CollectionItem => i !== null);
       setItems(nextItems);
       writeCache(cacheKey, nextItems, REFRESH_INTERVAL.USER_LIGHT_1H);
       setLoading(false);
