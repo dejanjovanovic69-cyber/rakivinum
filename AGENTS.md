@@ -3,8 +3,9 @@
 ## Polazna tačka
 
 1. Prvo pročitaj **`docs/STATUS-ZADATAKA.md`** — tu je trenutno stanje deploy-a, Worker ruta i šta je već urađeno.
-2. Za detalje Firestore read migracija vidi **`docs/FIRESTORE-READ-AUDIT.md`**.
-3. Na samom početku proveri stanje grane: `git status -sb`.
+2. Za **izolaciju od javnog prod-a** (preview, Access, sandbox) vidi **`docs/RADNI-TOK-STAGING.md`**.
+3. Za detalje Firestore read migracija vidi **`docs/FIRESTORE-READ-AUDIT.md`**.
+4. Na samom početku proveri stanje grane: `git status -sb`.
 
 ## Kako da radiš autonomno (bez stalnog „nastavi“)
 

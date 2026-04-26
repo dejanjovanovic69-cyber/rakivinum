@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 — dodat plan **`docs/MIGRACIJA-VAN-FIRESTORE.md`** (Nivo 0 Blaze/beta → Nivo 1 read-replica na CF → Nivo 2 nova baza). Worker i danas može čitati Firestore REST — „samo CF“ ne skida kvotu magično.
+**Poslednji zapis:** 2026-04-26 — dodat **`docs/RADNI-TOK-STAGING.md`**: rad na preview / Access / sandbox Firebase, bez obaveze najave i bez konstantnog „vezivanja“ za javni prod URL.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
