@@ -69,7 +69,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 
 | Read | Napomena |
 |------|----------|
-| `users/.../savedItems`, `guest_saved_items` | Korisnički — Firestore. |
+| `users/.../savedItems`, `guest_saved_items` | Korisnički — Firestore; kada cache postoji (`readCache`), `Collection` više ne radi automatski isti mrežni fetch na svakom ulasku. |
 | Enrich proizvoda | **`fetchPublicProductById`**, zatim batched Firestore fallback (`where(documentId(), "in", chunk)`) za stavke koje nisu dostupne kroz public read. |
 
 ---

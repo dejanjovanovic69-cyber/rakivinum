@@ -99,7 +99,7 @@ export default function Collection() {
       if (cachedItems) {
         setItems(cachedItems);
         setLoading(false);
-        if (!cachedItems.length) return;
+        return;
       }
       
       let savedList: SavedListItem[] = [];
