@@ -109,7 +109,7 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 | Read | Napomena |
 |------|----------|
 | Katalog proizvoda | **`fetchPublicProductsByDistilleryId`** worker-first + 1h cache (ista destilerija/limit kombinacija). |
-| Članstvo posetioca + broj članova | **`fetchPublicClubMembershipsByVisitorId`**, **`fetchPublicClubMembershipCount`** (kratki 2m cache po distileriji); join/leave i dalje piše u Firestore, “leave” koristi poznat `membershipId`, a posle join/leave broj članova se lokalno +/- koriguje (bez dodatnog count read-a, uz periodični refresh). |
+| Članstvo posetioca + broj članova | **`fetchPublicClubMembershipsByVisitorId`**, **`fetchPublicClubMembershipCount`** (kratki 2m cache po distileriji; tolerantno čita broj i kada edge vrati numeric string); join/leave i dalje piše u Firestore, “leave” koristi poznat `membershipId`, a posle join/leave broj članova se lokalno +/- koriguje (bez dodatnog count read-a, uz periodični refresh). |
 
 ---
 

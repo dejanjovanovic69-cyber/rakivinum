@@ -428,9 +428,11 @@ export async function fetchPublicClubMembershipCount(distilleryId: string): Prom
     if (typeof cached === "number" && Number.isFinite(cached)) return Math.max(0, Math.floor(cached));
 
     const json = await fetchEdgeRawJson(`/api/public/club-membership-count/${encodeURIComponent(safeId)}`);
-    const c = json?.count;
-    if (typeof c === "number" && Number.isFinite(c)) {
-      const count = Math.max(0, Math.floor(c));
+    const cRaw = json?.count;
+    const parsedCount =
+      typeof cRaw === "number" ? cRaw : typeof cRaw === "string" && cRaw.trim().length > 0 ? Number(cRaw) : NaN;
+    if (Number.isFinite(parsedCount)) {
+      const count = Math.max(0, Math.floor(parsedCount));
       writeCache(cacheKey, count, CACHE_TTL.CLUB_MEMBERSHIP_COUNT_2M);
       return count;
     }

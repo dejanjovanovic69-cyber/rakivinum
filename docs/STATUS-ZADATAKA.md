@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++++++++++++++++++++++++) - `fetchPublicProductByBarcodeLookup` sada upisuje negativni cache samo kada edge zaista vrati `item: null`; kada je edge nedostupan više se ne kešira lažni miss.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++) - `fetchPublicClubMembershipCount` sada prihvata i numerički string count iz edge odgovora (npr. `"12"`), pa se izbegava nepotreban fallback read pri varijacijama tipa payload-a.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -70,6 +70,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **By-id negative cache:** `fetchPublicDistilleryById`, `fetchPublicProductById` i `fetchScannerProductById` sada koriste kratki 2m negativni cache za miss/nejavni rezultat, da isti invalidni ID ne ponavlja odmah fallback read.
 - **Edge null authoritative (item):** za `fetchPublicDistilleryById`, `fetchPublicProductById`, `fetchScannerProductById`, `fetchPublicProductRatingSummary` i `fetchPublicLicenseByToken`, ako edge uspešno vrati `item: null`, to se tretira kao konačan miss (upisuje se negativni cache i preskače Firestore fallback).
 - **Barcode lookup availability-aware cache:** `fetchPublicProductByBarcodeLookup` razlikuje edge nedostupnost od validnog `item: null`, pa se negativni cache (2m) upisuje samo za potvrđen miss, ne za mrežni/edge outage.
+- **Membership count payload hardening:** `fetchPublicClubMembershipCount` tolerise broj i kao string (`"0"`, `"12"`), pa kod edge tip varijacija i dalje koristi edge rezultat umesto fallback count read-a.
 - **Destilerija (`Distillery`) članstvo:** pri "leave club" koristi se poznat `membershipDocId` (bez dodatnog membership read-a), a posle join/leave broj članova se lokalno koriguje (+/-) umesto trenutnog count read-a.
 - **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
 - **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).
