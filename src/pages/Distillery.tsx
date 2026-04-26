@@ -275,19 +275,22 @@ export default function Distillery() {
     try {
       if (isMember) {
         // LEAVE CLUB
+        let removedAny = false;
         if (membershipDocId) {
           await deleteDoc(doc(db, "club_memberships", membershipDocId));
+          removedAny = true;
         } else {
           const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
           const toRemove = memberships.filter((m) => m.distilleryId === id && m.id);
           await Promise.all(toRemove.map((m) => deleteDoc(doc(db, "club_memberships", String(m.id)))));
+          removedAny = toRemove.length > 0;
         }
 
         clubs = clubs.filter((cid: string) => cid !== id);
         setIsMember(false);
         setMembershipDocId(null);
-        if (id) {
-          setTotalMembers(await fetchPublicClubMembershipCount(id));
+        if (removedAny) {
+          setTotalMembers((prev) => (typeof prev === "number" ? Math.max(0, prev - 1) : prev));
         }
       } else {
         // JOIN CLUB
@@ -315,8 +318,8 @@ export default function Distillery() {
           clubs.push(id);
         }
         setIsMember(true);
-        if (id) {
-          setTotalMembers(await fetchPublicClubMembershipCount(id));
+        if (!already) {
+          setTotalMembers((prev) => (typeof prev === "number" ? prev + 1 : prev));
         }
         recordClubMembershipAchievement(clubs.length);
         alert(`Dobrodošli u ${distillery?.name} klub! Od sada ćete dobijati ekskluzivne pogodnosti ovog proizvođača.`);

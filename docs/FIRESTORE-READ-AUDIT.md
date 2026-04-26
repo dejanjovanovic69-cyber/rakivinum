@@ -107,7 +107,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 | Read | Napomena |
 |------|----------|
 | Katalog proizvoda | **`fetchPublicProductsByDistilleryId`** worker-first. |
-| Članstvo posetioca + broj članova | **`fetchPublicClubMembershipsByVisitorId`**, **`fetchPublicClubMembershipCount`**; join/leave i dalje piše u Firestore, ali “leave” koristi već poznat `membershipId` kad postoji (bez dodatnog read-a). |
+| Članstvo posetioca + broj članova | **`fetchPublicClubMembershipsByVisitorId`**, **`fetchPublicClubMembershipCount`**; join/leave i dalje piše u Firestore, “leave” koristi poznat `membershipId`, a posle join/leave broj članova se lokalno +/- koriguje (bez dodatnog count read-a, uz periodični refresh). |
 
 ---
 
