@@ -247,6 +247,25 @@ export default function Label() {
     return country || "Srbija";
   };
   const ensureVisitorId = () => getOrCreateVisitorId();
+  const getSavedStateCacheKey = (productId: string, uid: string | null, visitorId: string | null) =>
+    `rakivinum_saved_state_${uid ? `u:${uid}` : `v:${visitorId || "anon"}`}_${productId}`;
+  const readSavedStateCache = (productId: string, uid: string | null, visitorId: string | null): boolean | null => {
+    try {
+      const raw = localStorage.getItem(getSavedStateCacheKey(productId, uid, visitorId));
+      if (raw === "1") return true;
+      if (raw === "0") return false;
+    } catch {
+      // ignore local cache read errors
+    }
+    return null;
+  };
+  const writeSavedStateCache = (productId: string, uid: string | null, visitorId: string | null, value: boolean) => {
+    try {
+      localStorage.setItem(getSavedStateCacheKey(productId, uid, visitorId), value ? "1" : "0");
+    } catch {
+      // ignore local cache write errors
+    }
+  };
 
   // Membership & Visitor Info
   useEffect(() => {
@@ -443,11 +462,17 @@ export default function Label() {
       try {
         if (!auth.currentUser) {
           const visitorId = ensureVisitorId();
+          const cachedSaved = readSavedStateCache(productData.id, null, visitorId);
+          if (typeof cachedSaved === "boolean") {
+            setSaved(cachedSaved);
+            return;
+          }
           try {
             const raw = localStorage.getItem("rakivinum_guest_collection") || "[]";
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed) && parsed.includes(productData.id)) {
               setSaved(true);
+              writeSavedStateCache(productData.id, null, visitorId, true);
               return;
             }
           } catch {
@@ -455,13 +480,22 @@ export default function Label() {
           }
           const guestRef = doc(db, "guest_saved_items", `${visitorId}_${productData.id}`);
           const guestSnap = await getDoc(guestRef);
-          setSaved(guestSnap.exists());
+          const exists = guestSnap.exists();
+          setSaved(exists);
+          writeSavedStateCache(productData.id, null, visitorId, exists);
           return;
         }
 
+        const cachedSaved = readSavedStateCache(productData.id, auth.currentUser.uid, null);
+        if (typeof cachedSaved === "boolean") {
+          setSaved(cachedSaved);
+          return;
+        }
         const docRef = doc(db, 'users', auth.currentUser.uid, 'savedItems', productData.id);
         const savedSnap = await getDoc(docRef);
-        setSaved(savedSnap.exists());
+        const exists = savedSnap.exists();
+        setSaved(exists);
+        writeSavedStateCache(productData.id, auth.currentUser.uid, null, exists);
       } catch (error) {
         const code = String((error as { code?: unknown } | null)?.code || "");
         if (!code.includes("permission-denied")) {
@@ -538,9 +572,11 @@ export default function Label() {
         if (saved) {
           collection = collection.filter((id: string) => id !== productData.id);
           setSaved(false);
+          writeSavedStateCache(productData.id, null, visitorId, false);
         } else {
           collection.push(productData.id);
           setSaved(true);
+          writeSavedStateCache(productData.id, null, visitorId, true);
         }
         localStorage.setItem('rakivinum_guest_collection', JSON.stringify(collection));
         const guestRef = doc(db, "guest_saved_items", `${visitorId}_${productData.id}`);
@@ -565,11 +601,13 @@ export default function Label() {
       const docRef = doc(db, 'users', auth.currentUser.uid, 'savedItems', productData.id);
       if (saved) {
         await deleteDoc(docRef);
+        writeSavedStateCache(productData.id, auth.currentUser.uid, null, false);
       } else {
         await setDoc(docRef, {
           productId: productData.id,
           createdAt: serverTimestamp()
         });
+        writeSavedStateCache(productData.id, auth.currentUser.uid, null, true);
       }
     } catch (error) {
        console.error("Error saving/removing bottle", error);
@@ -605,6 +643,7 @@ export default function Label() {
           }
         }
         setSaved(true);
+        writeSavedStateCache(productData.id, null, visitorId, true);
       } catch (e) {
         console.error("Error ensuring guest collection", e);
       }
@@ -618,6 +657,7 @@ export default function Label() {
         createdAt: serverTimestamp()
       }, { merge: true });
       setSaved(true);
+      writeSavedStateCache(productData.id, auth.currentUser.uid, null, true);
     } catch (error) {
       console.error("Error ensuring saved item", error);
     }

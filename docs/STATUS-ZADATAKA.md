@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++) - `Scanner` barcode Firestore fallback upiti spušteni na `limit(1)` (koristi se samo prvi pogodak), dodatno smanjenje read-ova po skenu.
+**Poslednji zapis:** 2026-04-26 (popodne+++++++++++) - `Label` saved-state cache dodat (po user/visitor + product), pa se pri povratku na istu etiketu često preskače ponovni `getDoc` za proveru "sačuvano".
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -21,6 +21,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Firestore stabilizacija:** permission-denied greske su znacajno smanjene kroz fallback-best-effort pristup (`presence`, `guest save`, `scanCount` feature flag).
 - **Cache/refresh standard:** centralizovan policy (`cachePolicy.ts`) + uklonjen agresivni interval refresh sa glavnih stranica.
 - **Label tok:** uklonjen oslonac na nepostojeci `submitRatingSecure` cloud function po default-u; ostavljen fallback preko Firestore transaction.
+- **Label tok (saved check):** dodat lokalni cache stanja "sačuvano" (user/visitor + product) radi smanjenja ponovljenih read-ova pri povratku na etiketu.
 - **Read optimizacije:** cache-first prosiren na `Home`, `Distillery`, `AdminAudit`, `DistilleryDashboard`, `Collection`; dodat dev read-meter (`requestMeter`).
 - **Cloudflare Worker (Faza 2 priprema):**
   - Worker deployovan: `https://rakivinum-api.ldjs1969.workers.dev`
