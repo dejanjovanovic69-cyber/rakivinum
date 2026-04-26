@@ -1,4 +1,4 @@
-import { collection, doc, getCountFromServer, getDoc, getDocs, limit, query, where } from "firebase/firestore";
+﻿import { collection, doc, getCountFromServer, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import { db } from "./firebase";
 import { isQuotaError, readCache, writeCache } from "./resilience";
 import { CACHE_TTL } from "./cachePolicy";
@@ -13,6 +13,7 @@ type ProductRatingPublic = { id: string; rating?: number; createdAt?: unknown; i
 type ClubActionPublic = { id: string; isActive?: boolean; createdAt?: unknown; [key: string]: unknown };
 type ClubMembershipPublic = { id: string; visitorId?: string; distilleryId?: string; createdAt?: unknown; [key: string]: unknown };
 type LicensePublic = { id: string; token?: string; expiresAt?: unknown; status?: string; plan?: string; [key: string]: unknown };
+type ScanClusterPublic = { region: string; val: number };
 type ProductRatingSummaryPublic = {
   productId: string;
   averageRating: number;
@@ -303,7 +304,7 @@ export async function fetchPublicProductById(id: string): Promise<ProductPublic 
   });
 }
 
-/** Barkod / QR tekst: Worker `product-lookup` (n=normalizovano, r=sirovi tekst), pa null → klijent nastavlja sa Firestore upitima. */
+/** Barkod / QR tekst: Worker `product-lookup` (n=normalizovano, r=sirovi tekst), pa null â†’ klijent nastavlja sa Firestore upitima. */
 export async function fetchPublicProductByBarcodeLookup(normalized: string, rawScan: string): Promise<ProductPublic | null> {
   const n = String(normalized || "").trim();
   const r = String(rawScan || "").trim();
@@ -334,7 +335,7 @@ export async function fetchPublicClubMembershipCount(distilleryId: string): Prom
   });
 }
 
-/** Skener: prvo javni proizvod preko edge-a (0 Firestore), inače tačno jedan `getDoc` bez javnog filtera — UI i dalje odbija arhivu / isključen etiketu. */
+/** Skener: prvo javni proizvod preko edge-a (0 Firestore), inaÄe taÄno jedan `getDoc` bez javnog filtera â€” UI i dalje odbija arhivu / iskljuÄen etiketu. */
 export async function fetchScannerProductById(id: string): Promise<ProductPublic | null> {
   const safeId = String(id || "").trim();
   if (!safeId) return null;
@@ -388,6 +389,37 @@ export async function fetchPublicProductRatings(productId: string, limitCount = 
     return snap.docs
       .map((d) => ({ id: d.id, ...d.data() } as ProductRatingPublic))
       .filter((r) => r.isFlagged !== true);
+  });
+}
+
+export async function fetchPublicScanClustersByProductId(productId: string, clusterLimit = 5): Promise<ScanClusterPublic[]> {
+  const safeId = String(productId || "").trim();
+  if (!safeId) return [];
+  return dedupe(`scanClusters:${safeId}:${clusterLimit}`, async () => {
+    const edgeRows = await fetchEdgeItems<ScanClusterPublic>(
+      `/api/public/scan-clusters/${encodeURIComponent(safeId)}`,
+      clusterLimit,
+    );
+    if (edgeRows && edgeRows.length > 0) return edgeRows;
+
+    const clusters = new Map<string, number>();
+    try {
+      const snap = await getDocs(query(collection(db, "scans"), where("productId", "==", safeId), limit(300)));
+      meterDbRead("dataService:scan_clusters_fallback", snap.size);
+      snap.docs.forEach((d) => {
+        const loc = (d.data() as { location?: { lat?: number; lng?: number } }).location;
+        if (loc && typeof loc.lat === "number" && typeof loc.lng === "number") {
+          const key = `${loc.lat.toFixed(1)}°, ${loc.lng.toFixed(1)}°`;
+          clusters.set(key, (clusters.get(key) || 0) + 1);
+        }
+      });
+    } catch {
+      return [];
+    }
+    return [...clusters.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, clusterLimit)
+      .map(([region, val]) => ({ region, val }));
   });
 }
 
@@ -454,3 +486,4 @@ export async function fetchPublicLicenseByToken(token: string): Promise<LicenseP
     return { id: snap.docs[0].id, ...snap.docs[0].data() } as LicensePublic;
   });
 }
+

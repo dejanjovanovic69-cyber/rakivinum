@@ -1,0 +1,293 @@
+PLAN MIGRACIJE FIREBASE -> CLOUDFLARE (FREE-FIRST)
+Verzija: 1.0
+Namena: Praktican plan od pocetka do kraja, sa fokusom na 0 trosak sto duze.
+
+==================================================
+0) CILJ I PRINCIPI
+==================================================
+
+Glavni cilj:
+- Odrzati trosak na 0 (ili blizu 0) dok aplikacija ne dobije stabilan broj korisnika.
+
+Produktni principi:
+- Nista ne mora realtime.
+- Tacnost je bitnija od trenutnosti.
+- Podaci mogu kasniti od 1h do 24h.
+- "1 rakija / 1 dan / 1 ocena" ostaje osnovno pravilo.
+
+Tehnicki principi:
+- Cache-first (read rarely, reuse often).
+- Minimalan broj API poziva po ekranu.
+- Paginacija svuda.
+- Slike optimizovane (thumbnail + kompresija).
+- Alerti pre limita, ne posle limita.
+
+Definicija uspeha:
+- MVP radi stabilno.
+- Nema blokada zbog kvota.
+- Predvidljivo koriscenje resursa.
+- Besplatni plan traje sto duze.
+
+==================================================
+1) FAZA PRIPREME (DAN 1-2)
+==================================================
+
+1.1 Inventar postojeceg stanja
+- Napravi listu svih Firebase servisa koji se trenutno koriste:
+  - Hosting
+  - Firestore
+  - Storage
+  - Auth
+  - Cloud Functions (ako postoje)
+- Obelezi sta je kriticno za rad aplikacije, a sta nije.
+
+1.2 Klasifikacija podataka po "svezini"
+- Katalog (destilerije, vina, rakije): nizak prioritet svezine.
+- Rang liste / Top 10: srednji prioritet.
+- Analytics: nizak prioritet, batch obrada.
+- Admin pregled: srednji prioritet.
+- Realtime: ne koristi se.
+
+1.3 Definisi TTL pravila (pocetna verzija)
+- Katalog liste i detalji: 24h.
+- Top 10 i rang: 6h-24h.
+- Ocene/proseci: 1h-6h.
+- Admin dashboard: 15-60 min.
+- Analytics snapshot: 1h ili dnevno.
+
+1.4 Definisi "kill switch" plan
+- Ako usage naglo poraste:
+  - Povecaj TTL.
+  - Privremeno ugasi teske analytics poglede.
+  - Smanji broj elemenata po stranici.
+  - Iskljuci skupe neesencijalne funkcije.
+
+Izlaz iz faze:
+- Imas mapu servisa, mapu podataka i prva TTL pravila.
+
+==================================================
+2) FAZA "BRZE POBEDE" (DAN 2-4)
+==================================================
+
+2.1 Ukloni nepotrebno ucitavanje
+- Ukloni polling gde postoji.
+- Ukloni auto-refetch na svakom ulazu na stranicu.
+- Ukloni duple fetch pozive iz vise komponenti za isti podatak.
+
+2.2 Uvedi "manual refresh" model
+- Dodaj refresh samo gde korisnik stvarno trazi.
+- Prikazi kada je podatak poslednji put osvezen.
+
+2.3 Standardizuj broj poziva po ekranu
+- Cilj: 1-2 API poziva po ekranu (maksimum).
+- Ne ucitavati "sve odjednom".
+- Uvesti paginaciju i limit.
+
+2.4 Slike i fajlovi
+- Generisi thumbnail varijante.
+- Kompresuj slike pre upload-a.
+- Na listama prikazuj thumbnail, full-size samo na detalju.
+
+Izlaz iz faze:
+- Drasticno manji broj read/write operacija i backend poziva.
+
+==================================================
+3) FAZA INFRASTRUKTURE NA CLOUDFLARE (DAN 4-7)
+==================================================
+
+3.1 Frontend deploy
+- Povezi git repo sa Cloudflare Pages.
+- Podigni build i preview deploy za grane/PR.
+- Verifikuj domen i DNS posto je vec na Cloudflare.
+
+3.2 Environment i tajne
+- Definisi sve env varijable u Pages/Workers okruzenju.
+- Razdvoji dev/test/prod vrednosti.
+- Nikada ne cuvaj tajne u kodu.
+
+3.3 Monitoring i alerti
+- Uključi usage alerte (50%, 70%, 90% free limita).
+- Definisi osnovni dashboard:
+  - requests
+  - CPU time
+  - DB operacije
+  - storage
+  - transfer
+
+Izlaz iz faze:
+- Frontend radi na Cloudflare, merenje i alerti su aktivni.
+
+==================================================
+4) FAZA BACKEND PRENOSA (NEDELJA 2)
+==================================================
+
+4.1 Prioritet endpoint-a
+- Prvo prebaci najskuplje i najcesce citane endpoint-e.
+- Ne prebacuj sve odjednom.
+
+4.2 Cache sloj
+- Implementiraj cache-first odgovor za javne podatke.
+- Uvedi stale-while-revalidate gde je moguce.
+- Nakon admin izmene radi ciljano invalidiranje cache-a.
+
+4.3 API pravila
+- Rate limit po IP/user.
+- Validacija ulaza na svakom endpoint-u.
+- Jedinstvena pravila za paginaciju i sortiranje.
+
+Izlaz iz faze:
+- Kriticne read rute rade preko Cloudflare Workers uz cache.
+
+==================================================
+5) FAZA PODATAKA (NEDELJA 2-3)
+==================================================
+
+5.1 Izbor storage modela
+- Struktuirani podaci: D1 (SQL).
+- Slike/fajlovi: R2.
+- Jednostavni cache kljucevi (ako treba): KV.
+
+5.2 Migracija podataka (postepeno)
+- Napravi izvoz iz Firestore-a.
+- Napravi mapiranje u novi model.
+- Uvezi podatke u talasima (batch).
+- Verifikuj uzorke podataka posle svake serije.
+
+5.3 Dual-read period (kratko)
+- Kratko vreme citaj prioritetno iz novog izvora.
+- Ako nesto nedostaje, fallback na stari izvor.
+- Kada stabilizujes, ukloni fallback.
+
+Izlaz iz faze:
+- Kljucni podaci rade iz Cloudflare ekosistema.
+
+==================================================
+6) FAZA AUTH I PRAVA PRISTUPA (NEDELJA 3)
+==================================================
+
+6.1 Definisi role model
+- Gost korisnik.
+- Registrovana destilerija/vinarija.
+- Admin.
+
+6.2 Pravila pristupa
+- Samo registrovane destilerije/vinarije imaju admin tokove.
+- Javni korisnici imaju read-only tokove.
+- Ocene ogranicene pravilom "1 rakija / 1 dan / 1 ocena".
+
+6.3 Sigurnosna kontrola
+- Proveri endpoint autorizaciju po roli.
+- Uvedi audit log za bitne admin akcije.
+
+Izlaz iz faze:
+- Prava pristupa su jasna i sprovedena centralno.
+
+==================================================
+7) FAZA ANALYTICS I BATCH OBRACUNA (NEDELJA 3-4)
+==================================================
+
+7.1 Prelazak na snapshot model
+- Ne racunati statistiku na svaki korisnicki zahtev.
+- Obracun raditi periodicno (npr. na sat ili dnevno).
+
+7.2 Top liste i rangiranje
+- Generisati unapred.
+- Serve-ovati gotove rezultate iz cache-a.
+
+7.3 Post-event mod (sajam)
+- Tokom eventa koristi konzervativne limite.
+- Posle eventa uradi batch recalculation.
+- Objavi azurirane rezultate sledeci ciklus.
+
+Izlaz iz faze:
+- Analytics trosak je kontrolisan i predvidljiv.
+
+==================================================
+8) FAZA TESTIRANJA I STABILIZACIJE (NEDELJA 4)
+==================================================
+
+8.1 Funkcionalni testovi
+- Proveri glavne korisnicke tokove:
+  - pregled kataloga
+  - detalj proizvoda
+  - ocenjivanje
+  - top liste
+  - admin izmena
+
+8.2 Performanse i opterecenje
+- Simuliraj pik (npr. 500 korisnika u kratkom periodu).
+- Prati requests, CPU, DB, transfer.
+
+8.3 Troskovni smoke test
+- Proveri trend potrosnje po danu.
+- Potvrdi da alerti rade.
+- Potvrdi da kill switch radi.
+
+Izlaz iz faze:
+- Sistem je spreman za realni promet uz kontrolu troska.
+
+==================================================
+9) FAZA GASENJA FIREBASE SERVISA (KRAJ)
+==================================================
+
+9.1 Redosled gasenja
+- Najpre ugasi servise koji vise nisu u putanji.
+- Drzi kratki sigurnosni period pre finalnog gasenja baze.
+
+9.2 Verifikacija pre gasenja
+- Potvrdi da svi produkcioni pozivi idu na novi stack.
+- Potvrdi da nema kriticnih gresaka i fallback zavisnosti.
+
+9.3 Finalno gasenje
+- Ugasiti Firebase komponente jednu po jednu.
+- Sacuvati finalni export podataka i dokumentaciju.
+
+Izlaz iz faze:
+- Potpuno oslobadjanje od Firebase kvota i naplate po read/write modelu.
+
+==================================================
+10) OPERATIVNA PRAVILA POSLE MIGRACIJE
+==================================================
+
+Obavezna pravila za sve nove funkcije:
+- Nema realtime po default-u.
+- Svaka nova lista mora imati paginaciju.
+- Svaka nova stranica mora imati definisan TTL.
+- Svaki novi endpoint mora imati cache strategiju.
+- Svaki upload mora imati optimizovanu sliku.
+- Svaka veca funkcija mora imati procenu uticaja na trosak.
+
+SLO/SLA predlog:
+- Javni katalog: azuriranje do 24h.
+- Rang liste: azuriranje do 6-24h.
+- Ocene/proseci: azuriranje do 1-6h.
+- Admin metrike: azuriranje do 15-60 min.
+
+==================================================
+11) KRATKA CHECKLISTA "PRE GO-LIVE"
+==================================================
+
+- [ ] Pages deploy aktivan na domenu.
+- [ ] Usage alerti podeseni.
+- [ ] Rate limits ukljuceni.
+- [ ] Realtime/polling ugasen.
+- [ ] Paginacija aktivna na svim listama.
+- [ ] Cache TTL definisan po tipu podataka.
+- [ ] Slike kompresovane + thumbnail varijante.
+- [ ] Post-event plan definisan.
+- [ ] Kill switch testiran.
+- [ ] Firebase fallback uklonjen ili strogo ogranicen.
+
+==================================================
+12) REALNA OCEKIVANJA TROSKA (ZA TVOJ SLUCAJ)
+==================================================
+
+Sa tvojim pravilima (bez realtime, sporiji refresh, katalog-first model):
+- Prva faza (test i manji broj korisnika): realno 0 EUR ili blizu 0.
+- Event pik (npr. 500 korisnika kratko): mali i kontrolisan trosak, uz dobar cache.
+- Dugorocno: trosak raste tek kad usage stvarno poraste, ne nasumicno.
+
+Napomena:
+- Apsolutna garancija "zauvek 0" ne postoji ni na jednoj platformi.
+- Ali uz ovu arhitekturu mozes maksimalno produziti free period i izbeci iznenadjenja.
+

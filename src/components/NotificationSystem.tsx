@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Star, X, Bell } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 
 function safeText(value: unknown): string {
@@ -19,30 +19,35 @@ function safeText(value: unknown): string {
 
 export default function NotificationSystem() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [showNotification, setShowNotification] = useState(false);
   const [pendingData, setPendingData] = useState<{ id: string; name: string } | null>(null);
+  type PendingQueueItem = { id: string; name: string; timestamp: number };
 
   useEffect(() => {
-    const getPendingQueue = (): Array<{ id: string; name: string; timestamp: number }> => {
+    const getPendingQueue = (): PendingQueueItem[] => {
       try {
         const raw = localStorage.getItem('rakivinum_pending_ratings') || '[]';
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
         return parsed
-          .map((x: any) => ({
-            id: String(x?.id || ""),
-            name: safeText(x?.name) || "Piće",
-            timestamp: Number(x?.timestamp || 0),
-          }))
-          .filter((x: any) => x.id.length > 0 && Number.isFinite(x.timestamp) && x.timestamp > 0);
+          .map((x: unknown) => {
+            const item = x as Partial<PendingQueueItem> | null;
+            return {
+              id: String(item?.id || ""),
+              name: safeText(item?.name) || "Piće",
+              timestamp: Number(item?.timestamp || 0),
+            };
+          })
+          .filter((x) => x.id.length > 0 && Number.isFinite(x.timestamp) && x.timestamp > 0);
       } catch {
         return [];
       }
     };
 
-    const setPendingQueue = (queue: Array<{ id: string; name: string; timestamp: number }>) => {
+    const setPendingQueue = (queue: PendingQueueItem[]) => {
       const normalized = (Array.isArray(queue) ? queue : [])
-        .map((x: any) => ({
+        .map((x: PendingQueueItem) => ({
           id: String(x?.id || ""),
           name: safeText(x?.name) || "Piće",
           timestamp: Number(x?.timestamp || 0),
@@ -97,8 +102,8 @@ export default function NotificationSystem() {
 
           if (!hasRatedGlobal) {
             setPendingData({
-              id: String((data as any)?.id || ""),
-              name: safeText((data as any)?.name) || "Piće",
+              id: String(data?.id || ""),
+              name: safeText(data?.name) || "Piće",
             });
             setShowNotification(true);
           } else {
@@ -112,15 +117,33 @@ export default function NotificationSystem() {
 
     // Initial check
     checkPendingRatings();
-    
-    // Check every hour
-    const interval = setInterval(checkPendingRatings, 3600000);
-    return () => clearInterval(interval);
+    const onFocusCheck = () => {
+      if (document.visibilityState !== "visible") return;
+      checkPendingRatings();
+    };
+    const onVisibilityCheck = () => {
+      if (document.visibilityState !== "visible") return;
+      checkPendingRatings();
+    };
+    window.addEventListener("focus", onFocusCheck);
+    document.addEventListener("visibilitychange", onVisibilityCheck);
+    return () => {
+      window.removeEventListener("focus", onFocusCheck);
+      document.removeEventListener("visibilitychange", onVisibilityCheck);
+    };
   }, []);
 
   const handleAction = () => {
     if (pendingData) {
-      navigate(`/label/${pendingData.id}?autoRate=true`);
+      const returnTo = `${location.pathname}${location.search}`;
+      try {
+        sessionStorage.setItem("rakivinum_last_label_return_v1", returnTo);
+      } catch {
+        // ignore storage errors
+      }
+      navigate(`/label/${pendingData.id}?autoRate=true&rt=${encodeURIComponent(returnTo)}`, {
+        state: { returnTo },
+      });
       setShowNotification(false);
       const queue = (() => {
         try {
@@ -131,7 +154,7 @@ export default function NotificationSystem() {
           return [];
         }
       })();
-      const next = queue.filter((x: any) => x?.id !== pendingData.id);
+      const next = queue.filter((x: PendingQueueItem) => x?.id !== pendingData.id);
       localStorage.setItem('rakivinum_pending_ratings', JSON.stringify(next));
       if (next[0]) {
         localStorage.setItem('rakivinum_pending_rating', JSON.stringify(next[0]));

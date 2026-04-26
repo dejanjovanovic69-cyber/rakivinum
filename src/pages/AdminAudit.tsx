@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { 
   ShieldAlert, 
   Users, 
@@ -18,8 +18,12 @@ import {
   ArrowLeft
 } from "lucide-react";
 import { auth, db } from "../lib/firebase";
-import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { collection, query, orderBy, limit, getDocs, doc, updateDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { cn } from "../lib/utils";
+import { shouldRunRefresh } from "../lib/refreshGate";
+import { REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { readCache, writeCache } from "../lib/resilience";
+import { meterDbRead } from "../lib/requestMeter";
 
 const PERMISSION_MATRIX = [
   { role: "Gost", viewLabel: "Da", rate: "Ne", analytics: "Ne", actions: "Pretraga" },
@@ -28,41 +32,148 @@ const PERMISSION_MATRIX = [
   { role: "Admin", viewLabel: "Da", rate: "Da", analytics: "Celi Sistem", actions: "Blokiranje, Moderacija" },
 ];
 
+type AuditLog = {
+  id: string;
+  ipHash?: string;
+  fingerprintHash?: string;
+  visitorId?: string;
+  actorKey?: string;
+  rating?: number;
+  isSourceSuspicious?: boolean;
+  productName?: string;
+  timestamp?: string;
+  userAgent?: string;
+  reviewText?: string;
+  userId?: string;
+};
+type AuditUser = { id: string; email?: string; role?: string; isBlocked?: boolean };
+type AbuseBlock = { isBlocked?: boolean; [key: string]: unknown };
+type SourceSummary = {
+  key: string;
+  ipHash: string | null;
+  fingerprintHash: string | null;
+  visitorId: string | null;
+  total: number;
+  low: number;
+  suspiciousCount: number;
+  lastAt: string | null;
+  products: Set<string>;
+  lowRatio?: number;
+  productList?: string[];
+};
+
 export default function AdminAudit() {
   const navigate = useNavigate();
-  const [logs, setLogs] = useState<any[]>([]);
-  const [users, setUsers] = useState<any[]>([]);
-  const [abuseBlocks, setAbuseBlocks] = useState<Record<string, any>>({});
+  const location = useLocation();
+  const goBackSafe = () => {
+    const navState = location.state as { returnTo?: string } | null;
+    if (navState?.returnTo) {
+      navigate(navState.returnTo);
+      return;
+    }
+    const rt = new URLSearchParams(location.search).get("rt");
+    if (rt) {
+      navigate(rt);
+      return;
+    }
+    navigate("/admin", { replace: true });
+  };
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [users, setUsers] = useState<AuditUser[]>([]);
+  const [abuseBlocks, setAbuseBlocks] = useState<Record<string, AbuseBlock>>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'matrix' | 'logs' | 'users' | 'sources'>('logs');
 
   useEffect(() => {
-    // 1. Listen for security logs
-    const logsQuery = query(collection(db, 'rating_logs'), orderBy('createdAt', 'desc'), limit(400));
-    const unsubLogs = onSnapshot(logsQuery, (snap) => {
-      setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    let cancelled = false;
+    const logsCacheKey = "rakivinum_cache_admin_audit_logs_v1";
+    const usersCacheKey = "rakivinum_cache_admin_audit_users_v1";
+    const blocksCacheKey = "rakivinum_cache_admin_audit_blocks_v1";
+
+    const refreshAuditData = async () => {
+      // Throttle quick focus/visibility bursts.
+      if (!shouldRunRefresh("admin-audit:refresh", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      try {
+        const logsQuery = query(collection(db, 'rating_logs'), orderBy('createdAt', 'desc'), limit(400));
+        const logsSnap = await getDocs(logsQuery);
+        meterDbRead("adminAudit:rating_logs", logsSnap.size);
+        const nextLogs = logsSnap.docs.map(d => ({ id: d.id, ...d.data() })) as AuditLog[];
+        if (!cancelled) {
+          setLogs(nextLogs);
+          setLoading(false);
+        }
+        writeCache(logsCacheKey, nextLogs, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      } catch (err) {
+        console.error("AdminAudit logs refresh failed", err);
+        if (!cancelled) {
+          const cachedLogs = readCache<AuditLog[]>(logsCacheKey);
+          if (cachedLogs) setLogs(cachedLogs);
+          setLoading(false);
+        }
+      }
+
+      try {
+        const usersQuery = query(collection(db, 'users'), limit(50));
+        const usersSnap = await getDocs(usersQuery);
+        meterDbRead("adminAudit:users", usersSnap.size);
+        const nextUsers = usersSnap.docs.map(d => ({ id: d.id, ...d.data() })) as AuditUser[];
+        if (!cancelled) setUsers(nextUsers);
+        writeCache(usersCacheKey, nextUsers, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      } catch (err) {
+        console.error("AdminAudit users refresh failed", err);
+        if (!cancelled) {
+          const cachedUsers = readCache<AuditUser[]>(usersCacheKey);
+          if (cachedUsers) setUsers(cachedUsers);
+        }
+      }
+
+      try {
+        const blocksQuery = query(collection(db, 'abuse_blocks'), limit(500));
+        const blocksSnap = await getDocs(blocksQuery);
+        meterDbRead("adminAudit:abuse_blocks", blocksSnap.size);
+        const next: Record<string, AbuseBlock> = {};
+        blocksSnap.forEach((d) => {
+          next[d.id] = d.data();
+        });
+        if (!cancelled) setAbuseBlocks(next);
+        writeCache(blocksCacheKey, next, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      } catch (err) {
+        console.error("AdminAudit abuse blocks refresh failed", err);
+        if (!cancelled) {
+          const cachedBlocks = readCache<Record<string, AbuseBlock>>(blocksCacheKey);
+          if (cachedBlocks) setAbuseBlocks(cachedBlocks);
+        }
+      }
+    };
+
+    const cachedLogs = readCache<AuditLog[]>(logsCacheKey);
+    const cachedUsers = readCache<AuditUser[]>(usersCacheKey);
+    const cachedBlocks = readCache<Record<string, AbuseBlock>>(blocksCacheKey);
+    if (cachedLogs) {
+      setLogs(cachedLogs);
       setLoading(false);
-    });
+    }
+    if (cachedUsers) setUsers(cachedUsers);
+    if (cachedBlocks) setAbuseBlocks(cachedBlocks);
 
-    // 2. Fetch users for moderation
-    const usersQuery = query(collection(db, 'users'), limit(50));
-    const unsubUsers = onSnapshot(usersQuery, (snap) => {
-      setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-
-    const blocksQuery = query(collection(db, 'abuse_blocks'), limit(500));
-    const unsubBlocks = onSnapshot(blocksQuery, (snap) => {
-      const next: Record<string, any> = {};
-      snap.forEach((d) => {
-        next[d.id] = d.data();
-      });
-      setAbuseBlocks(next);
-    });
+    if (!cachedLogs || !cachedUsers || !cachedBlocks || shouldRunRefresh("admin-audit:initial", REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+      void refreshAuditData();
+    }
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshAuditData();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
 
     return () => {
-      unsubLogs();
-      unsubUsers();
-      unsubBlocks();
+      cancelled = true;
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
   }, []);
 
@@ -78,14 +189,14 @@ export default function AdminAudit() {
     }
   };
 
-  const getSourceDocMeta = (source: any): { docId: string | null; label: string } => {
+  const getSourceDocMeta = (source: SourceSummary): { docId: string | null; label: string } => {
     if (source.ipHash) return { docId: `ip_${source.ipHash}`, label: "IP hash" };
     if (source.fingerprintHash) return { docId: `fp_${source.fingerprintHash}`, label: "Fingerprint hash" };
     if (source.visitorId) return { docId: `visitor_${source.visitorId}`, label: "Visitor ID" };
     return { docId: null, label: "Nepoznato" };
   };
 
-  const toggleSourceBlock = async (source: any, shouldBlock: boolean) => {
+  const toggleSourceBlock = async (source: SourceSummary, shouldBlock: boolean) => {
     const meta = getSourceDocMeta(source);
     if (!meta.docId) {
       alert("Nije moguće blokirati izvor bez identifikatora.");
@@ -110,7 +221,7 @@ export default function AdminAudit() {
   };
 
   const riskySources = Object.values(
-    logs.reduce((acc: Record<string, any>, log: any) => {
+    logs.reduce((acc: Record<string, SourceSummary>, log) => {
       const sourceKey = log.ipHash || log.fingerprintHash || log.visitorId || log.actorKey;
       if (!sourceKey) return acc;
       if (!acc[sourceKey]) {
@@ -137,13 +248,13 @@ export default function AdminAudit() {
       return acc;
     }, {})
   )
-    .map((item: any) => ({
+    .map((item: SourceSummary) => ({
       ...item,
       lowRatio: item.total > 0 ? item.low / item.total : 0,
       productList: Array.from(item.products).slice(0, 4),
     }))
-    .filter((item: any) => item.total >= 3 || item.suspiciousCount > 0)
-    .sort((a: any, b: any) => {
+    .filter((item: SourceSummary) => item.total >= 3 || item.suspiciousCount > 0)
+    .sort((a: SourceSummary, b: SourceSummary) => {
       if (b.suspiciousCount !== a.suspiciousCount) return b.suspiciousCount - a.suspiciousCount;
       if (b.lowRatio !== a.lowRatio) return b.lowRatio - a.lowRatio;
       return b.total - a.total;
@@ -155,7 +266,7 @@ export default function AdminAudit() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <button 
-          onClick={() => navigate(-1)}
+          onClick={goBackSafe}
           className="p-2 -ml-2 text-text-secondary hover:text-white transition-colors"
         >
           <ArrowLeft className="w-6 h-6" />
@@ -179,7 +290,7 @@ export default function AdminAudit() {
         ].map((tab) => (
           <button 
             key={tab.id}
-            onClick={() => setActiveTab(tab.id as any)}
+            onClick={() => setActiveTab(tab.id as 'matrix' | 'logs' | 'users' | 'sources')}
             className={cn(
               "flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all",
               activeTab === tab.id ? "bg-red-500 text-white shadow-lg" : "text-text-secondary hover:text-white"
@@ -250,7 +361,7 @@ export default function AdminAudit() {
             </div>
           ) : (
             <div className="space-y-3">
-              {riskySources.map((source: any) => (
+              {riskySources.map((source) => (
                 <div key={source.key} className="bg-bg-card border border-border-subtle rounded-2xl p-4 space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1 min-w-0">

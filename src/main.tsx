@@ -24,11 +24,14 @@ function sanitizePendingStorage() {
     const parsedQueue = JSON.parse(rawQueue);
     const queue = Array.isArray(parsedQueue) ? parsedQueue : [];
     const normalizedQueue = queue
-      .map((x: any) => ({
-        id: String(x?.id || ""),
-        name: normalizeNameLikeValue(x?.name) || "Piće",
-        timestamp: Number(x?.timestamp || 0),
-      }))
+      .map((x: unknown) => {
+        const item = x as { id?: unknown; name?: unknown; timestamp?: unknown } | null;
+        return {
+          id: String(item?.id || ""),
+          name: normalizeNameLikeValue(item?.name) || "Piće",
+          timestamp: Number(item?.timestamp || 0),
+        };
+      })
       .filter((x) => x.id.length > 0 && Number.isFinite(x.timestamp) && x.timestamp > 0);
     localStorage.setItem("rakivinum_pending_ratings", JSON.stringify(normalizedQueue));
 
@@ -65,8 +68,7 @@ async function disableServiceWorkerInDev() {
 
   try {
     // Clear caches to avoid stale assets causing auth redirect loops
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const cachesAny = (globalThis as any).caches as CacheStorage | undefined;
+    const cachesAny = (globalThis as { caches?: CacheStorage }).caches;
     if (cachesAny?.keys) {
       const keys = await cachesAny.keys();
       await Promise.all(keys.map((k) => cachesAny.delete(k)));

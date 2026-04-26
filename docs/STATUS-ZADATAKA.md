@@ -1,14 +1,14 @@
-# Rakivinum — status zadataka i „gde smo stali“
+﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (noćni krug) — Worker **`product-lookup`** (barkod) + **`club-membership-count`**; `fetchPublicProductByBarcodeLookup`, `fetchPublicClubMembershipCount`; **`Scanner`** i **`Distillery`** (članstvo + broj članova + join/leave) worker-first gde ima smisla; smoke + `CLOUDFLARE-PHASE2-WORKER` ažurirani. Deploy: `npm run cf:deploy:resilient` kada si na mreži.
+**Poslednji zapis:** 2026-04-26 (jutro+) - dodat `/api/public/scan-clusters/:productId`; ProductAnalytics sada koristi `fetchPublicScanClustersByProductId` (edge-first + fallback). Deploy + smoke prosli (`master.rakivinum.pages.dev`).
 
-Ovaj fajl služi da **sledeći put** odmah znaš šta je urađeno i šta ostaje, bez kopanja po četu. Ažuriraj ga ukratko posle većih promena.
+Ovaj fajl sluzi da **sledeci put** odmah znas sta je uraÄ‘eno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
-**Šta da napišeš Cursoru na početku sledećeg rada:**  
-„Prvo pročitaj `docs/STATUS-ZADATAKA.md` i nastavi od tamo.“
+**Å ta da napises Cursoru na pocetku sledeceg rada:**  
+"Prvo procitaj `docs/STATUS-ZADATAKA.md` i nastavi od tamo."
 
 **Brza lokalna provera (bez eksternih testera):**  
-`npm run cf:smoke:edge` (proverava health + glavne public Worker rute i vraća status/latenciju/payload size).
+`npm run cf:smoke:edge` (proverava health + glavne public Worker rute i vraca status/latenciju/payload size).
 
 **Resilient deploy (kad Cloudflare vrati 500/10500):**  
 `npm run cf:deploy:resilient` (retry Worker deploy + Pages deploy sa `functions` workaround-om).
@@ -31,7 +31,7 @@ Ovaj fajl služi da **sledeći put** odmah znaš šta je urađeno i šta ostaje,
   - `api/public/*` endpointi vracaju podatke.
   - Pages redeploy uradjen sa ukljucenim `VITE_EDGE_API_BASE`.
   - Korisnicki smoke test prosao (app radi normalno).
-- **Faza 3 status (read migracije — TRENUTNI SCOPE ZAVRSEN):**
+- **Faza 3 status (read migracije - TRENUTNI SCOPE ZAVRSEN):**
   - novi endpointi: `/api/public/distillery/:id`, `/api/public/product/:id`, `/api/public/ratings-summary/:productId`
   - `distilleries` i `products` list endpointi vracaju light payload (bez base64 image blob-ova)
   - Worker public GET rute imaju best-effort rate-limit + edge cache
@@ -39,24 +39,24 @@ Ovaj fajl služi da **sledeći put** odmah znaš šta je urađeno i šta ostaje,
   - `Community` reviews feed koristi Worker-first tok preko `/api/public/ratings-feed` (uz Firebase fallback)
   - `ProductAnalytics` koristi Worker-first i za listu ocena preko `/api/public/product-ratings/:productId` (uz Firebase fallback)
   - `Home` aktivne akcije/pogodnosti koriste Worker-first tok preko `/api/public/club-actions` (uz Firebase fallback)
-  - `Home` članstva i licenca koriste Worker-first tokove preko `/api/public/club-memberships/:visitorId` i `/api/public/license/:token` (uz Firebase fallback)
+  - `Home` clanstva i licenca koriste Worker-first tokove preko `/api/public/club-memberships/:visitorId` i `/api/public/license/:token` (uz Firebase fallback)
 
-- **Firestore / kvota:** `limit()` na upitima, keš/dedup (`dataService`, `resilience`), smanjeni `onSnapshot` gde nije neophodno, `refreshGate` za `focus` burst (`Home`, `Menu`, `Distillery`, itd.).
-- **Zajednica (`Community`):** ocene (feed) više nisu teški `onSnapshot` — kontrolisan `getDocs` + periodično/fokus osvežavanje + gate.
-- **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (keš/dedup), bez `getDocs` cele `products` kolekcije.
-- **Početna (`Home`):** sačuvano — `getCountFromServer` + poslednji artikal preko `orderBy(createdAt)+limit(1)`; fokus na korisničke statistike sa gate-om.
-- **Kolekcija (`Collection`):** učitavanje sačuvanog sa `limit` (+ `orderBy` za ulogovanog).
-- **Admin / audit / dashboard:** manje real-time slušanje gde je bilo skupo; kontrolisani refresh; prisustvo (online broj) za superadmin; paginacija brisanja proizvoda pri brisanju destilerije.
-- **Admin arhiva / verifikacija proizvoda:** masovni update ide **stranicama** sa `orderBy(documentId())` + `startAfter` (ne beskonačna petlja po istom `where`).
+- **Firestore / kvota:** `limit()` na upitima, kes/dedup (`dataService`, `resilience`), smanjeni `onSnapshot` gde nije neophodno, `refreshGate` za `focus` burst (`Home`, `Menu`, `Distillery`, itd.).
+- **Zajednica (`Community`):** ocene (feed) vise nisu teski `onSnapshot` - kontrolisan `getDocs` + periodicno/fokus osvezavanje + gate.
+- **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (kes/dedup), bez `getDocs` cele `products` kolekcije.
+- **Pocetna (`Home`):** sacuvano - `getCountFromServer` + poslednji artikal preko `orderBy(createdAt)+limit(1)`; fokus na korisnicke statistike sa gate-om.
+- **Kolekcija (`Collection`):** ucitavanje sacuvanog sa `limit` (+ `orderBy` za ulogovanog).
+- **Admin / audit / dashboard:** manje real-time slusanje gde je bilo skupo; kontrolisani refresh; prisustvo (online broj) za superadmin; paginacija brisanja proizvoda pri brisanju destilerije.
+- **Admin arhiva / verifikacija proizvoda:** masovni update ide **stranicama** sa `orderBy(documentId())` + `startAfter` (ne beskonacna petlja po istom `where`).
 - **Destilerija dashboard / analitika modal:** dodatni `limit` na upitima (vlasnik/email destilerije, proizvodi, ocene po chunk-u).
-- **Moji klubovi / stranica destilerije:** `limit` na članstvima i akcijama; uklonjen nekorišćen import.
+- **Moji klubovi / stranica destilerije:** `limit` na clanstvima i akcijama; uklonjen nekoriscen import.
 - **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
-- **TypeScript:** širok prolaz smanjenja `any` na kritičnim stranicama (raniji krugovi).
+- **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).
 - **Dokumentacija u repou:** ovaj fajl + komentar u `src/lib/refreshGate.ts` koji ovde vodi.
 
 ---
 
-## Obavezno sledeći put (operativa)
+## Obavezno sledeci put (operativa)
 
 0. **Cloudflare trenutno stanje (stabilno):**
    - Pages produkcija je aktivna i stabilna.
@@ -74,11 +74,11 @@ Ovaj fajl služi da **sledeći put** odmah znaš šta je urađeno i šta ostaje,
    - [ZAVRSENO] Migriran jos 1 skupi read tok na Worker-first (`Community` ratings feed).
    - [SLEDECE] Stabilizacija + merenje Firestore usage trenda naredna 24h.
    - [SLEDECE] Samo po potrebi dodavati nove endpoint-e (ako metrika pokaze usko grlo).
-   - [ZAVRSENO] Prvi krug audita: Scanner (`fetchScannerProductById`), Menu (članstva + destilerije + **community_links**), Collection/Home (proizvod preko `fetchPublicProductById`); detalj `docs/FIRESTORE-READ-AUDIT.md`.
+   - [ZAVRSENO] Prvi krug audita: Scanner (`fetchScannerProductById`), Menu (clanstva + destilerije + **community_links**), Collection/Home (proizvod preko `fetchPublicProductById`); detalj `docs/FIRESTORE-READ-AUDIT.md`.
 
-2. **Hosting (frontend) na Firebase (legacy fallback):** poslednji uspešan deploy samo hostinga:  
-   `firebase deploy --only hosting` → URL u konzoli projekta (npr. `*.web.app`).  
-   Kompletan `firebase deploy --only firestore` ovde može da padne sa **403 / billing** ako GCP projekat nema uključeno naplaćivanje za Firestore API — indeksi i pravila onda deploy-uj na projekat gde Firestore već radi, ili uključi billing za taj projekat.
+2. **Hosting (frontend) na Firebase (legacy fallback):** poslednji uspesan deploy samo hostinga:  
+   `firebase deploy --only hosting` â†’ URL u konzoli projekta (npr. `*.web.app`).  
+   Kompletan `firebase deploy --only firestore` ovde moze da padne sa **403 / billing** ako GCP projekat nema ukljuceno naplacivanje za Firestore API - indeksi i pravila onda deploy-uj na projekat gde Firestore vec radi, ili ukljuci billing za taj projekat.
 
 3. **Deploy Firestore indeksa** (dodat u `firestore.indexes.json`):
    - kolekcija `products`: polja `distilleryId` + `__name__` (za admin paginaciju arhive/verifikacije).
@@ -86,7 +86,7 @@ Ovaj fajl služi da **sledeći put** odmah znaš šta je urađeno i šta ostaje,
      `firebase deploy --only firestore:indexes`  
    - Bez ovoga admin upiti sa `orderBy(documentId())` mogu da prijave *missing index* u konzoli.
 
-4. **Brzi smoke na telefonu** (kad budeš na mreži): Zajednica (tabovi + Pretraga) → etiketa → strelica nazad → skener (1D ako imaš primer) → Meni.
+4. **Brzi smoke na telefonu** (kad budes na mrezi): Zajednica (tabovi + Pretraga) â†’ etiketa â†’ strelica nazad â†’ skener (1D ako imas primer) â†’ Meni.
 
 ---
 
@@ -114,39 +114,42 @@ Ovaj fajl služi da **sledeći put** odmah znaš šta je urađeno i šta ostaje,
 
 ---
 
-## Cursor — Plan & Usage (kada piše 100% Included)
+## Cursor - Plan & Usage (kada pise 100% Included)
 
-- **Pauza par dana** obično **ne vraća** uključenu kvotu unazad — reset ide po datumu iz **Plan & Usage** („resets on …“), ne po „odmoru od alata“.
-- **Manje / kraće Agent sesije** = manje **daljeg** pritiska na kvotu dok god Cursor još pušta rad; **ne nadoknaduje** ono što je već potrošeno u tom ciklusu.
-- **Mali test da proveriš granicu:** jedan **kratak Agent** zadatak (jedna jasna izmena u jednom ili malo fajlova), npr. jedna rečenica u `README`, jedna TS greška iz Problems panela, jedno kratko preimenovanje + pozivi. Ako odmah traži **upgrade / on-demand / limit** → verovatno si na **tvrdoj** granici za Agent; ako prođe → još uvek radi neki režim, ali štedljivo.
-- Za zvanično stanje naloga i sporije: **Cursor support** + screenshot **Plan & Usage** (ne Firebase).
-
----
-
-## Pre-sajam — spremnost za ~1000 ljudi (checklist)
-
-Cilj: **pikovi tokom dana** (sajam / gužva u kafićima) bez pada zbog **Spark kvote** i bez iznenađenja na računu. Kod je već vučen ka manje „šumovskim“ read-ovima; ovo je **operativa + plan**.
-
-1. **Plan (Blaze):** pre ozbiljnog događaja uključi **Blaze** na pravom GCP/Firebase projektu (onaj gde živi baza i sajt koji ljudi koriste). Spark **50K read / dan** može da zakuca servis pri piku, i to **nije** isto što i „biće skuplo“.
-2. **Zaštita od iznenađenja:** u **Google Cloud → Billing → Budgets & alerts** postavi budžet (npr. **10–20 €**) + email upozorenje. To ne sprečava naplatu, ali **ranije vidiš** skok.
-3. **Grupni test pre sajma:** **5–10 telefona** istovremeno isti scenario kao posetioci: sken → detalj proizvoda → ocena / omiljeno → nazad → meni / zajednica. Traži **pucanje**, beskonačno učitavanje, ili konzolu punu grešaka.
-4. **Merenje u konzoli:** prati **Firestore → Usage** (reads / writes / real-time) i po potrebi **Google Cloud → Monitoring → Metrics Explorer** za tačniji vremenski opseg. Uzmi u obzir da **usage grafikon** može malo da odstupa od **Billing** linije — za evre gledaj **Billing report**.
-5. **Paralelno sa unosom / devom:** izbegavaj **localhost sa prod Firebase** dok traje javni događaj (ili uopšte kad hoćeš nizak šum) — to je istorijski pravilo **velikih dnevnih read-ova** na grafikonu.
-6. **Posle testa:** ako vidiš anomaliju (jedan korisnik = hiljade read-ova u minuti), zabeleži vreme + ekran i to adresiraj u kodu (često: petlja refetch-a, preširok query, višak `onSnapshot`).
+- **Pauza par dana** obicno **ne vraca** ukljucenu kvotu unazad - reset ide po datumu iz **Plan & Usage** ("resets on â€¦"), ne po "odmoru od alata".
+- **Manje / krace Agent sesije** = manje **daljeg** pritiska na kvotu dok god Cursor jos pusta rad; **ne nadoknaduje** ono sto je vec potroseno u tom ciklusu.
+- **Mali test da proveris granicu:** jedan **kratak Agent** zadatak (jedna jasna izmena u jednom ili malo fajlova), npr. jedna recenica u `README`, jedna TS greska iz Problems panela, jedno kratko preimenovanje + pozivi. Ako odmah trazi **upgrade / on-demand / limit** â†’ verovatno si na **tvrdoj** granici za Agent; ako proÄ‘e â†’ jos uvek radi neki rezim, ali stedljivo.
+- Za zvanicno stanje naloga i sporije: **Cursor support** + screenshot **Plan & Usage** (ne Firebase).
 
 ---
 
-## Backlog „kad stigneš“ (nije blokirajuće)
+## Pre-sajam - spremnost za ~1000 ljudi (checklist)
 
-- Još jedan prolaz: da li negde ostaje `getDocs` bez `limit` na velikim kolekcijama.
+Cilj: **pikovi tokom dana** (sajam / guzva u kaficima) bez pada zbog **Spark kvote** i bez iznenaÄ‘enja na racunu. Kod je vec vucen ka manje "sumovskim" read-ovima; ovo je **operativa + plan**.
+
+1. **Plan (Blaze):** pre ozbiljnog dogaÄ‘aja ukljuci **Blaze** na pravom GCP/Firebase projektu (onaj gde zivi baza i sajt koji ljudi koriste). Spark **50K read / dan** moze da zakuca servis pri piku, i to **nije** isto sto i "bice skuplo".
+2. **Zastita od iznenaÄ‘enja:** u **Google Cloud â†’ Billing â†’ Budgets & alerts** postavi budzet (npr. **10â€“20 â‚¬**) + email upozorenje. To ne sprecava naplatu, ali **ranije vidis** skok.
+3. **Grupni test pre sajma:** **5â€“10 telefona** istovremeno isti scenario kao posetioci: sken â†’ detalj proizvoda â†’ ocena / omiljeno â†’ nazad â†’ meni / zajednica. Trazi **pucanje**, beskonacno ucitavanje, ili konzolu punu gresaka.
+4. **Merenje u konzoli:** prati **Firestore â†’ Usage** (reads / writes / real-time) i po potrebi **Google Cloud â†’ Monitoring â†’ Metrics Explorer** za tacniji vremenski opseg. Uzmi u obzir da **usage grafikon** moze malo da odstupa od **Billing** linije - za evre gledaj **Billing report**.
+5. **Paralelno sa unosom / devom:** izbegavaj **localhost sa prod Firebase** dok traje javni dogaÄ‘aj (ili uopste kad hoces nizak sum) - to je istorijski pravilo **velikih dnevnih read-ova** na grafikonu.
+6. **Posle testa:** ako vidis anomaliju (jedan korisnik = hiljade read-ova u minuti), zabelezi vreme + ekran i to adresiraj u kodu (cesto: petlja refetch-a, presirok query, visak `onSnapshot`).
+
+---
+
+## Backlog "kad stignes" (nije blokirajuce)
+
+- Jos jedan prolaz: da li negde ostaje `getDocs` bez `limit` na velikim kolekcijama.
 - Provera da li postoje drugi `while` + isti `where` bez kurzora (isti anti-pattern kao ranije na adminu).
-- Po želji: kratki `CHANGELOG` ili git tag posle deploy-a (čisto za tvoju evidenciju).
+- Po zelji: kratki `CHANGELOG` ili git tag posle deploy-a (cisto za tvoju evidenciju).
 
 ---
 
-## Kako da znaš „dokle smo“ ubuduće
+## Kako da znas "dokle smo" ubuduce
 
 1. Otvori **`docs/STATUS-ZADATAKA.md`** (ovaj fajl).
-2. U kodu, polazna tačka za anti-burst refetch je **`src/lib/refreshGate.ts`** (u komentaru ispod stoji link na ovaj fajl).
+2. U kodu, polazna tacka za anti-burst refetch je **`src/lib/refreshGate.ts`** (u komentaru ispod stoji link na ovaj fajl).
 
-Ako želiš drugačiji naziv ili lokacija (npr. samo `NAPREDAK.md` u korenu), preimenuj i ažuriraj jednu referencu u `refreshGate.ts`.
+Ako zelis drugaciji naziv ili lokacija (npr. samo `NAPREDAK.md` u korenu), preimenuj i azuriraj jednu referencu u `refreshGate.ts`.
+
+
+

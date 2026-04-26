@@ -1,21 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, useNavigate } from "react-router-dom";
 import MobileLayout from "./components/layout/MobileLayout";
-import Home from "./pages/Home";
-import Workshop from "./pages/Workshop";
-import Scanner from "./pages/Scanner";
-import Community from "./pages/Community";
-import Menu from "./pages/Menu";
-import Collection from "./pages/Collection";
-import Label from "./pages/Label";
-import Admin from "./pages/Admin";
-import Distillery from "./pages/Distillery";
-import DistilleryDashboard from "./pages/DistilleryDashboard";
-import ProductAnalytics from "./pages/ProductAnalytics";
-import AdminAudit from "./pages/AdminAudit";
-import Activate from "./pages/Activate";
-import MyClubs from "./pages/MyClubs";
-import Distilleries from "./pages/Distilleries";
-import React, { useEffect, useState, useCallback } from "react";
+import React, { Suspense, lazy, useEffect, useState, useCallback } from "react";
 import AgeGate, { hasAgeGateConsent } from "./components/AgeGate";
 import { auth } from "./lib/firebase";
 import { ShieldAlert, QrCode } from "lucide-react";
@@ -23,6 +8,23 @@ import NotificationSystem from "./components/NotificationSystem";
 import PwaManager from "./components/PwaManager";
 import { isSuperuserEmail } from "./lib/authz";
 import { extractActivateTokenFromInput, isLicensedLocalStorage } from "./lib/extractActivateToken";
+import { initPresenceTracking } from "./lib/presence";
+
+const Home = lazy(() => import("./pages/Home"));
+const Workshop = lazy(() => import("./pages/Workshop"));
+const Scanner = lazy(() => import("./pages/Scanner"));
+const Community = lazy(() => import("./pages/Community"));
+const Menu = lazy(() => import("./pages/Menu"));
+const Collection = lazy(() => import("./pages/Collection"));
+const Label = lazy(() => import("./pages/Label"));
+const Admin = lazy(() => import("./pages/Admin"));
+const Distillery = lazy(() => import("./pages/Distillery"));
+const DistilleryDashboard = lazy(() => import("./pages/DistilleryDashboard"));
+const ProductAnalytics = lazy(() => import("./pages/ProductAnalytics"));
+const AdminAudit = lazy(() => import("./pages/AdminAudit"));
+const Activate = lazy(() => import("./pages/Activate"));
+const MyClubs = lazy(() => import("./pages/MyClubs"));
+const Distilleries = lazy(() => import("./pages/Distilleries"));
 
 // Initialize Visitor ID immediately before anything renders
 if (typeof window !== 'undefined' && !localStorage.getItem('rakivinum_visitor_id')) {
@@ -155,41 +157,53 @@ export default function App() {
   const [ageOk, setAgeOk] = useState(hasAgeGateConsent);
   const onAgeConfirmed = useCallback(() => setAgeOk(true), []);
 
+  useEffect(() => {
+    return initPresenceTracking();
+  }, []);
+
   if (!ageOk) {
     return <AgeGate onConfirmed={onAgeConfirmed} />;
   }
+
+  const routeFallback = (
+    <div className="min-h-screen bg-bg-base flex items-center justify-center text-text-secondary text-sm">
+      Učitavanje...
+    </div>
+  );
 
   return (
     <Router>
       <NotificationSystem />
       <PwaManager />
-      <Routes>
-        <Route path="/activate" element={<Activate />} />
-        <Route path="/admin" element={<Admin />} />
-        
-        {/* PUBLIC ROUTES - NO BURDEN */}
-        <Route path="/" element={<MobileLayout />}>
-          <Route index element={<Home />} />
-          <Route path="scan" element={<Scanner />} />
-          <Route path="radionica" element={<Workshop />} />
-          <Route path="community" element={<Community />} />
-          <Route path="menu" element={<Menu />} />
-          <Route path="my-clubs" element={<MyClubs />} />
-          <Route path="distilleries" element={<Distilleries />} />
-          <Route path="collection" element={<Collection />} />
+      <Suspense fallback={routeFallback}>
+        <Routes>
+          <Route path="/activate" element={<Activate />} />
+          <Route path="/admin" element={<Admin />} />
           
-          {/* PREMIUM ROUTES - LICENSED */}
-        </Route>
-        
-        {/* Public Full screen routes */}
-        <Route path="/label/:id" element={<Label />} />
-        <Route path="/distillery/:id" element={<Distillery />} />
-        
-        {/* Professional/B2B routes */}
-        <Route path="/distillery-dashboard" element={<LicenseGuard><DistilleryDashboard /></LicenseGuard>} />
-        <Route path="/product-analytics/:id" element={<LicenseGuard><ProductAnalytics /></LicenseGuard>} />
-        <Route path="/admin-audit" element={<LicenseGuard><AdminAudit /></LicenseGuard>} />
-      </Routes>
+          {/* PUBLIC ROUTES - NO BURDEN */}
+          <Route path="/" element={<MobileLayout />}>
+            <Route index element={<Home />} />
+            <Route path="scan" element={<Scanner />} />
+            <Route path="radionica" element={<Workshop />} />
+            <Route path="community" element={<Community />} />
+            <Route path="menu" element={<Menu />} />
+            <Route path="my-clubs" element={<MyClubs />} />
+            <Route path="distilleries" element={<Distilleries />} />
+            <Route path="collection" element={<Collection />} />
+            
+            {/* PREMIUM ROUTES - LICENSED */}
+          </Route>
+          
+          {/* Public Full screen routes */}
+          <Route path="/label/:id" element={<Label />} />
+          <Route path="/distillery/:id" element={<Distillery />} />
+          
+          {/* Professional/B2B routes */}
+          <Route path="/distillery-dashboard" element={<LicenseGuard><DistilleryDashboard /></LicenseGuard>} />
+          <Route path="/product-analytics/:id" element={<LicenseGuard><ProductAnalytics /></LicenseGuard>} />
+          <Route path="/admin-audit" element={<LicenseGuard><AdminAudit /></LicenseGuard>} />
+        </Routes>
+      </Suspense>
     </Router>
   );
 }

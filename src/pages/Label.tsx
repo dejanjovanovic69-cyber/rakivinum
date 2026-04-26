@@ -3,9 +3,7 @@ import { ArrowLeft, Star, MapPin, Share2, BookmarkPlus, Hexagon, X, Loader2, Che
 import { useState, useEffect, useRef } from "react";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { app, auth, db } from "../lib/firebase";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
-import { doc, getDoc, setDoc, deleteDoc, onSnapshot, serverTimestamp, collection, query, where, getDocs, Timestamp, limit, runTransaction } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, getDocs, Timestamp, limit, runTransaction } from "firebase/firestore";
 import { analyzeReviewText } from "../lib/reviewTextPolicy";
 import { isPostTrialFrozen } from "../lib/distilleryTrial";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
@@ -13,6 +11,7 @@ import { getNextBadgeProgress, recordRatingAchievement } from "../lib/achievemen
 import { isSuperuserEmail } from "../lib/authz";
 import { buildStableVisitorSeed, getOrCreateVisitorId } from "../lib/visitorIdentity";
 import { logProductScan } from "../lib/logProductScan";
+import { fetchPublicDistilleryById, fetchPublicProductRatings, fetchScannerProductById } from "../lib/dataService";
 import { 
   RadarChart, 
   PolarGrid, 
@@ -21,33 +20,133 @@ import {
   ResponsiveContainer 
 } from "recharts";
 
+type ProductData = {
+  id: string;
+  name?: string;
+  type?: string;
+  image?: string;
+  bottleImageUrl?: string;
+  distilleryId?: string;
+  alcoholPercentage?: number;
+  alcohol?: number;
+  averageRating?: number;
+  rating?: number;
+  ratingCount?: number;
+  scanCount?: number;
+  distillery?: string;
+  description?: string;
+  story?: string;
+  sensoryProfile?: {
+    aroma?: number;
+    taste?: number;
+    clarity?: number;
+    texture?: number;
+    aftertaste?: number;
+  };
+  publicLabelDisabled?: boolean;
+  isArchivedByDistillery?: boolean;
+  [key: string]: unknown;
+};
+
+type DistilleryData = {
+  id: string;
+  name?: string;
+  region?: string;
+  website?: string;
+  logoUrl?: string;
+  isVerified?: boolean;
+  [key: string]: unknown;
+};
+
+type ReviewData = {
+  id: string;
+  isFlagged?: boolean;
+  createdAt?: { seconds?: number; toDate?: () => Date };
+  rating?: number;
+  reviewText?: string;
+  comment?: string;
+  productName?: string;
+  productImage?: string;
+  userLocation?: string;
+  [key: string]: unknown;
+};
+
+type PendingQueueItem = { id: string };
+type SensoryKey = "aroma" | "taste" | "color" | "finish" | "harmony";
+type RatedTodayError = Error & { code?: string };
+
+function toCreatedAtMs(value: ReviewData["createdAt"]): number {
+  if (!value) return 0;
+  if (typeof value === "string") {
+    const t = Date.parse(value);
+    return Number.isFinite(t) ? t : 0;
+  }
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "object" && value !== null) {
+    if (typeof (value as { seconds?: unknown }).seconds === "number") {
+      return ((value as { seconds: number }).seconds || 0) * 1000;
+    }
+    if (typeof (value as { toDate?: unknown }).toDate === "function") {
+      try {
+        return ((value as { toDate: () => Date }).toDate()?.getTime() || 0);
+      } catch {
+        return 0;
+      }
+    }
+  }
+  return 0;
+}
+
 export default function Label() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const goBackSafe = () => {
+  const normalizeReturnPath = (raw: string | null | undefined): string | null => {
+    if (!raw) return null;
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return null;
+    if (trimmed.startsWith("/")) return trimmed;
+    if (/^[a-zA-Z0-9_-]/.test(trimmed)) return `/${trimmed}`;
+    return null;
+  };
+  const resolveReturnTarget = (): string => {
     const navState = location.state as { returnTo?: string } | null;
-    if (navState?.returnTo) {
-      navigate(navState.returnTo);
-      return;
+    const fromState = normalizeReturnPath(navState?.returnTo);
+    if (fromState) return fromState;
+
+    const fromQuery = normalizeReturnPath(new URLSearchParams(location.search).get("rt"));
+    if (fromQuery) return fromQuery;
+
+    try {
+      const fromStoragePath = normalizeReturnPath(sessionStorage.getItem("rakivinum_last_label_return_v1"));
+      if (fromStoragePath) return fromStoragePath;
+
+      const fromCommunityPath = normalizeReturnPath(sessionStorage.getItem("rakivinum_last_community_return_v1"));
+      if (fromCommunityPath) return fromCommunityPath;
+
+      const lastCommunityTab = sessionStorage.getItem("rakivinum_last_community_tab_v1");
+      if (lastCommunityTab) return `/community?tab=${encodeURIComponent(lastCommunityTab)}`;
+    } catch {
+      // ignore storage errors
     }
-    if (window.history.length > 1) {
-      navigate(-1);
-      return;
-    }
-    navigate("/", { replace: true });
+
+    return "/";
+  };
+  const goBackSafe = () => {
+    navigate(resolveReturnTarget());
   };
   const [saved, setSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   
   // Real Data State
-  const [productData, setProductData] = useState<any>(null);
+  const [productData, setProductData] = useState<ProductData | null>(null);
   const isAdminTester = isSuperuserEmail(auth.currentUser?.email);
-  const [distilleryData, setDistilleryData] = useState<any>(null);
+  const [distilleryData, setDistilleryData] = useState<DistilleryData | null>(null);
   const [isLoadingProduct, setIsLoadingProduct] = useState(true);
   const [labelAccessDenied, setLabelAccessDenied] = useState<"archived" | "qr_disabled" | null>(null);
   const [labelQuotaBlocked, setLabelQuotaBlocked] = useState(false);
-  const [reviews, setReviews] = useState<any[]>([]);
+  const [reviews, setReviews] = useState<ReviewData[]>([]);
   const [isLoadingReviews, setIsLoadingReviews] = useState(false);
 
   // Auto-open rating samo za punu javnu etiketu (sertifikovan proizvođač); modal postoji samo u tom grananju UI-a.
@@ -82,8 +181,10 @@ export default function Label() {
           try {
             const queueRaw = localStorage.getItem('rakivinum_pending_ratings') || '[]';
             const queue = JSON.parse(queueRaw);
-            const safeQueue = Array.isArray(queue) ? queue : [];
-            const next = safeQueue.filter((x: any) => x?.id !== id);
+            const safeQueue: PendingQueueItem[] = Array.isArray(queue)
+              ? queue.filter((x): x is PendingQueueItem => !!x && typeof x.id === "string")
+              : [];
+            const next = safeQueue.filter((x) => x.id !== id);
             localStorage.setItem('rakivinum_pending_ratings', JSON.stringify(next));
             window.dispatchEvent(new Event('rakivinum_pending_ratings_changed'));
           } catch (queueErr) {
@@ -133,10 +234,11 @@ export default function Label() {
     // Public, but bounded to avoid accidental over-sharing and payload abuse.
     return clean.slice(0, 120);
   };
-  const getPrecisePublicLocation = (data: any) => {
+  const getPrecisePublicLocation = (data: Record<string, unknown>) => {
+    const localityInfo = data?.localityInfo as { informative?: Array<{ name?: string }> } | undefined;
     const country = String(data?.countryName || data?.country || "").trim();
     const city = String(data?.city || data?.locality || "").trim();
-    const locality = String(data?.locality || data?.localityInfo?.informative?.[0]?.name || "").trim();
+    const locality = String(data?.locality || localityInfo?.informative?.[0]?.name || "").trim();
     const principal = String(data?.principalSubdivision || data?.region || "").trim();
     const place = locality || city;
     if (place && principal && place.toLowerCase() !== principal.toLowerCase()) return `${place}, ${principal}`;
@@ -212,72 +314,82 @@ export default function Label() {
       return;
     }
 
+    let cancelled = false;
     setIsLoadingProduct(true);
     setLabelQuotaBlocked(false);
-    const unsubProduct = onSnapshot(doc(db, 'products', id), async (docSnap) => {
-      if (docSnap.exists()) {
-        const pData = { id: docSnap.id, ...docSnap.data() } as any;
-        if (pData.publicLabelDisabled === true) {
-          setLabelAccessDenied("qr_disabled");
+    const loadLabelData = async () => {
+      try {
+        const row = await fetchScannerProductById(id);
+        if (cancelled) return;
+        if (!row) {
+          setLabelAccessDenied(null);
           setProductData(null);
           setDistilleryData(null);
-          setIsLoadingProduct(false);
-          return;
-        }
-        if (pData.isArchivedByDistillery) {
-          setLabelAccessDenied("archived");
-          setProductData(null);
-          setDistilleryData(null);
-          setIsLoadingProduct(false);
-          return;
-        }
-        setLabelAccessDenied(null);
-        setProductData(pData);
-
-        if (pData.distilleryId) {
-          const distSnap = await getDoc(doc(db, 'distilleries', pData.distilleryId));
-          if (distSnap.exists()) {
-            setDistilleryData({ id: distSnap.id, ...distSnap.data() });
-          } else {
-            setDistilleryData(null);
-          }
         } else {
-          setDistilleryData(null);
-        }
-      } else {
-        setLabelAccessDenied(null);
-        setProductData(null);
-        setDistilleryData(null);
-      }
-      setIsLoadingProduct(false);
-    }, (err) => {
-      console.error("Error fetching product data", err);
-      const code = String((err as any)?.code || "").toLowerCase();
-      const msg = String((err as any)?.message || "").toLowerCase();
-      if (code.includes("resource-exhausted") || msg.includes("quota")) {
-        setLabelQuotaBlocked(true);
-      }
-      setIsLoadingProduct(false);
-    });
+          const pData = row as ProductData;
+          if (pData.publicLabelDisabled === true) {
+            setLabelAccessDenied("qr_disabled");
+            setProductData(null);
+            setDistilleryData(null);
+            setIsLoadingProduct(false);
+            return;
+          }
+          if (pData.isArchivedByDistillery) {
+            setLabelAccessDenied("archived");
+            setProductData(null);
+            setDistilleryData(null);
+            setIsLoadingProduct(false);
+            return;
+          }
+          if (pData.isApproved === false) {
+            setLabelAccessDenied(null);
+            setProductData(null);
+            setDistilleryData(null);
+          } else {
+            setLabelAccessDenied(null);
+            setProductData(pData);
 
-    const qReviews = query(
-      collection(db, 'ratings'),
-      where('productId', '==', id),
-      limit(120)
-    );
-    const unsubReviews = onSnapshot(qReviews, (snap) => {
-      const reviewsData = snap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }))
-        .filter((review: any) => !review.isFlagged)
-        .sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      setReviews(reviewsData);
-    });
-    
+            if (pData.distilleryId) {
+              const distRow = await fetchPublicDistilleryById(pData.distilleryId);
+              if (cancelled) return;
+              if (distRow) {
+                setDistilleryData(distRow as DistilleryData);
+              } else {
+                setDistilleryData(null);
+              }
+            } else {
+              setDistilleryData(null);
+            }
+          }
+        }
+
+        setIsLoadingReviews(true);
+        const reviewRows = await fetchPublicProductRatings(id, 120);
+        if (cancelled) return;
+        const reviewsData: ReviewData[] = reviewRows
+          .map((reviewDoc) => ({ ...(reviewDoc as ReviewData) }))
+          .filter((review) => !review.isFlagged)
+          .sort((a, b) => toCreatedAtMs(b.createdAt) - toCreatedAtMs(a.createdAt));
+        setReviews(reviewsData);
+      } catch (err) {
+        console.error("Error fetching product data", err);
+        const e = err as { code?: unknown; message?: unknown } | null;
+        const code = String(e?.code || "").toLowerCase();
+        const msg = String(e?.message || "").toLowerCase();
+        if (code.includes("resource-exhausted") || msg.includes("quota")) {
+          setLabelQuotaBlocked(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingProduct(false);
+          setIsLoadingReviews(false);
+        }
+      }
+    };
+    void loadLabelData();
+
     return () => {
-      unsubProduct();
-      unsubReviews();
+      cancelled = true;
     };
   }, [id]);
 
@@ -305,7 +417,7 @@ export default function Label() {
         if (!Array.isArray(history)) history = [];
         
         // Remove if exists to re-add at front (most recent)
-        history = history.filter((h: any) => h.id !== productData.id);
+        history = history.filter((h: { id?: string }) => h.id !== productData.id);
         
         // Add to front
         history.unshift({
@@ -328,32 +440,38 @@ export default function Label() {
     const checkSaved = async () => {
       if (!productData?.id) return;
 
-      if (!auth.currentUser) {
-        const visitorId = ensureVisitorId();
-        const guestRef = doc(db, "guest_saved_items", `${visitorId}_${productData.id}`);
-        return onSnapshot(guestRef, (docSnap) => {
-          setSaved(docSnap.exists());
-        }, () => {
-          setSaved(false);
-        });
+      try {
+        if (!auth.currentUser) {
+          const visitorId = ensureVisitorId();
+          try {
+            const raw = localStorage.getItem("rakivinum_guest_collection") || "[]";
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.includes(productData.id)) {
+              setSaved(true);
+              return;
+            }
+          } catch {
+            // ignore local cache parse errors
+          }
+          const guestRef = doc(db, "guest_saved_items", `${visitorId}_${productData.id}`);
+          const guestSnap = await getDoc(guestRef);
+          setSaved(guestSnap.exists());
+          return;
+        }
+
+        const docRef = doc(db, 'users', auth.currentUser.uid, 'savedItems', productData.id);
+        const savedSnap = await getDoc(docRef);
+        setSaved(savedSnap.exists());
+      } catch (error) {
+        const code = String((error as { code?: unknown } | null)?.code || "");
+        if (!code.includes("permission-denied")) {
+          console.error("Error checking saved status", error);
+        }
+        setSaved(false);
       }
-      
-      const docRef = doc(db, 'users', auth.currentUser.uid, 'savedItems', productData.id);
-      return onSnapshot(docRef, (docSnap) => {
-        setSaved(docSnap.exists());
-      }, (error) => {
-        console.error("Error checking saved status", error);
-      });
     };
 
-    let unsubscribe: any = null;
-    checkSaved().then(unsub => {
-      unsubscribe = unsub;
-    });
-
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
+    void checkSaved();
   }, [productData?.id, auth.currentUser?.uid]);
 
   useEffect(() => {
@@ -474,11 +592,18 @@ export default function Label() {
           collection.push(productData.id);
           localStorage.setItem('rakivinum_guest_collection', JSON.stringify(collection));
         }
-        await setDoc(doc(db, "guest_saved_items", `${visitorId}_${productData.id}`), {
-          visitorId,
-          productId: productData.id,
-          createdAt: serverTimestamp(),
-        }, { merge: true });
+        try {
+          await setDoc(doc(db, "guest_saved_items", `${visitorId}_${productData.id}`), {
+            visitorId,
+            productId: productData.id,
+            createdAt: serverTimestamp(),
+          }, { merge: true });
+        } catch (remoteErr) {
+          const code = String((remoteErr as { code?: unknown } | null)?.code || "");
+          if (!code.includes("permission-denied")) {
+            console.warn("Guest remote save skipped:", remoteErr);
+          }
+        }
         setSaved(true);
       } catch (e) {
         console.error("Error ensuring guest collection", e);
@@ -502,12 +627,7 @@ export default function Label() {
     if (!productData?.id) return;
     await ensureSavedInCollection();
 
-    const normalizedProductName =
-      typeof productData?.name === "string"
-        ? productData.name
-        : productData?.name && typeof productData.name === "object"
-          ? [productData.name.city, productData.name.address].filter(Boolean).join(", ")
-          : "Piće";
+    const normalizedProductName = typeof productData?.name === "string" ? productData.name : "Piće";
 
     const entry = {
       id: productData.id,
@@ -518,8 +638,10 @@ export default function Label() {
     try {
       const queueRaw = localStorage.getItem('rakivinum_pending_ratings') || '[]';
       const queue = JSON.parse(queueRaw);
-      const safeQueue = Array.isArray(queue) ? queue : [];
-      const withoutSame = safeQueue.filter((x: any) => x?.id !== entry.id);
+      const safeQueue: PendingQueueItem[] = Array.isArray(queue)
+        ? queue.filter((x): x is PendingQueueItem => !!x && typeof x.id === "string")
+        : [];
+      const withoutSame = safeQueue.filter((x) => x.id !== entry.id);
       withoutSame.unshift(entry);
       localStorage.setItem('rakivinum_pending_ratings', JSON.stringify(withoutSame.slice(0, 20)));
       window.dispatchEvent(new Event('rakivinum_pending_ratings_changed'));
@@ -564,7 +686,7 @@ export default function Label() {
     }
     const existing = await getDocs(existingQuery);
     if (!isAdminTester && !existing.empty) {
-      const err: any = new Error("Već postoji jedna ocena za danas.");
+      const err: RatedTodayError = new Error("Već postoji jedna ocena za danas.");
       err.code = "already-exists";
       throw err;
     }
@@ -574,9 +696,9 @@ export default function Label() {
 
     const txResult = await runTransaction(db, async (tx) => {
       const productSnap = await tx.get(productRef);
-      const productData = productSnap.exists() ? (productSnap.data() as any) : {};
-      const ratingCount = Number(productData.ratingCount || 0);
-      const avgRating = Number(productData.averageRating || 0);
+      const txProductData: Partial<ProductData> = productSnap.exists() ? (productSnap.data() as ProductData) : {};
+      const ratingCount = Number(txProductData.ratingCount || 0);
+      const avgRating = Number(txProductData.averageRating || 0);
       const newRatingCount = ratingCount + 1;
       const newAverageRating = ((avgRating * ratingCount) + payload.rating) / newRatingCount;
 
@@ -597,10 +719,12 @@ export default function Label() {
         flagReason: null,
       });
 
-      tx.set(productRef, {
-        averageRating: newAverageRating,
-        ratingCount: newRatingCount,
-      }, { merge: true });
+      if (productSnap.exists()) {
+        tx.update(productRef, {
+          averageRating: newAverageRating,
+          ratingCount: newRatingCount,
+        });
+      }
 
       return { averageRating: newAverageRating, ratingCount: newRatingCount };
     });
@@ -623,9 +747,10 @@ export default function Label() {
         });
         return;
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       // User canceled share sheet — don't show error.
-      if (String(err?.name || "").toLowerCase().includes("abort")) return;
+      const e = err as { name?: unknown } | null;
+      if (String(e?.name || "").toLowerCase().includes("abort")) return;
       console.warn("Native share failed, falling back to clipboard", err);
     }
 
@@ -641,6 +766,10 @@ export default function Label() {
   const generatePDF = async () => {
     if (!productData) return;
     setIsGeneratingPDF(true);
+    const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+      import("html2canvas"),
+      import("jspdf"),
+    ]);
     const cssVars = getComputedStyle(document.documentElement);
     const themeBg = cssVars.getPropertyValue("--color-bg-card").trim() || "#161618";
     const themeGold = cssVars.getPropertyValue("--color-gold-500").trim() || "#D4AF37";
@@ -758,8 +887,7 @@ export default function Label() {
       
       const visitorId = ensureVisitorId();
 
-      const fn = getFunctions(app, "us-central1");
-      const submitRatingSecure = httpsCallable(fn, "submitRatingSecure");
+      const useSecureRatingFn = String(import.meta.env.VITE_USE_SECURE_RATING_FUNCTION || "") === "1";
       const submitPayload = {
         productId: productData?.id,
         distilleryId: productData?.distilleryId || distilleryData?.id || "unknown",
@@ -775,10 +903,15 @@ export default function Label() {
 
       let secure: { averageRating?: number; ratingCount?: number; suspiciousSource?: boolean } = {};
       try {
+        if (!useSecureRatingFn) {
+          throw Object.assign(new Error("submitRatingSecure disabled"), { code: "functions/not-found" });
+        }
+        const fn = getFunctions(app, "us-central1");
+        const submitRatingSecure = httpsCallable(fn, "submitRatingSecure");
         const result = await submitRatingSecure(submitPayload);
         secure = result.data as { averageRating?: number; ratingCount?: number; suspiciousSource?: boolean };
-      } catch (callableErr: any) {
-        const callableCode = String(callableErr?.code || "");
+      } catch (callableErr: unknown) {
+        const callableCode = String((callableErr as { code?: unknown } | null)?.code || "");
         const infraFailure = ["not-found", "unimplemented", "unavailable", "internal", "deadline-exceeded", "cancelled", "unknown"]
           .some((c) => callableCode.includes(c));
         if (!infraFailure) throw callableErr;
@@ -817,8 +950,10 @@ export default function Label() {
       try {
         const queueRaw = localStorage.getItem('rakivinum_pending_ratings') || '[]';
         const queue = JSON.parse(queueRaw);
-        const safeQueue = Array.isArray(queue) ? queue : [];
-        const next = safeQueue.filter((x: any) => x?.id !== productData?.id);
+        const safeQueue: PendingQueueItem[] = Array.isArray(queue)
+          ? queue.filter((x): x is PendingQueueItem => !!x && typeof x.id === "string")
+          : [];
+        const next = safeQueue.filter((x) => x.id !== productData?.id);
         localStorage.setItem('rakivinum_pending_ratings', JSON.stringify(next));
       } catch (queueErr) {
         console.error("Error cleaning pending ratings queue after rating", queueErr);
@@ -849,10 +984,11 @@ export default function Label() {
           return `Sledeći bedž: ${next.name} (${next.title}) • ${next.details}`;
         })(),
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error submitting rating", error);
-      const code = String(error?.code || "");
-      const message = String(error?.message || "");
+      const e = error as { code?: unknown; message?: unknown } | null;
+      const code = String(e?.code || "");
+      const message = String(e?.message || "");
 
       if (code.includes("already-exists")) {
         setHasRatedToday(true);
@@ -906,10 +1042,11 @@ export default function Label() {
             {subtitle}
          </p>
          <button 
-           onClick={() => navigate('/')} 
-           className="w-full max-w-xs py-4 bg-white/5 border border-white/10 rounded-2xl text-white font-black uppercase tracking-widest hover:bg-white/10 transition-all"
+          onClick={goBackSafe}
+           className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white hover:bg-white/10 transition-all"
+           aria-label="Nazad"
          >
-           Nazad na početnu
+          <ArrowLeft className="w-6 h-6" />
          </button>
       </div>
     );
@@ -937,13 +1074,14 @@ export default function Label() {
           type="button"
           onClick={goBackSafe}
           className="relative z-10 mb-6 w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-white hover:bg-gold-500/20 transition-colors shrink-0"
+          aria-label="Nazad"
         >
           <ArrowLeft className="w-6 h-6" />
         </button>
         <div className="relative z-10 flex-1 flex flex-col items-center justify-center gap-8 max-w-sm mx-auto w-full">
           <div className="relative w-full aspect-[2/3] max-w-[300px]">
             <div className="absolute inset-0 bg-gold-500/15 rounded-[40px] blur-[40px] opacity-60" />
-            <div className="relative h-full w-full rounded-[40px] overflow-hidden border border-white/10 shadow-[0_24px_48px_-12px_rgba(0,0,0,0.85)] bg-black">
+            <div className="relative h-full w-full rounded-[40px] overflow-hidden border border-gold-500/55 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.22),0_24px_48px_-12px_rgba(0,0,0,0.85)] bg-black">
               <img
                 src={bottleSrc}
                 alt={productData.name || "Piće"}
@@ -985,12 +1123,13 @@ export default function Label() {
 
       {/* Hero Section - Immersive Presentation */}
       <div className="relative z-10">
-        <div className="relative h-[480px] w-full flex items-center justify-center pt-20 px-6">
+        <div className="relative h-[560px] sm:h-[620px] w-full flex items-center justify-center pt-20 px-6">
           {/* Top Navbar */}
           <div className="absolute top-0 left-0 w-full p-6 pt-[env(safe-area-inset-top,24px)] flex justify-between items-center z-[100]">
             <button 
               onClick={goBackSafe}
               className="w-12 h-12 rounded-full bg-white/5 backdrop-blur-xl flex items-center justify-center text-white border border-white/10 hover:bg-gold-500 hover:text-black transition-all duration-300"
+              aria-label="Nazad"
             >
               <ArrowLeft className="w-6 h-6" />
             </button>
@@ -1012,7 +1151,7 @@ export default function Label() {
              <div className="absolute inset-0 bg-gold-500/20 rounded-[40px] blur-[60px] opacity-50 group-hover:opacity-80 transition-opacity duration-1000" />
              
              {/* Main Image in Premium Frame */}
-             <div className="relative h-full w-full rounded-[48px] overflow-hidden border border-white/10 shadow-[0_30px_60px_-15px_rgba(0,0,0,0.8)] bg-black">
+             <div className="relative h-full w-full rounded-[48px] overflow-hidden border border-gold-500/70 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.28),0_30px_60px_-15px_rgba(0,0,0,0.8)] bg-black">
                 <img 
                   src={productData.bottleImageUrl || productData.image || "https://picsum.photos/seed/rakivinum/800/1000"} 
                   alt={productData.name} 
@@ -1030,10 +1169,10 @@ export default function Label() {
                   </div>
                 </div>
 
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/40 to-transparent p-8">
-                   <p className="text-[10px] font-black text-gold-500 uppercase tracking-[0.3em] mb-2">Originalni Proizvod</p>
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent px-5 pb-4 pt-12">
+                   <p className="text-[9px] font-black text-gold-500 uppercase tracking-[0.26em] mb-1.5">Originalni Proizvod</p>
                     {distilleryData?.isVerified && (
-                     <div className="inline-flex items-center gap-2 bg-green-500/10 backdrop-blur-sm px-3 py-1.5 rounded-full border border-green-500/20 text-green-500 text-[10px] font-semibold uppercase tracking-wider">
+                     <div className="inline-flex items-center gap-1.5 bg-green-500/10 backdrop-blur-sm px-2.5 py-1 rounded-full border border-green-500/20 text-green-500 text-[9px] font-semibold uppercase tracking-wider">
                        <CheckCircle className="w-3.5 h-3.5 fill-current" />
                        Sertifikovani proizvođač
                      </div>
@@ -1349,17 +1488,17 @@ export default function Label() {
             
             <div className="space-y-4 py-2">
               <div className="space-y-6">
-                {[
+                {([
                   { key: 'aroma', label: 'Miris / Aroma' },
                   { key: 'taste', label: 'Ukus' },
                   { key: 'color', label: 'Boja / Bistrina' },
                   { key: 'finish', label: 'Završnica' },
                   { key: 'harmony', label: 'Harmonija / Karakter' }
-                ].map((attr) => (
+                ] as const).map((attr: { key: SensoryKey; label: string }) => (
                   <div key={attr.key} className="space-y-2">
                     <div className="flex justify-between items-center text-xs">
                       <span className="text-text-primary font-bold">{attr.label}</span>
-                      <span className="text-gold-500 font-black">{(sensoryScores as any)[attr.key].toFixed(1)}</span>
+                      <span className="text-gold-500 font-black">{sensoryScores[attr.key].toFixed(1)}</span>
                     </div>
                     <div className="relative w-full h-8 flex items-center">
                       <input 
@@ -1367,11 +1506,11 @@ export default function Label() {
                         min="1"
                         max="5"
                         step="0.1"
-                        value={(sensoryScores as any)[attr.key]}
+                        value={sensoryScores[attr.key]}
                         onChange={(e) => setSensoryScores({...sensoryScores, [attr.key]: parseFloat(e.target.value)})}
                         className="absolute w-full h-3 appearance-none bg-black/40 rounded-full outline-none cursor-pointer border border-white/5 z-20"
                         style={{
-                          background: `linear-gradient(to right, var(--color-gold-500) ${(((sensoryScores as any)[attr.key] - 1) / 4) * 100}%, rgba(0,0,0,0.4) ${(((sensoryScores as any)[attr.key] - 1) / 4) * 100}%)`
+                          background: `linear-gradient(to right, var(--color-gold-500) ${((sensoryScores[attr.key] - 1) / 4) * 100}%, rgba(0,0,0,0.4) ${((sensoryScores[attr.key] - 1) / 4) * 100}%)`
                         }}
                       />
                     </div>

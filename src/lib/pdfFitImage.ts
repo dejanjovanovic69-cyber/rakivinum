@@ -1,6 +1,4 @@
-import jsPDF from 'jspdf';
-
-type JsPdfDoc = InstanceType<typeof jsPDF>;
+type JsPdfDoc = import('jspdf').jsPDF;
 
 /** Čeka učitavanje slika u DOM-u pre html2canvas (logo/QR spolja). */
 export function waitForImages(root: HTMLElement): Promise<void> {

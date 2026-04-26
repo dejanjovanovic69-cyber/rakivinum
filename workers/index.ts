@@ -1,4 +1,4 @@
-type Env = {
+﻿type Env = {
   FIREBASE_PROJECT_ID?: string;
   FIRESTORE_DATABASE_ID?: string;
   GCP_CLIENT_EMAIL?: string;
@@ -266,7 +266,23 @@ function toClubMembershipItem(row: Record<string, unknown>): Record<string, unkn
   };
 }
 
-function toLicenseItem(row: Record<string, unknown>): Record<string, unknown> {
+
+function toScanClusterItems(rows: Record<string, unknown>[], limitCount: number): Array<{ region: string; val: number }> {
+  const clusters = new Map<string, number>();
+  rows.forEach((row) => {
+    const loc = (row.location && typeof row.location === "object") ? (row.location as Record<string, unknown>) : null;
+    const lat = loc && typeof loc.lat === "number" ? loc.lat : null;
+    const lng = loc && typeof loc.lng === "number" ? loc.lng : null;
+    if (typeof lat === "number" && typeof lng === "number") {
+      const key = `${lat.toFixed(1)}°, ${lng.toFixed(1)}°`;
+      clusters.set(key, (clusters.get(key) || 0) + 1);
+    }
+  });
+  return [...clusters.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limitCount)
+    .map(([region, val]) => ({ region, val }));
+}function toLicenseItem(row: Record<string, unknown>): Record<string, unknown> {
   return {
     id: asText(row.id) || "",
     token: asText(row.token),
@@ -456,6 +472,53 @@ async function fetchCollectionWhereEquals(
     .map((r) => decodeDocument(r.document as FirestoreDoc));
 }
 
+async function fetchCountWhereEquals(
+  env: Env,
+  collectionName: string,
+  fieldName: string,
+  fieldValue: string,
+): Promise<number> {
+  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
+  const accessToken = await getAccessToken(env);
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:runAggregationQuery`;
+  const body = {
+    structuredAggregationQuery: {
+      structuredQuery: {
+        from: [{ collectionId: collectionName }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: fieldName },
+            op: "EQUAL",
+            value: { stringValue: fieldValue },
+          },
+        },
+      },
+      aggregations: [{ count: {}, alias: "total" }],
+    },
+  };
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Firestore REST runAggregationQuery error ${res.status}: ${txt.slice(0, 240)}`);
+  }
+  const rows = (await res.json()) as Array<{ result?: { aggregateFields?: Record<string, FirestoreValue> } }>;
+  const aggregate = rows.find((r) => r.result?.aggregateFields)?.result?.aggregateFields;
+  const total = aggregate?.total;
+  if (!total) return 0;
+  if ("integerValue" in total) return Math.max(0, Number(total.integerValue || 0));
+  if ("doubleValue" in total) return Math.max(0, Math.floor(Number(total.doubleValue || 0)));
+  return 0;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -628,11 +691,8 @@ export default {
             url.pathname.replace("/api/public/club-membership-count/", "").trim(),
           );
           if (!distilleryId) return new Response(JSON.stringify({ count: 0 }), { headers: jsonHeaders });
-          const limitCount = parseLimit(url, 2500, 5000);
-          const rows = await fetchCollectionWhereEquals(env, "club_memberships", "distilleryId", distilleryId, limitCount);
-          const count = rows.length;
-          const capped = count >= limitCount;
-          return new Response(JSON.stringify({ count, capped }), { headers: jsonHeaders });
+          const count = await fetchCountWhereEquals(env, "club_memberships", "distilleryId", distilleryId);
+          return new Response(JSON.stringify({ count, exact: true }), { headers: jsonHeaders });
         });
       }
 
@@ -702,6 +762,18 @@ export default {
         });
       }
 
+      if (url.pathname.startsWith("/api/public/scan-clusters/")) {
+        return servePublicCached(request, async () => {
+          const productId = decodeURIComponent(url.pathname.replace("/api/public/scan-clusters/", "").trim());
+          if (!productId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
+          const sampleSize = parseLimit(url, 300, 800);
+          const clusterLimit = parseLimit(url, 5, 20);
+          const rows = await fetchCollectionWhereEquals(env, "scans", "productId", productId, sampleSize);
+          const items = toScanClusterItems(rows, clusterLimit);
+          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
+        });
+      }
+
       return new Response("Not Found", { status: 404 });
     } catch (err) {
       return new Response(
@@ -714,4 +786,6 @@ export default {
     }
   },
 };
+
+
 

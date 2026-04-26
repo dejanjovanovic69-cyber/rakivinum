@@ -144,6 +144,9 @@ input[type=range] {
 /* Easier-to-grab horizontal scroll for filter rows on mobile */
 .grab-scrollbar {
   scrollbar-width: auto;
+  scrollbar-color: rgba(212, 175, 55, 0.72) rgba(255, 255, 255, 0.12);
+  scrollbar-gutter: stable both-edges;
+  padding-bottom: 6px;
 }
 
 .grab-scrollbar::-webkit-scrollbar {

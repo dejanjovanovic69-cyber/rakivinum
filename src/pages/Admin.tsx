@@ -1,14 +1,35 @@
 import React, { useState, useRef, useEffect } from "react";
 import { ArrowLeft, Save, Loader2, CheckCircle, Database, Upload, ImageIcon, Trash2, Edit2, Search, ChevronDown, BookOpen, MapPin, Eye, Flag, ShieldAlert, AlertTriangle, Star, Mail, FileText, BarChart2, Building2, ClipboardCopy } from "lucide-react";
-import { useNavigate } from "react-router-dom";
-import QRCode from "qrcode";
-import { jsPDF } from "jspdf";
-import html2canvas from "html2canvas";
+import { useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "../lib/firebase";
-import { collection, doc, setDoc, serverTimestamp, addDoc, getDocs, getDoc, deleteDoc, updateDoc, query, where, Timestamp, deleteField, writeBatch, limit } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  setDoc,
+  serverTimestamp,
+  addDoc,
+  getDocs,
+  getDoc,
+  deleteDoc,
+  updateDoc,
+  query,
+  where,
+  Timestamp,
+  deleteField,
+  writeBatch,
+  limit,
+  getCountFromServer,
+  orderBy,
+  startAfter,
+  documentId,
+  type QueryDocumentSnapshot,
+} from "firebase/firestore";
 import DistilleryAnalyticsModal from "../components/admin/DistilleryAnalyticsModal";
 import { isSuperuserEmail } from "../lib/authz";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
+import { shouldRunRefresh } from "../lib/refreshGate";
+import { REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { meterDbRead } from "../lib/requestMeter";
 
 // Helper function to resize and compress image to base64
 const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality: number = 0.8): Promise<string> => {
@@ -46,39 +67,165 @@ const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, 
   });
 };
 
+type DistilleryListItem = {
+  id: string;
+  name?: string;
+  isVerified?: boolean;
+  isArchived?: boolean;
+  email?: string;
+  ownerId?: string;
+  lastAppAccessAt?: { toDate?: () => Date } | string | number | Date | null;
+  trialEndsAt?: { toDate?: () => Date } | string | number | Date | null;
+  region?: string;
+  website?: string;
+  description?: string;
+  logoUrl?: string;
+  pib?: string;
+  mapsUrl?: string;
+  location?: { address?: string; city?: string };
+  galleryImages?: string[];
+  [key: string]: unknown;
+};
+
+type ProductListItem = {
+  id: string;
+  name?: string;
+  type?: string;
+  distilleryId?: string;
+  description?: string;
+  alcoholPercentage?: number;
+  bottleImageUrl?: string;
+  barcode?: string;
+  isApproved?: boolean;
+  createdAt?: { toMillis?: () => number };
+  updatedAt?: { toMillis?: () => number };
+  [key: string]: unknown;
+};
+
+type CommunityLinkItem = { id: string; label?: string; url?: string; [key: string]: unknown };
+type CommunityEventItem = {
+  id: string;
+  eventDate?: string;
+  title?: string;
+  location?: string;
+  description?: string;
+  websiteUrl?: string;
+  link?: string;
+  mapsUrl?: string;
+  [key: string]: unknown;
+};
+type RatingLite = { rating?: number; productId?: string };
+type EventProposalItem = {
+  id: string;
+  name?: string;
+  title?: string;
+  location?: string;
+  date?: string;
+  link?: string;
+  description?: string;
+  proposerEmail?: string;
+  [key: string]: unknown;
+};
+type LicenseItem = {
+  id?: string;
+  token?: string;
+  clientName?: string;
+  comment?: string;
+  createdAt?: { toMillis?: () => number } | string | number | Date;
+  startDate?: { toMillis?: () => number } | string | number | Date;
+  expiresAt?: { toMillis?: () => number; toDate?: () => Date } | string | number | Date;
+  usedAt?: { toDate?: () => Date } | string | number | Date;
+  deactivatedAt?: { toDate?: () => Date } | string | number | Date;
+  lastActivatedBy?: string;
+  lastDeactivatedBy?: string;
+  activatedDevices?: string[];
+  maxDevices?: number;
+  isUsed?: boolean;
+  [key: string]: unknown;
+};
+type RatingRow = {
+  id: string;
+  productId?: string;
+  productName?: string;
+  userId?: string;
+  userLocation?: string;
+  reviewText?: string;
+  userName?: string;
+  rating?: number;
+  isFlagged?: boolean;
+  createdAt?: { toDate?: () => Date; toMillis?: () => number; seconds?: number };
+  [key: string]: unknown;
+};
+type ClipNavigator = Navigator & { clipboard?: { read?: () => Promise<Array<{ types: string[]; getType: (t: string) => Promise<Blob> }>> } };
+type PdfLike = { internal?: { getNumberOfPages?: () => number } };
+type WithToDate = { toDate?: () => Date };
+const hasToDate = (value: unknown): value is WithToDate => !!value && typeof (value as WithToDate).toDate === "function";
+
 export default function Admin() {
   const normalizeBarcode = (value: unknown) => String(value || "").replace(/\D/g, "");
   const navigate = useNavigate();
+  const location = useLocation();
+  const goBackSafe = () => {
+    const navState = location.state as { returnTo?: string } | null;
+    if (navState?.returnTo) {
+      navigate(navState.returnTo);
+      return;
+    }
+    const rt = new URLSearchParams(location.search).get("rt");
+    if (rt) {
+      navigate(rt);
+      return;
+    }
+    navigate("/menu", { replace: true });
+  };
+  const adminReturnTo = `${location.pathname}${location.search}`;
+  const openAdminLabelPreview = (productId: string) => {
+    try {
+      sessionStorage.setItem("rakivinum_last_label_return_v1", adminReturnTo);
+    } catch {
+      // ignore storage errors
+    }
+    navigate(`/label/${productId}?rt=${encodeURIComponent(adminReturnTo)}`, {
+      state: { adminLabelPreview: true, returnTo: adminReturnTo },
+    });
+  };
   const ADMIN_DISTILLERIES_LIMIT = 500;
   const ADMIN_EVENTS_LIMIT = 400;
   const ADMIN_LINKS_LIMIT = 300;
   const ADMIN_BLOCKED_USERS_LIMIT = 1000;
   const ADMIN_LICENSES_LIMIT = 1200;
   const ADMIN_EVENT_PROPOSALS_LIMIT = 400;
+  const ADMIN_PRODUCTS_ALL_LIMIT = 900;
+  const ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT = 450;
+  const ADMIN_RATINGS_PER_PRODUCT_LIMIT = 2500;
+  const ADMIN_FLAGGED_RATINGS_LIMIT = 500;
+  const ADMIN_PENDING_APPROVALS_LIMIT = 300;
   const [isSavingManual, setIsSavingManual] = useState(false);
   const [manualResult, setManualResult] = useState("");
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [productToDelete, setProductToDelete] = useState<string | null>(null);
-  const [adminProducts, setAdminProducts] = useState<any[]>([]);
-  const [distilleries, setDistilleries] = useState<any[]>([]);
+  const [adminProducts, setAdminProducts] = useState<ProductListItem[]>([]);
+  const [distilleries, setDistilleries] = useState<DistilleryListItem[]>([]);
   type AdminTab = 'approvals' | 'distilleries' | 'events' | 'moderation' | 'licensing';
   const [activeTab, setActiveTab] = useState<AdminTab>('distilleries');
   const [distilleryTab, setDistilleryTab] = useState<'profil' | 'pica' | 'licence' | 'ocene'>('profil');
-  const [eventProposals, setEventProposals] = useState<any[]>([]);
-  const [communityLinks, setCommunityLinks] = useState<any[]>([]);
-  const [communityEvents, setCommunityEvents] = useState<any[]>([]);
+  const [eventProposals, setEventProposals] = useState<EventProposalItem[]>([]);
+  const [communityLinks, setCommunityLinks] = useState<CommunityLinkItem[]>([]);
+  const [communityEvents, setCommunityEvents] = useState<CommunityEventItem[]>([]);
   const [linkForm, setLinkForm] = useState({ label: "", url: "" });
   const [eventForm, setEventForm] = useState({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
-  const [flaggedRatings, setFlaggedRatings] = useState<any[]>([]);
-  const [allRatings, setAllRatings] = useState<any[]>([]);
+  const [flaggedRatings, setFlaggedRatings] = useState<RatingRow[]>([]);
+  const [allRatings, setAllRatings] = useState<RatingRow[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<string[]>([]);
   const [modSearch, setModSearch] = useState("");
-  const [licenses, setLicenses] = useState<any[]>([]);
-  const [pendingProductApprovals, setPendingProductApprovals] = useState<any[]>([]);
+  const [licenses, setLicenses] = useState<LicenseItem[]>([]);
+  const [pendingProductApprovals, setPendingProductApprovals] = useState<ProductListItem[]>([]);
   const [isModerating, setIsModerating] = useState(false);
   const [isGeneratingLicense, setIsGeneratingLicense] = useState(false);
+  const [onlineUsersCount, setOnlineUsersCount] = useState<number | null>(null);
+  const isSuperAdminUser = isSuperuserEmail(auth.currentUser?.email);
   
   // New batch licensing states
   const [batchEmail, setBatchEmail] = useState("");
@@ -93,6 +240,51 @@ export default function Admin() {
   const [lastGeneratedBatchTokens, setLastGeneratedBatchTokens] = useState<string[]>([]);
   const [confirmDeleteLicenseId, setConfirmDeleteLicenseId] = useState<string | null>(null);
   const [licenseLogSearch, setLicenseLogSearch] = useState("");
+
+  useEffect(() => {
+    if (!isSuperAdminUser) {
+      setOnlineUsersCount(null);
+      return;
+    }
+
+    let cancelled = false;
+    const refreshPresenceCount = async () => {
+      try {
+        const thresholdMs = Date.now() - 90_000;
+        const qPresence = query(
+          collection(db, "online_presence"),
+          where("isOnline", "==", true),
+          where("lastSeenMs", ">=", thresholdMs),
+          limit(2000),
+        );
+        const countSnap = await getCountFromServer(qPresence);
+        meterDbRead("admin:online_presence_count", 1);
+        if (!cancelled) setOnlineUsersCount(countSnap.data().count);
+      } catch (err) {
+        console.error("Presence count failed", err);
+        if (!cancelled) setOnlineUsersCount(null);
+      }
+    };
+
+    void refreshPresenceCount();
+    const onTick = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!shouldRunRefresh("admin:presence-count", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      void refreshPresenceCount();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onTick();
+    };
+    window.addEventListener("focus", onTick);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onTick);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
+    };
+  }, [isSuperAdminUser]);
 
   const PRODUCT_TYPES = [
     "Šljivovica", "Dunjevača", "Kajsijevača", "Viljamovka", "Kruškovaca",
@@ -129,7 +321,7 @@ export default function Admin() {
 
   const [distilleryToDelete, setDistilleryToDelete] = useState<string | null>(null);
   const [editingDistilleryId, setEditingDistilleryId] = useState<string | null>(null);
-  const [analyticsDistillery, setAnalyticsDistillery] = useState<any>(null);
+  const [analyticsDistillery, setAnalyticsDistillery] = useState<DistilleryListItem | null>(null);
   const [selectedDistilleryId, setSelectedDistilleryId] = useState<string>("");
   const [distSearch, setDistSearch] = useState("");
   const [showSearchResults, setShowSearchResults] = useState(false);
@@ -155,7 +347,7 @@ export default function Admin() {
   };
   const clearGallerySlots = () => setGalleryImageSlots(Array.from({ length: GALLERY_SLOT_COUNT }, () => ""));
   const readClipboardImageAsDataUrl = async () => {
-    const clipboardApi: any = (navigator as any).clipboard;
+    const clipboardApi = (navigator as ClipNavigator).clipboard;
     if (!clipboardApi?.read) {
       throw new Error("CLIPBOARD_READ_UNSUPPORTED");
     }
@@ -175,7 +367,7 @@ export default function Admin() {
   };
   const pasteImageFromClipboard = async (target: "product" | "distilleryLogo") => {
     try {
-      const clipboardApi: any = (navigator as any).clipboard;
+      const clipboardApi = (navigator as ClipNavigator).clipboard;
       if (!clipboardApi?.read) {
         alert("Vaš browser ne podržava direktno čitanje slike iz clipboard-a. Probajte Ctrl+V.");
         return;
@@ -198,10 +390,11 @@ export default function Admin() {
       const base64 = await readClipboardImageAsDataUrl();
       setGallerySlot(index, base64);
       setManualResult(`Slika galerije #${index + 1} uspešno nalepljena iz clipboard-a.`);
-    } catch (err: any) {
-      if (String(err?.message || "").includes("CLIPBOARD_READ_UNSUPPORTED")) {
+    } catch (err: unknown) {
+      const e = err as { message?: string } | null;
+      if (String(e?.message || "").includes("CLIPBOARD_READ_UNSUPPORTED")) {
         alert("Vaš browser ne podržava direktno čitanje slike iz clipboard-a.");
-      } else if (String(err?.message || "").includes("CLIPBOARD_IMAGE_MISSING")) {
+      } else if (String(e?.message || "").includes("CLIPBOARD_IMAGE_MISSING")) {
         alert("U clipboard-u nije pronađena slika. Kopirajte sliku pa pokušajte ponovo.");
       } else {
         console.error("Clipboard paste for gallery failed", err);
@@ -221,16 +414,19 @@ export default function Admin() {
     }
   };
 
-  const isSuperAdminUser = isSuperuserEmail(auth.currentUser?.email);
-  const toMillis = (value: any): number => {
+  const toMillis = (value: unknown): number => {
     if (!value) return 0;
-    if (typeof value?.toMillis === "function") return value.toMillis();
+    if (typeof (value as { toMillis?: () => number }).toMillis === "function") return (value as { toMillis: () => number }).toMillis();
+    if (hasToDate(value)) {
+      const d = value.toDate?.();
+      if (d instanceof Date) return d.getTime();
+    }
     if (value instanceof Date) return value.getTime();
-    const parsed = new Date(value).getTime();
+    const parsed = new Date(value as string | number | Date).getTime();
     return Number.isNaN(parsed) ? 0 : parsed;
   };
 
-  const generateDistilleryCertificate = async (dist: any) => {
+  const generateDistilleryCertificate = async (dist: DistilleryListItem) => {
     // We'll use a reliable QR API for the PDF generation to ensure perfect quality
     const distUrl = `${window.location.origin}/distillery/${dist.id}`;
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(distUrl)}&color=000000&bgcolor=ffffff`;
@@ -297,6 +493,10 @@ export default function Admin() {
       </div>
     `;
     
+    const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+      import("html2canvas"),
+      import("jspdf"),
+    ]);
     document.body.appendChild(element);
     
     try {
@@ -318,7 +518,11 @@ export default function Admin() {
     }
   };
 
-  const generateDistilleryPromoCard = async (dist: any, variant: "fair" | "table") => {
+  const generateDistilleryPromoCard = async (dist: DistilleryListItem, variant: "fair" | "table") => {
+    const [{ default: QRCode }, { default: jsPDF }] = await Promise.all([
+      import("qrcode"),
+      import("jspdf"),
+    ]);
     const distUrl = `${window.location.origin}/distillery/${dist.id}`;
     const qrDataUrl = await QRCode.toDataURL(distUrl, { width: 280, margin: 1 });
     const doc = new jsPDF("p", "mm", variant === "table" ? "a6" : "a4");
@@ -424,7 +628,7 @@ export default function Admin() {
   );
   const selectedDistillery = distilleries.find((d) => d.id === selectedDistilleryId) || null;
   const selectedDistilleryName = selectedDistillery?.name || "";
-  const isLicenseForSelectedDistillery = (lic: any) =>
+  const isLicenseForSelectedDistillery = (lic: { clientName?: string }) =>
     !!selectedDistilleryName &&
     String(lic.clientName || "").trim().toLowerCase() === selectedDistilleryName.trim().toLowerCase();
   const selectedPendingApprovals = selectedDistilleryId
@@ -487,7 +691,7 @@ export default function Admin() {
     try {
       const ratingRef = doc(db, "ratings", id);
       const ratingSnap = await getDoc(ratingRef);
-      const productId = ratingSnap.exists() ? String((ratingSnap.data() as any).productId || "").trim() : "";
+      const productId = ratingSnap.exists() ? String((ratingSnap.data() as RatingLite).productId || "").trim() : "";
 
       if (!productId) {
         await deleteDoc(ratingRef);
@@ -496,11 +700,13 @@ export default function Admin() {
         return;
       }
 
-      const allSnap = await getDocs(query(collection(db, "ratings"), where("productId", "==", productId)));
+      const allSnap = await getDocs(
+        query(collection(db, "ratings"), where("productId", "==", productId), limit(ADMIN_RATINGS_PER_PRODUCT_LIMIT)),
+      );
       const remaining = allSnap.docs.filter((d) => d.id !== id);
       let sum = 0;
       for (const d of remaining) {
-        sum += Number((d.data() as any).rating || 0);
+        sum += Number((d.data() as RatingLite).rating || 0);
       }
       const count = remaining.length;
       const avg = count > 0 ? sum / count : 0;
@@ -542,12 +748,13 @@ export default function Admin() {
   const fetchDistilleries = async () => {
     try {
       const snap = await getDocs(query(collection(db, 'distilleries'), limit(ADMIN_DISTILLERIES_LIMIT)));
-      const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-      list.sort((a: any, b: any) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
+      meterDbRead("admin:distilleries", snap.size);
+      const list: DistilleryListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as DistilleryListItem) }));
+      list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
       setDistilleries(list);
       setSelectedDistilleryId((current) => {
         if (current === "all") return current;
-        if (current && list.some((d: any) => d.id === current)) return current;
+        if (current && list.some((d) => d.id === current)) return current;
         return list[0]?.id || "";
       });
     } catch (err) {
@@ -562,15 +769,20 @@ export default function Admin() {
         return;
       }
       // Super admin vidi sve ako želi, ili filtrira po izabranoj destileriji
-      let q;
       if (selectedDistilleryId === "all" && isSuperAdminUser) {
-        q = collection(db, 'products');
+        const snap = await getDocs(query(collection(db, "products"), limit(ADMIN_PRODUCTS_ALL_LIMIT)));
+        meterDbRead("admin:products_all", snap.size);
+        setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) })));
       } else {
-        q = query(collection(db, 'products'), where("distilleryId", "==", selectedDistilleryId));
+        const q = query(
+          collection(db, "products"),
+          where("distilleryId", "==", selectedDistilleryId),
+          limit(ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT),
+        );
+        const snap = await getDocs(q);
+        meterDbRead("admin:products_by_distillery", snap.size);
+        setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) })));
       }
-      
-      const snap = await getDocs(q as any);
-      setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })));
     } catch (err) {
       console.error("Greška pri učitavanju proizvoda", err);
     }
@@ -578,10 +790,11 @@ export default function Admin() {
 
   const fetchPendingProductApprovals = async () => {
     try {
-      const q = query(collection(db, 'products'), where("isApproved", "==", false));
+      const q = query(collection(db, "products"), where("isApproved", "==", false), limit(ADMIN_PENDING_APPROVALS_LIMIT));
       const snap = await getDocs(q);
-      const list = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
-      list.sort((a: any, b: any) => {
+      meterDbRead("admin:products_pending_approvals", snap.size);
+      const list: ProductListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) }));
+      list.sort((a, b) => {
         const aTs = a.updatedAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0;
         const bTs = b.updatedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0;
         return bTs - aTs;
@@ -604,8 +817,8 @@ export default function Admin() {
   const fetchCommunityLinks = async () => {
     try {
       const snap = await getDocs(query(collection(db, 'community_links'), limit(ADMIN_LINKS_LIMIT)));
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
-      list.sort((a: any, b: any) => (a.label || "").localeCompare(b.label || "", 'sr'));
+      const list: CommunityLinkItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityLinkItem) }));
+      list.sort((a, b) => (a.label || "").localeCompare(b.label || "", 'sr'));
       setCommunityLinks(list);
     } catch (err) {
       console.error("Greška pri učitavanju korisnih linkova:", err);
@@ -615,8 +828,8 @@ export default function Admin() {
   const fetchCommunityEvents = async () => {
     try {
       const snap = await getDocs(query(collection(db, 'community_events'), limit(ADMIN_EVENTS_LIMIT)));
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() as any }));
-      list.sort((a: any, b: any) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
+      const list: CommunityEventItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityEventItem) }));
+      list.sort((a, b) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
       setCommunityEvents(list);
     } catch (err) {
       console.error("Greška pri učitavanju događaja:", err);
@@ -626,7 +839,7 @@ export default function Admin() {
   const fetchFlaggedRatings = async () => {
     try {
       // Query for ratings where isFlagged is true OR it was auto-flagged
-      const q = query(collection(db, 'ratings'), where("isFlagged", "==", true));
+      const q = query(collection(db, "ratings"), where("isFlagged", "==", true), limit(ADMIN_FLAGGED_RATINGS_LIMIT));
       const snap = await getDocs(q);
       setFlaggedRatings(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch (err) {
@@ -638,7 +851,8 @@ export default function Admin() {
     try {
       const q = query(collection(db, 'ratings'), limit(300));
       const snap = await getDocs(q);
-      setAllRatings(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a: any, b: any) => 
+      meterDbRead("admin:ratings_recent", snap.size);
+      setAllRatings(snap.docs.map(d => ({ id: d.id, ...d.data() } as RatingRow)).sort((a, b) => 
         (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0)
       ).slice(0, 100));
     } catch (err) {
@@ -724,6 +938,10 @@ export default function Admin() {
   };
 
   const generateLicensePDF = async (clientName: string, tokens: string[]) => {
+    const [{ default: QRCode }, { default: jsPDF }] = await Promise.all([
+      import("qrcode"),
+      import("jspdf"),
+    ]);
     const doc = new jsPDF();
     
     // Design Colors
@@ -814,7 +1032,7 @@ export default function Admin() {
     }
     
     // Page Footer
-    const pageCount = (doc as any).internal.getNumberOfPages();
+    const pageCount = (doc as PdfLike).internal?.getNumberOfPages?.() || 1;
     for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i);
         doc.setFontSize(8);
@@ -945,9 +1163,9 @@ export default function Admin() {
       setBatchCount(1);
       setBatchEmail("");
       fetchLicenses();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      alert("Greška pri generisanju licenci: " + (err.message || "Nepoznata greška"));
+      alert("Greška pri generisanju licenci: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
     } finally {
       setIsGeneratingLicense(false);
     }
@@ -1088,12 +1306,35 @@ export default function Admin() {
         isVerified: nextVerified
       });
       if (nextVerified) {
-        const prodSnap = await getDocs(query(collection(db, 'products'), where("distilleryId", "==", id)));
-        const approvalTasks = prodSnap.docs
-          .filter((p) => (p.data() as any).isApproved === false)
-          .map((p) => updateDoc(doc(db, 'products', p.id), { isApproved: true }));
-        if (approvalTasks.length > 0) {
-          await Promise.all(approvalTasks);
+        const pageSize = ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT;
+        let cursor: QueryDocumentSnapshot | null = null;
+        for (;;) {
+          const prodSnap = await getDocs(
+            cursor
+              ? query(
+                  collection(db, "products"),
+                  where("distilleryId", "==", id),
+                  orderBy(documentId()),
+                  startAfter(cursor),
+                  limit(pageSize),
+                )
+              : query(
+                  collection(db, "products"),
+                  where("distilleryId", "==", id),
+                  orderBy(documentId()),
+                  limit(pageSize),
+                ),
+          );
+          if (prodSnap.empty) break;
+          const approvalTasks = prodSnap.docs
+            .filter((p) => (p.data() as ProductListItem).isApproved === false)
+            .map((p) => updateDoc(doc(db, "products", p.id), { isApproved: true }));
+          if (approvalTasks.length > 0) {
+            await Promise.all(approvalTasks);
+          }
+          const last = prodSnap.docs[prodSnap.docs.length - 1];
+          if (!last || prodSnap.docs.length < pageSize) break;
+          cursor = last;
         }
       }
       fetchDistilleries();
@@ -1126,7 +1367,7 @@ export default function Admin() {
        const galleryImages = parseGalleryImagesFromSlots(galleryImageSlots);
        // Ne upisuj ownerId ovde: pri updateDoc bi se prepisao pravim vlasnikom adminov UID,
        // a proizvođač bi ostao samo na email polju — brisanje mejla bi ga trajno isključilo.
-       const basePayload: any = {
+       const basePayload: Record<string, unknown> = {
          name: (distilleryData.name || "").trim(),
          region: (distilleryData.region || "Srbija").trim(),
          logoUrl: (distilleryData.logoUrl || "").trim() || "https://picsum.photos/seed/dist/200/200",
@@ -1157,7 +1398,7 @@ export default function Admin() {
          : Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
 
        if (editingDistilleryId) {
-         const updatePayload: any = { ...basePayload };
+         const updatePayload: Record<string, unknown> = { ...basePayload };
          if (trialDateStr) {
            updatePayload.trialEndsAt = trialEndsAtTs;
          }
@@ -1185,24 +1426,24 @@ export default function Admin() {
        } catch (e) {
          console.warn("Refresh list failed", e);
        }
-    } catch (err: any) {
+    } catch (err: unknown) {
        clearTimeout(timeout);
        console.error("Distillery Save Error:", err);
-       setManualResult("Greška: " + (err.message || "Problem sa bazom. Proverite SuperAdmin prava."));
+       setManualResult("Greška: " + ((err as { message?: string } | null)?.message || "Problem sa bazom. Proverite SuperAdmin prava."));
     } finally {
        setIsSavingManual(false);
     }
   };
 
-  const startEditingDistillery = (dist: any) => {
+  const startEditingDistillery = (dist: DistilleryListItem) => {
     setEditingDistilleryId(dist.id);
     let trialInput = "";
     const rawTrial = dist.trialEndsAt;
-    if (rawTrial?.toDate) {
-      const d = rawTrial.toDate();
-      if (!Number.isNaN(d.getTime())) trialInput = d.toISOString().slice(0, 10);
+    if (hasToDate(rawTrial)) {
+      const d = rawTrial.toDate?.();
+      if (d instanceof Date && !Number.isNaN(d.getTime())) trialInput = d.toISOString().slice(0, 10);
     } else if (rawTrial) {
-      const d = new Date(rawTrial);
+      const d = new Date(rawTrial as string | number | Date);
       if (!Number.isNaN(d.getTime())) trialInput = d.toISOString().slice(0, 10);
     }
     setDistilleryData({
@@ -1232,13 +1473,17 @@ export default function Admin() {
   const handleDeleteDistillery = async (id: string) => {
     setIsSavingManual(true);
     try {
-      // 1. Delete associated products first (to be safe with rules)
-      const q = query(collection(db, 'products'), where("distilleryId", "==", id));
-      const snap = await getDocs(q);
-      
-      // Use standard loop for batch-like behavior if possible, or just Promise.all
-      const deletePromises = snap.docs.map(d => deleteDoc(doc(db, 'products', d.id)));
-      await Promise.all(deletePromises);
+      // 1. Delete associated products in bounded pages (avoids unbounded reads).
+      const pageSize = 450;
+      let more = true;
+      while (more) {
+        const snap = await getDocs(
+          query(collection(db, "products"), where("distilleryId", "==", id), limit(pageSize)),
+        );
+        if (snap.empty) break;
+        await Promise.all(snap.docs.map((d) => deleteDoc(doc(db, "products", d.id))));
+        more = snap.docs.length >= pageSize;
+      }
 
       // 2. Delete Distillery
       await deleteDoc(doc(db, 'distilleries', id));
@@ -1247,16 +1492,16 @@ export default function Admin() {
       fetchDistilleries();
       fetchAdminProducts();
       setManualResult("Destilerija i sve njene rakije su uspešno obrisane.");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setManualResult("Greška pri brisanju: " + (err.message || "Proverite dozvole."));
+      setManualResult("Greška pri brisanju: " + ((err as { message?: string } | null)?.message || "Proverite dozvole."));
       setDistilleryToDelete(null);
     } finally {
       setIsSavingManual(false);
     }
   };
 
-  const handleToggleDistilleryArchive = async (dist: any) => {
+  const handleToggleDistilleryArchive = async (dist: DistilleryListItem) => {
     const nextArchived = !dist?.isArchived;
     const promptText = nextArchived
       ? "Arhivirati destileriju? Proizvodi i pristup biće privremeno sakriveni."
@@ -1272,22 +1517,45 @@ export default function Admin() {
         restoredAt: !nextArchived ? serverTimestamp() : null,
       });
 
-      const prodSnap = await getDocs(query(collection(db, "products"), where("distilleryId", "==", dist.id)));
-      await Promise.all(
-        prodSnap.docs.map((p) =>
-          updateDoc(doc(db, "products", p.id), {
-            isArchivedByDistillery: nextArchived,
-            updatedAt: serverTimestamp(),
-          })
-        )
-      );
+      const pageSize = ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT;
+      let cursor: QueryDocumentSnapshot | null = null;
+      for (;;) {
+        const prodSnap = await getDocs(
+          cursor
+            ? query(
+                collection(db, "products"),
+                where("distilleryId", "==", dist.id),
+                orderBy(documentId()),
+                startAfter(cursor),
+                limit(pageSize),
+              )
+            : query(
+                collection(db, "products"),
+                where("distilleryId", "==", dist.id),
+                orderBy(documentId()),
+                limit(pageSize),
+              ),
+        );
+        if (prodSnap.empty) break;
+        await Promise.all(
+          prodSnap.docs.map((p) =>
+            updateDoc(doc(db, "products", p.id), {
+              isArchivedByDistillery: nextArchived,
+              updatedAt: serverTimestamp(),
+            }),
+          ),
+        );
+        const last = prodSnap.docs[prodSnap.docs.length - 1];
+        if (!last || prodSnap.docs.length < pageSize) break;
+        cursor = last;
+      }
 
       setManualResult(nextArchived ? "Destilerija je arhivirana." : "Destilerija je vraćena iz arhive.");
       fetchDistilleries();
       fetchAdminProducts();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setManualResult("Greška pri arhiviranju: " + (err.message || "Nepoznata greška."));
+      setManualResult("Greška pri arhiviranju: " + ((err as { message?: string } | null)?.message || "Nepoznata greška."));
     } finally {
       setIsSavingManual(false);
     }
@@ -1305,7 +1573,7 @@ export default function Admin() {
 
     try {
       if (editingProductId) {
-        const updateData: any = {
+        const updateData: Record<string, unknown> = {
             name: formData.name.trim(),
             type: formData.type.trim(),
             alcoholPercentage: Number(formData.alcoholPercentage),
@@ -1331,7 +1599,7 @@ export default function Admin() {
           return;
         }
 
-        const addData: any = {
+        const addData: Record<string, unknown> = {
             distilleryId: selectedDistilleryId,
             name: formData.name.trim(),
             type: formData.type.trim(),
@@ -1356,8 +1624,8 @@ export default function Admin() {
       }
       setFormData({ name: "", type: "", description: "", alcoholPercentage: 40, bottleImageUrl: "", barcode: "" });
       fetchAdminProducts();
-    } catch (error: any) {
-      setManualResult("Greška pri unosu: " + error.message);
+    } catch (error: unknown) {
+      setManualResult("Greška pri unosu: " + ((error as { message?: string } | null)?.message || "Nepoznata greška."));
     } finally {
       setIsSavingManual(false);
     }
@@ -1375,7 +1643,7 @@ export default function Admin() {
     }
   };
 
-  const startEditing = (p: any) => {
+  const startEditing = (p: ProductListItem) => {
     setEditingProductId(p.id);
     setFormData({
       name: p.name,
@@ -1396,7 +1664,7 @@ export default function Admin() {
       
       <div className="flex items-center gap-4 mb-8 relative z-10">
         <button 
-          onClick={() => navigate(-1)}
+          onClick={goBackSafe}
           className="w-10 h-10 flex items-center justify-center rounded-xl bg-bg-card border border-border-subtle text-text-primary hover:bg-gold-500/10 hover:text-gold-500 transition-colors"
         >
           <ArrowLeft className="w-5 h-5" />
@@ -1404,6 +1672,11 @@ export default function Admin() {
         <div>
           <h1 className="text-2xl font-serif font-bold text-white tracking-wide">Sistemski Admin</h1>
           <p className="text-sm text-text-secondary">Upravljanje podacima</p>
+          {isSuperAdminUser && (
+            <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-gold-500/90">
+              Online sada: {onlineUsersCount ?? "—"}
+            </p>
+          )}
           <p className="text-[11px] text-text-secondary/90 mt-2 max-w-xl leading-relaxed">
             Gornji tabovi su vraćeni. U okviru taba Destilerije/Vinarije nalazi se kompletan profil aktivnog proizvođača.
           </p>
@@ -1810,7 +2083,7 @@ export default function Admin() {
                     </button>
                   )}
                   <button 
-                    onClick={() => navigate(`/label/${prod.id}`, { state: { adminLabelPreview: true } })} 
+                    onClick={() => openAdminLabelPreview(prod.id)} 
                     className="p-2 border border-border-subtle rounded-lg text-text-secondary hover:text-white hover:border-white/50 transition-colors"
                     title="Vidi digitalnu etiketu (Simulacija skeniranja)"
                   >
@@ -1881,7 +2154,7 @@ export default function Admin() {
                       Odobri
                     </button>
                     <button
-                      onClick={() => navigate(`/label/${prod.id}`, { state: { adminLabelPreview: true } })}
+                      onClick={() => openAdminLabelPreview(prod.id)}
                       className="px-3 py-2 border border-border-subtle rounded-lg text-text-secondary hover:text-white hover:border-white/40 transition-colors text-[10px] font-black uppercase tracking-wide"
                     >
                       Pregled
@@ -2133,19 +2406,23 @@ export default function Admin() {
                    const distLicenses = licenses.filter(lic => lic.clientName === dist.name);
                    const activeLicenses = distLicenses.length;
                    const lastAccessAtRaw = dist.lastAppAccessAt;
-                   const lastAccessDate = lastAccessAtRaw?.toDate ? lastAccessAtRaw.toDate() : (lastAccessAtRaw ? new Date(lastAccessAtRaw) : null);
-                   const soonestExpiry = distLicenses.reduce((soonest: any, lic: any) => {
+                  const lastAccessDate = hasToDate(lastAccessAtRaw)
+                    ? lastAccessAtRaw.toDate?.() || null
+                    : (lastAccessAtRaw ? new Date(lastAccessAtRaw as string | number | Date) : null);
+                   const soonestExpiry = distLicenses.reduce((soonest: Date | null, lic: LicenseItem) => {
                      if (!lic.expiresAt) return soonest;
-                     const exp = lic.expiresAt.toDate ? lic.expiresAt.toDate() : new Date(lic.expiresAt);
+                    const exp = hasToDate(lic.expiresAt)
+                      ? lic.expiresAt.toDate?.() || new Date(0)
+                      : new Date((lic.expiresAt || 0) as string | number | Date);
                      if (!soonest || exp < soonest) return exp;
                      return soonest;
                    }, null);
                    const isExpiringSoon = soonestExpiry && (soonestExpiry.getTime() - Date.now() < 30 * 24 * 60 * 60 * 1000);
                    const trialEndRaw = dist.trialEndsAt;
-                   const trialEndDate = trialEndRaw?.toDate
-                     ? trialEndRaw.toDate()
+                  const trialEndDate = hasToDate(trialEndRaw)
+                    ? trialEndRaw.toDate?.() || null
                      : trialEndRaw
-                       ? new Date(trialEndRaw)
+                      ? new Date(trialEndRaw as string | number | Date)
                        : null;
                    const trialEndLabel =
                      trialEndDate && !Number.isNaN(trialEndDate.getTime())
@@ -2241,7 +2518,7 @@ export default function Admin() {
                                   const { copied, openedMail } = await sendLicenseEmailDraft(
                                     dist.name,
                                     dist.email || "",
-                                    distLicenses.map((l) => l.token),
+                                    distLicenses.map((l) => String(l.token || "")),
                                   );
                                   if (openedMail) {
                                     alert(
@@ -2256,8 +2533,8 @@ export default function Admin() {
                                         : "Nema emaila i kopiranje nije uspelo — koristite PDF.",
                                     );
                                   }
-                                } catch (err: any) {
-                                  alert(`Greška: ${err?.message || "Pokušajte ponovo."}`);
+                                } catch (err: unknown) {
+                                  alert(`Greška: ${(err as { message?: string } | null)?.message || "Pokušajte ponovo."}`);
                                 }
                               }}
                               title="Mail draft + kopiranje u clipboard"
@@ -2270,7 +2547,7 @@ export default function Admin() {
                               onClick={async () => {
                                 const ok = await copyLicensesToClipboard(
                                   dist.name,
-                                  distLicenses.map((l) => l.token),
+                                  distLicenses.map((l) => String(l.token || "")),
                                   dist.email || undefined,
                                 );
                                 alert(ok ? "Tokeni i linkovi kopirani u clipboard." : "Kopiranje nije uspelo (proverite dozvolu browsera).");
@@ -2281,7 +2558,7 @@ export default function Admin() {
                               <ClipboardCopy className="w-4 h-4" />
                             </button>
                             <button 
-                              onClick={() => generateLicensePDF(dist.name, distLicenses.map(l => l.token))}
+                              onClick={() => generateLicensePDF(dist.name, distLicenses.map((l) => String(l.token || "")))}
                               title="Generiši PDF listu licenci"
                               className="p-2 border border-gold-500/30 text-gold-500 rounded-lg hover:bg-gold-500/10 transition-colors"
                             >
@@ -2429,7 +2706,7 @@ export default function Admin() {
               <div className="card-soft p-4 space-y-3">
                 <h3 className="text-xs font-black uppercase tracking-widest text-white">Aktivni korisni linkovi ({communityLinks.length})</h3>
                 <div className="space-y-2">
-                  {communityLinks.map((item: any) => (
+                  {communityLinks.map((item) => (
                     <div key={item.id} className="bg-bg-card-elevated border border-border-subtle rounded-xl p-3 flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-white text-sm font-bold truncate">{item.label}</p>
@@ -2455,7 +2732,7 @@ export default function Admin() {
               <div className="card-soft p-4 space-y-3">
                 <h3 className="text-xs font-black uppercase tracking-widest text-white">Svi događaji ({communityEvents.length})</h3>
                 <div className="space-y-2">
-                  {communityEvents.map((ev: any) => (
+                  {communityEvents.map((ev) => (
                     <div key={ev.id} className="bg-bg-card-elevated border border-border-subtle rounded-xl p-3 flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-white text-sm font-bold truncate">{ev.title || "Bez naziva"}</p>
@@ -2584,6 +2861,7 @@ export default function Admin() {
                       onApprove={handleApproveRating} 
                       onDelete={handleDeleteRating}
                       onBlock={handleBlockUser}
+                    onUnblock={handleUnblockUser}
                       isBlocked={blockedUsers.includes(rating.userId)}
                     />
                   ))}
@@ -2674,17 +2952,17 @@ export default function Admin() {
                                  const distLicenses = licenses.filter(l => l.clientName === d.name);
                                  if (distLicenses.length > 0) {
                                    const latest = distLicenses.sort((a,b) => {
-                                      const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt instanceof Date ? a.createdAt.getTime() : 0);
-                                      const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt instanceof Date ? b.createdAt.getTime() : 0);
+                                      const timeA = toMillis(a.createdAt);
+                                      const timeB = toMillis(b.createdAt);
                                       return timeB - timeA;
                                    })[0];
                                    
                                    if (latest.startDate) {
-                                      const millis = latest.startDate.toMillis ? latest.startDate.toMillis() : (latest.startDate instanceof Date ? latest.startDate.getTime() : latest.startDate);
+                                      const millis = toMillis(latest.startDate);
                                       if (millis) setBatchStartDate(new Date(millis).toISOString().split('T')[0]);
                                    }
                                    if (latest.expiresAt) {
-                                      const millis = latest.expiresAt.toMillis ? latest.expiresAt.toMillis() : (latest.expiresAt instanceof Date ? latest.expiresAt.getTime() : latest.expiresAt);
+                                      const millis = toMillis(latest.expiresAt);
                                       if (millis) setBatchEndDate(new Date(millis).toISOString().split('T')[0]);
                                    }
                                  } else {
@@ -2709,7 +2987,9 @@ export default function Admin() {
                       {(() => {
                         const selectedDist = distilleries.find(d => d.name === batchDistillery);
                         const lastRaw = selectedDist?.lastAppAccessAt;
-                        const lastDate = lastRaw?.toDate ? lastRaw.toDate() : (lastRaw ? new Date(lastRaw) : null);
+                        const lastDate = hasToDate(lastRaw)
+                          ? lastRaw.toDate?.() || null
+                          : (lastRaw ? new Date(lastRaw as string | number | Date) : null);
                         return (
                           <p className="text-[10px] text-text-secondary">
                             Zadnji pristup aplikaciji:{" "}
@@ -2862,8 +3142,8 @@ export default function Admin() {
             ) : (
             <div className="grid gap-3">
               {[...selectedLicenses].sort((a,b) => {
-                const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt instanceof Date ? a.createdAt.getTime() : 0);
-                const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt instanceof Date ? b.createdAt.getTime() : 0);
+                const timeA = toMillis(a.createdAt);
+                const timeB = toMillis(b.createdAt);
                 return timeB - timeA;
               }).map(lic => {
                 const isLicenseUsed = (lic.activatedDevices?.length || 0) > 0 || lic.isUsed === true;
@@ -2875,8 +3155,8 @@ export default function Admin() {
                       <p className="text-[10px] text-gold-500 font-bold uppercase">{lic.clientName || 'Pojedinačna'}</p>
                       <p className="text-[10px] text-text-secondary mt-1 uppercase">{lic.comment}</p>
                       <p className="text-[9px] text-text-secondary mt-1">
-                        {lic.startDate && `Vazi od: ${new Date(lic.startDate.toMillis ? lic.startDate.toMillis() : lic.startDate).toLocaleDateString('sr-RS')}`}
-                        {lic.expiresAt && ` do: ${new Date(lic.expiresAt.toMillis ? lic.expiresAt.toMillis() : lic.expiresAt).toLocaleDateString('sr-RS')}`}
+                        {lic.startDate && `Vazi od: ${new Date(toMillis(lic.startDate)).toLocaleDateString('sr-RS')}`}
+                        {lic.expiresAt && ` do: ${new Date(toMillis(lic.expiresAt)).toLocaleDateString('sr-RS')}`}
                       </p>
                     </div>
                     <div className={`px-2 py-1 rounded text-[10px] font-black uppercase ${isLicenseUsed ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-500'}`}>
@@ -2930,7 +3210,9 @@ export default function Admin() {
                       <span className="text-white font-mono">{lic.lastActivatedBy || "nema"}</span>
                       {" • "}
                       <span className="text-white">
-                        {lic.usedAt?.toDate?.()?.toLocaleString('sr-RS') || lic.usedAt || "nema"}
+                        {hasToDate(lic.usedAt)
+                          ? lic.usedAt.toDate?.()?.toLocaleString('sr-RS')
+                          : (lic.usedAt ? String(lic.usedAt) : "nema")}
                       </span>
                     </p>
                     <p>
@@ -2938,7 +3220,9 @@ export default function Admin() {
                       <span className="text-white font-mono">{lic.lastDeactivatedBy || "nema"}</span>
                       {" • "}
                       <span className="text-white">
-                        {lic.deactivatedAt?.toDate?.()?.toLocaleString('sr-RS') || lic.deactivatedAt || "nema"}
+                        {hasToDate(lic.deactivatedAt)
+                          ? lic.deactivatedAt.toDate?.()?.toLocaleString('sr-RS')
+                          : (lic.deactivatedAt ? String(lic.deactivatedAt) : "nema")}
                       </span>
                     </p>
                   </div>
@@ -2957,8 +3241,8 @@ export default function Admin() {
                              await deleteDoc(doc(db, 'licenses', lic.id));
                              setConfirmDeleteLicenseId(null);
                              fetchLicenses();
-                           } catch (e: any) {
-                             alert("Greška pri brisanju: " + e.message);
+                          } catch (e: unknown) {
+                            alert("Greška pri brisanju: " + ((e as { message?: string } | null)?.message || "Nepoznata greška"));
                            }
                          }}
                          className="px-2 py-1 text-[10px] font-bold bg-red-500/20 text-red-500 rounded hover:bg-red-500 hover:text-white transition-colors"
@@ -3047,7 +3331,23 @@ export default function Admin() {
   );
 }
 
-function RatingCard({ rating, onApprove, onDelete, onBlock, onUnblock, isBlocked, showAudit = false }: any) {
+function RatingCard({
+  rating,
+  onApprove,
+  onDelete,
+  onBlock,
+  onUnblock,
+  isBlocked,
+  showAudit = false,
+}: {
+  rating: RatingRow;
+  onApprove: (id: string) => void;
+  onDelete: (id: string) => void;
+  onBlock: (id: string) => void;
+  onUnblock: (id: string) => void;
+  isBlocked: boolean;
+  showAudit?: boolean;
+}) {
   return (
     <div className={`bg-bg-card-elevated border border-white/5 rounded-2xl p-4 space-y-3 transition-opacity ${isBlocked ? 'opacity-50 ring-1 ring-red-500/20' : ''}`}>
       <div className="flex justify-between items-start">

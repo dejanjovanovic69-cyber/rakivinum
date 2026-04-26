@@ -1,10 +1,8 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "../lib/firebase";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
-import { collection, query, where, getDocs, orderBy, Timestamp, addDoc, serverTimestamp, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, orderBy, Timestamp, addDoc, serverTimestamp, doc, updateDoc, getCountFromServer, limit } from "firebase/firestore";
 import { QRCodeCanvas } from "qrcode.react";
 import { 
   BarChart3, 
@@ -56,6 +54,10 @@ import {
 import { cn } from "../lib/utils";
 import DistilleryAnalyticsModal from "../components/admin/DistilleryAnalyticsModal";
 import { isPostTrialFrozen, parseTrialEndDate } from "../lib/distilleryTrial";
+import { shouldRunRefresh } from "../lib/refreshGate";
+import { REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { readCache, writeCache } from "../lib/resilience";
+import { meterDbRead } from "../lib/requestMeter";
 
 const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality = 0.82): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -96,69 +98,180 @@ const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, 
 };
 
 export default function DistilleryDashboard() {
+  type DashboardDistillery = {
+    id: string;
+    name?: string;
+    isVerified?: boolean;
+    isArchived?: boolean;
+    ownerId?: string;
+    trialEndsAt?: unknown;
+    lastAppAccessAt?: { toDate?: () => Date } | string | number | Date;
+    location?: { city?: string; address?: string };
+    [key: string]: string | number | boolean | Date | { toDate?: () => Date } | { city?: string; address?: string } | string[] | undefined;
+  };
+  type DashboardProduct = {
+    id: string;
+    name?: string;
+    type?: string;
+    alcoholPercentage?: number;
+    description?: string;
+    bottleImageUrl?: string;
+    image?: string;
+    barcode?: string;
+    isApproved?: boolean;
+    createdAt?: { toDate?: () => Date } | string | number | Date;
+    updatedAt?: { toDate?: () => Date } | string | number | Date;
+    scanCount?: number;
+    ratingCount?: number;
+    publicLabelDisabled?: boolean;
+    [key: string]: string | number | boolean | Date | { toDate?: () => Date } | undefined;
+  };
+  type DashboardRating = {
+    id: string;
+    productId?: string;
+    rating?: number;
+    userName?: string;
+    userId?: string;
+    location?: string;
+    city?: string;
+    createdAt?: { toDate?: () => Date } | string | number | Date;
+    [key: string]: string | number | boolean | Date | { toDate?: () => Date } | undefined;
+  };
+  type DashboardScan = {
+    id: string;
+    productId?: string;
+    userName?: string;
+    userId?: string;
+    location?: string;
+    city?: string;
+    createdAt?: { toDate?: () => Date } | string | number | Date;
+    [key: string]: string | number | boolean | Date | { toDate?: () => Date } | undefined;
+  };
+
   const navigate = useNavigate();
+  const location = useLocation();
+  const goBackSafe = () => {
+    const navState = location.state as { returnTo?: string } | null;
+    if (navState?.returnTo) {
+      navigate(navState.returnTo);
+      return;
+    }
+    const rt = new URLSearchParams(location.search).get("rt");
+    if (rt) {
+      navigate(rt);
+      return;
+    }
+    navigate("/menu", { replace: true });
+  };
   const [loading, setLoading] = useState(true);
-  const [qrModalProduct, setQrModalProduct] = useState<any>(null);
+  const [qrModalProduct, setQrModalProduct] = useState<DashboardProduct | null>(null);
   const [isDistilleryQrOpen, setIsDistilleryQrOpen] = useState(false);
   const qrRef = useRef<HTMLCanvasElement>(null);
   const distilleryQrRef = useRef<HTMLCanvasElement>(null);
   
-  const [distillery, setDistillery] = useState<any>(null);
-  const [products, setProducts] = useState<any[]>([]);
-  const [ratings, setRatings] = useState<any[]>([]);
-  const [filteredRatings, setFilteredRatings] = useState<any[]>([]);
-  const [scans, setScans] = useState<any[]>([]);
-  const [filteredScans, setFilteredScans] = useState<any[]>([]);
+  const [distillery, setDistillery] = useState<DashboardDistillery | null>(null);
+  const [products, setProducts] = useState<DashboardProduct[]>([]);
+  const [ratings, setRatings] = useState<DashboardRating[]>([]);
+  const [filteredRatings, setFilteredRatings] = useState<DashboardRating[]>([]);
+  const [scans, setScans] = useState<DashboardScan[]>([]);
+  const [filteredScans, setFilteredScans] = useState<DashboardScan[]>([]);
   const [timeFilter, setTimeFilter] = useState<string>('Sve Vreme');
   const [aiSummary, setAiSummary] = useState<string>('');
   const [generatingAi, setGeneratingAi] = useState(false);
   const [isClubModalOpen, setIsClubModalOpen] = useState(false);
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
   const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<any>(null);
+  const [editingProduct, setEditingProduct] = useState<DashboardProduct | null>(null);
   const [isEditProductModalOpen, setIsEditProductModalOpen] = useState(false);
   const [isEditDistilleryModalOpen, setIsEditDistilleryModalOpen] = useState(false);
   const [showAllProducts, setShowAllProducts] = useState(false);
   const [activeDashboardTab, setActiveDashboardTab] = useState('analitika');
-  const [clubActions, setClubActions] = useState<any[]>([]);
+  const [clubActions, setClubActions] = useState<Array<{ id: string; [key: string]: unknown }>>([]);
   const [clubMembersCount, setClubMembersCount] = useState<number | "-">("-");
+  const toDateSafe = (value: unknown): Date => {
+    if (value && typeof (value as { toDate?: () => Date }).toDate === "function") {
+      const d = (value as { toDate?: () => Date }).toDate?.();
+      return d instanceof Date ? d : new Date(0);
+    }
+    if (value instanceof Date) return value;
+    const d = new Date((value || 0) as string | number | Date);
+    return Number.isNaN(d.getTime()) ? new Date(0) : d;
+  };
 
   const distilleryUrl = distillery ? `${window.location.origin}/distillery/${distillery.id}` : '';
 
   useEffect(() => {
-    let unsubActions: (() => void) | undefined;
-    let unsubMembers: (() => void) | undefined;
+    let cancelled = false;
+    if (!distillery?.id) return;
+    const actionsCacheKey = `rakivinum_cache_dist_dashboard_actions_${distillery.id}_v1`;
+    const memberCountCacheKey = `rakivinum_cache_dist_dashboard_member_count_${distillery.id}_v1`;
 
-    if (distillery?.id) {
-      console.log("Fetching data for distillery:", distillery.id);
-      
-      // Fetch club actions
-      const qActions = query(
-        collection(db, 'club_actions'), 
-        where('distilleryId', '==', distillery.id),
-        orderBy('createdAt', 'desc')
-      );
-      unsubActions = onSnapshot(qActions, (snap) => {
-        setClubActions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      }, (err) => {
+    const refreshClubPanel = async () => {
+      if (!shouldRunRefresh(`dist-dashboard:${distillery.id}:club-panel`, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      try {
+        const qActions = query(
+          collection(db, 'club_actions'),
+          where('distilleryId', '==', distillery.id),
+          orderBy('createdAt', 'desc'),
+          limit(80),
+        );
+        const actionsSnap = await getDocs(qActions);
+        meterDbRead("distDashboard:club_actions", actionsSnap.size);
+        const nextActions = actionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (!cancelled) {
+          setClubActions(nextActions);
+        }
+        writeCache(actionsCacheKey, nextActions, REFRESH_INTERVAL.USER_LIGHT_1H);
+      } catch (err) {
         console.error("Error fetching actions", err);
-      });
+        if (!cancelled) {
+          const cachedActions = readCache<Array<{ id: string; [key: string]: unknown }>>(actionsCacheKey);
+          if (cachedActions) setClubActions(cachedActions);
+        }
+      }
 
-      // Fetch club members count
-      const qMembers = query(
-        collection(db, 'club_memberships'), 
-        where('distilleryId', '==', distillery.id)
-      );
-      unsubMembers = onSnapshot(qMembers, (snap) => {
-        setClubMembersCount(snap.size);
-      }, (err) => {
+      try {
+        const qMembers = query(
+          collection(db, 'club_memberships'),
+          where('distilleryId', '==', distillery.id),
+        );
+        const countSnap = await getCountFromServer(qMembers);
+        meterDbRead("distDashboard:club_memberships_count", 1);
+        const nextCount = countSnap.data().count;
+        if (!cancelled) setClubMembersCount(nextCount);
+        writeCache(memberCountCacheKey, nextCount, REFRESH_INTERVAL.USER_LIGHT_1H);
+      } catch (err) {
         console.error("Error fetching members", err);
-      });
+        if (!cancelled) {
+          const cachedCount = readCache<number>(memberCountCacheKey);
+          if (typeof cachedCount === "number") setClubMembersCount(cachedCount);
+        }
+      }
+    };
+
+    console.log("Fetching data for distillery:", distillery.id);
+    const cachedActions = readCache<Array<{ id: string; [key: string]: unknown }>>(actionsCacheKey);
+    const cachedCount = readCache<number>(memberCountCacheKey);
+    if (cachedActions) setClubActions(cachedActions);
+    if (typeof cachedCount === "number") setClubMembersCount(cachedCount);
+    if (!cachedActions || typeof cachedCount !== "number" || shouldRunRefresh(`dist-dashboard:${distillery.id}:initial-club-panel`, REFRESH_INTERVAL.USER_LIGHT_1H)) {
+      void refreshClubPanel();
     }
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshClubPanel();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
 
     return () => {
-      if (unsubActions) unsubActions();
-      if (unsubMembers) unsubMembers();
+      cancelled = true;
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
   }, [distillery?.id]);
 
@@ -193,23 +306,23 @@ export default function DistilleryDashboard() {
         }
 
         // Fetch User's Distillery (by UID or Email)
-        const dq = query(collection(db, 'distilleries'), where('ownerId', '==', user.uid));
+        const dq = query(collection(db, "distilleries"), where("ownerId", "==", user.uid), limit(5));
         const dSnap = await getDocs(dq);
         
         let distData = null;
         if (!dSnap.empty) {
            const first = dSnap.docs[0];
-           const raw = first.data() as any;
+           const raw = first.data() as DashboardDistillery;
            if (!raw?.isArchived) {
              distData = { id: first.id, ...raw };
            }
         } else if (user.email) {
            // Try by email
-           const eq = query(collection(db, 'distilleries'), where('email', '==', user.email));
+           const eq = query(collection(db, "distilleries"), where("email", "==", user.email), limit(5));
            const eSnap = await getDocs(eq);
            if (!eSnap.empty) {
              const first = eSnap.docs[0];
-             const raw = first.data() as any;
+             const raw = first.data() as DashboardDistillery;
              if (!raw?.isArchived) {
                distData = { id: first.id, ...raw };
                const owner = raw?.ownerId;
@@ -240,26 +353,26 @@ export default function DistilleryDashboard() {
            }
 
            // Fetch Products
-           const pq = query(collection(db, 'products'), where('distilleryId', '==', distData.id));
+           const pq = query(collection(db, "products"), where("distilleryId", "==", distData.id), limit(500));
            const pSnap = await getDocs(pq);
            const pData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
            setProducts(pData);
 
            // Fetch Ratings & Scans
            const pIds = pData.map(p => p.id);
-           let rData: any[] = [];
-           let sData: any[] = [];
+           let rData: DashboardRating[] = [];
+           let sData: DashboardScan[] = [];
            
            for (let i = 0; i < pIds.length; i += 10) {
              const chunk = pIds.slice(i, i + 10);
              if (chunk.length > 0) {
                // Ratings
-               const rq = query(collection(db, 'ratings'), where('productId', 'in', chunk));
+               const rq = query(collection(db, "ratings"), where("productId", "in", chunk), limit(150));
                const rs = await getDocs(rq);
                rData = [...rData, ...rs.docs.map(d => ({id: d.id, ...d.data()}))];
 
                // Scans
-               const sq = query(collection(db, 'scans'), where('productId', 'in', chunk));
+               const sq = query(collection(db, "scans"), where("productId", "in", chunk), limit(200));
                const ss = await getDocs(sq);
                sData = [...sData, ...ss.docs.map(d => ({id: d.id, ...d.data()}))];
              }
@@ -309,12 +422,12 @@ export default function DistilleryDashboard() {
      }
 
      const filteredRatingsList = ratings.filter(r => {
-        const d = r.createdAt?.toDate ? r.createdAt.toDate() : new Date(r.createdAt);
+        const d = toDateSafe(r.createdAt);
         return d >= cutoff;
      });
 
      const filteredScansList = scans.filter(s => {
-        const d = s.timestamp?.toDate ? s.timestamp.toDate() : new Date(s.timestamp || s.createdAt);
+        const d = toDateSafe((s as { timestamp?: unknown; createdAt?: unknown }).timestamp || s.createdAt);
         return d >= cutoff;
      });
 
@@ -378,6 +491,10 @@ export default function DistilleryDashboard() {
       return;
     }
     setIsGeneratingCert(true);
+    const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+      import("html2canvas"),
+      import("jspdf"),
+    ]);
 
     const cssVars = getComputedStyle(document.documentElement);
     const themeBg = cssVars.getPropertyValue("--color-bg-card").trim() || "#161618";
@@ -531,12 +648,12 @@ export default function DistilleryDashboard() {
         
         // Combined activity
         const ratingCount = filteredRatings.filter(r => {
-           const rd = r.createdAt?.toDate ? r.createdAt.toDate() : new Date(r.createdAt);
+           const rd = toDateSafe(r.createdAt);
            return rd.toDateString() === d.toDateString();
         }).length;
 
         const scanCount = filteredScans.filter(s => {
-          const rd = s.timestamp?.toDate ? s.timestamp.toDate() : new Date(s.timestamp || s.createdAt);
+          const rd = toDateSafe((s as { timestamp?: unknown; createdAt?: unknown }).timestamp || s.createdAt);
           return rd.toDateString() === d.toDateString();
        }).length;
 
@@ -554,7 +671,7 @@ export default function DistilleryDashboard() {
      const regionsCount: Record<string, number> = {};
      let hasData = false;
      filteredScans.forEach((s) => {
-        let loc = s.city || s.locationName || "Privatna Konzumacija";
+        const loc = safeText((s as { city?: unknown; locationName?: unknown }).city) || safeText((s as { locationName?: unknown }).locationName) || "Privatna Konzumacija";
         regionsCount[loc] = (regionsCount[loc] || 0) + 1;
         hasData = true;
      });
@@ -573,7 +690,7 @@ export default function DistilleryDashboard() {
   const computeTopCitiesData = () => {
     const cityCount: Record<string, number> = {};
     filteredScans.forEach((s) => {
-      const city = s.city || "Nepoznat grad";
+      const city = safeText((s as { city?: unknown }).city) || "Nepoznat grad";
       cityCount[city] = (cityCount[city] || 0) + 1;
     });
     return Object.entries(cityCount)
@@ -586,8 +703,8 @@ export default function DistilleryDashboard() {
   const computeTopVenuesData = () => {
     const venueCount: Record<string, number> = {};
     filteredScans.forEach((s) => {
-      if (!s.isPublicVenue) return;
-      const venue = s.venueName || "";
+      if (!(s as { isPublicVenue?: boolean }).isPublicVenue) return;
+      const venue = safeText((s as { venueName?: unknown }).venueName);
       if (!venue || venue === "Privatna Konzumacija") return;
       venueCount[venue] = (venueCount[venue] || 0) + 1;
     });
@@ -630,7 +747,7 @@ export default function DistilleryDashboard() {
   const computeTimeOfDayData = () => {
      let morning = 0, afternoon = 0, evening = 0, night = 0;
      filteredRatings.forEach(r => {
-        const d = r.createdAt?.toDate ? r.createdAt.toDate() : new Date(r.createdAt);
+        const d = toDateSafe(r.createdAt);
         const hour = d.getHours();
         if (hour >= 6 && hour < 12) morning++;
         else if (hour >= 12 && hour < 18) afternoon++;
@@ -663,8 +780,8 @@ export default function DistilleryDashboard() {
   // Compute Activity Feed (Live Feed)
   const computeActivityFeed = () => {
     const combined = [
-      ...filteredRatings.map(r => ({ ...r, type: 'rating', date: r.createdAt?.toDate ? r.createdAt.toDate() : new Date(r.createdAt) })),
-      ...filteredScans.map(s => ({ ...s, type: 'scan', date: s.timestamp?.toDate ? s.timestamp.toDate() : new Date(s.timestamp || s.createdAt) }))
+      ...filteredRatings.map(r => ({ ...r, type: 'rating', date: toDateSafe(r.createdAt) })),
+      ...filteredScans.map(s => ({ ...s, type: 'scan', date: toDateSafe((s as { timestamp?: unknown; createdAt?: unknown }).timestamp || s.createdAt) }))
     ].sort((a,b) => b.date.getTime() - a.date.getTime()).slice(0, 5);
     
     // Mask identity for anonymity
@@ -680,19 +797,19 @@ export default function DistilleryDashboard() {
   const computeLoyaltyRanking = () => {
     const userStats: Record<string, { count: number, name: string, lastActive: Date, isIdentified: boolean }> = {};
     [...filteredRatings, ...filteredScans].forEach(item => {
-      const idKey = item.userId || "anonymous";
+      const idKey = safeText(item.userId) || "anonymous";
       // Even if identified (registered), we can display an alias for the owner
       const isIdentified = !!item.userEmail;
       if (!userStats[idKey]) {
         userStats[idKey] = { 
           count: 0, 
           name: safeText(item.userName) || `Gost #${idKey.slice(-4).toUpperCase()}`, 
-          lastActive: item.createdAt?.toDate ? item.createdAt.toDate() : new Date(item.createdAt || item.timestamp),
+          lastActive: toDateSafe((item as { createdAt?: unknown; timestamp?: unknown }).createdAt || (item as { timestamp?: unknown }).timestamp),
           isIdentified
         };
       }
       userStats[idKey].count++;
-      const itemDate = item.createdAt?.toDate ? item.createdAt.toDate() : new Date(item.createdAt || item.timestamp);
+      const itemDate = toDateSafe((item as { createdAt?: unknown; timestamp?: unknown }).createdAt || (item as { timestamp?: unknown }).timestamp);
       if (itemDate > userStats[idKey].lastActive) {
         userStats[idKey].lastActive = itemDate;
       }
@@ -739,7 +856,7 @@ export default function DistilleryDashboard() {
   let trialEndDate: Date | null = null;
   if (rawTrialEnd) {
     try {
-      const d = rawTrialEnd.toDate ? rawTrialEnd.toDate() : new Date(rawTrialEnd);
+      const d = toDateSafe(rawTrialEnd);
       trialEndDate = Number.isNaN(d.getTime()) ? null : d;
     } catch {
       trialEndDate = null;
@@ -757,7 +874,7 @@ export default function DistilleryDashboard() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button 
-            onClick={() => navigate(-1)}
+            onClick={goBackSafe}
             className="p-2 -ml-2 text-text-secondary hover:text-white transition-colors"
           >
             <ArrowLeft className="w-6 h-6" />
@@ -840,7 +957,7 @@ export default function DistilleryDashboard() {
 
       {dashboardTab === 'analitika' && !postTrialFrozen && (
       <div className="flex gap-2 p-1 bg-bg-card border border-border-subtle rounded-xl max-w-fit overflow-x-auto custom-scrollbar mb-4">
-        {['Danas', 'Ove Nedelje', 'Ovog Meseca', 'Prošli Mesec', 'Ove Godine', 'Sve Vreme'].map((tab: any) => (
+        {['Danas', 'Ove Nedelje', 'Ovog Meseca', 'Prošli Mesec', 'Ove Godine', 'Sve Vreme'].map((tab) => (
           <button 
             key={tab}
             onClick={() => setTimeFilter(tab)}
@@ -1039,7 +1156,7 @@ export default function DistilleryDashboard() {
                        </div>
                        {item.type === 'rating' && (
                           <div className="text-gold-500 font-bold text-[10px] flex items-center gap-0.5">
-                             {item.rating} <Star className="w-2.5 h-2.5 fill-current"/>
+                             {safeText((item as { rating?: unknown }).rating)} <Star className="w-2.5 h-2.5 fill-current"/>
                           </div>
                        )}
                     </div>
@@ -1269,9 +1386,9 @@ export default function DistilleryDashboard() {
                              <Ticket className="w-4 h-4" />
                           </div>
                           <div>
-                             <p className="text-xs font-bold text-white uppercase">{action.title}</p>
+                             <p className="text-xs font-bold text-white uppercase">{safeText((action as { title?: unknown }).title)}</p>
                              <p className="text-[9px] text-text-secondary">
-                                Cilj: {action.targetValue || 3} • Preostalo: {action.endsAt ? Math.ceil((action.endsAt.toDate ? action.endsAt.toDate().getTime() - Date.now() : new Date(action.endsAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : '?'} dana
+                               Cilj: {safeText((action as { targetValue?: unknown }).targetValue) || 3} • Preostalo: {(action as { endsAt?: unknown }).endsAt ? Math.ceil((toDateSafe((action as { endsAt?: unknown }).endsAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : '?'} dana
                              </p>
                           </div>
                        </div>
@@ -1455,8 +1572,8 @@ export default function DistilleryDashboard() {
                       await updateDoc(doc(db, "products", product.id), {
                         publicLabelDisabled: !product.publicLabelDisabled,
                       });
-                    } catch (err: any) {
-                      alert(err?.message || "Greška pri čuvanju.");
+                    } catch (err: unknown) {
+                      alert((err as { message?: string } | null)?.message || "Greška pri čuvanju.");
                     }
                   }}
                   className={cn(
@@ -2128,7 +2245,7 @@ function AddProductModal({ isOpen, onClose, distilleryId, locked }: { isOpen: bo
     "Belo vino", "Crveno/Crno vino", "Roze vino", "Penušavo vino", "Dezertno vino", "Ostala vina"
   ];
 
-  const handleSubmit = async (e: any) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (locked) {
       alert("Novi artikli se ne mogu dodavati dok probni period nije produžen ili nalog nije sertifikovan.");
@@ -2163,9 +2280,9 @@ function AddProductModal({ isOpen, onClose, distilleryId, locked }: { isOpen: bo
       await addDoc(collection(db, 'products'), docData);
       alert("Piće je uspešno uneto i poslato administratoru na odobrenje!");
       onClose();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      alert("Greška: " + err.message);
+      alert("Greška: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
     } finally {
       setIsSaving(false);
     }
@@ -2266,9 +2383,37 @@ function AddProductModal({ isOpen, onClose, distilleryId, locked }: { isOpen: bo
   );
 }
 
-function EditProductModal({ isOpen, onClose, product, onSave, minimalEdit }: any) {
+function EditProductModal({
+  isOpen,
+  onClose,
+  product,
+  onSave,
+  minimalEdit,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  product: {
+    id: string;
+    name?: string;
+    type?: string;
+    alcoholPercentage?: number;
+    description?: string;
+    bottleImageUrl?: string;
+    image?: string;
+    barcode?: string;
+  } | null;
+  onSave: () => void;
+  minimalEdit?: boolean;
+}) {
   const normalizeBarcode = (value: unknown) => String(value || "").replace(/\D/g, "");
-  const [formData, setFormData] = useState<any>(null);
+  const [formData, setFormData] = useState<{
+    name: string;
+    type: string;
+    alcoholPercentage: number;
+    description: string;
+    bottleImageUrl: string;
+    barcode: string;
+  } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -2320,8 +2465,8 @@ function EditProductModal({ isOpen, onClose, product, onSave, minimalEdit }: any
             }
             onSave();
             onClose();
-          } catch (err: any) {
-            alert("Greška: " + err.message);
+          } catch (err: unknown) {
+            alert("Greška: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
           } finally {
             setIsSaving(false);
           }
@@ -2409,8 +2554,42 @@ function EditProductModal({ isOpen, onClose, product, onSave, minimalEdit }: any
   );
 }
 
-function EditDistilleryModal({ isOpen, onClose, distillery, readOnly }: any) {
-  const [formData, setFormData] = useState<any>(null);
+function EditDistilleryModal({
+  isOpen,
+  onClose,
+  distillery,
+  readOnly,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  distillery: {
+    id: string;
+    name?: string;
+    description?: string;
+    specificNotes?: string;
+    region?: string;
+    logoUrl?: string;
+    coverImageUrl?: string;
+    galleryImages?: string[];
+    website?: string;
+    city?: string;
+    address?: string;
+    location?: { city?: string; address?: string };
+  } | null;
+  readOnly?: boolean;
+}) {
+  const [formData, setFormData] = useState<{
+    name: string;
+    description: string;
+    specificNotes: string;
+    region: string;
+    logoUrl: string;
+    coverImageUrl: string;
+    galleryImages: string[];
+    website: string;
+    city: string;
+    address: string;
+  } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -2479,8 +2658,8 @@ function EditDistilleryModal({ isOpen, onClose, distillery, readOnly }: any) {
             });
             alert("Profil uspešno ažuriran!");
             onClose();
-          } catch (err: any) {
-            alert("Greška: " + err.message);
+          } catch (err: unknown) {
+            alert("Greška: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
           } finally {
             setIsSaving(false);
           }

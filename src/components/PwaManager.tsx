@@ -1,15 +1,20 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { X, Download, Apple } from "lucide-react";
 
+type BeforeInstallPromptEventLike = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+
 export default function PwaManager() {
-  const deferredPromptRef = useRef<any>(null);
+  const deferredPromptRef = useRef<BeforeInstallPromptEventLike | null>(null);
   const [modalContent, setModalContent] = useState<{ title: string; content: React.ReactNode } | null>(null);
   const installBusyRef = useRef(false);
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
-      deferredPromptRef.current = e;
+      deferredPromptRef.current = e as BeforeInstallPromptEventLike;
     };
 
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);

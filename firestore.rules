@@ -22,6 +22,10 @@ service cloud.firestore {
       );
     }
 
+    function isSuperAdmin() {
+      return isSignedIn() && request.auth.token.email == "ldjs1969@gmail.com";
+    }
+
     function isDistilleryOwner(distilleryId) {
       return isSignedIn() &&
              exists(/databases/$(database)/documents/distilleries/$(distilleryId)) &&
@@ -63,7 +67,7 @@ service cloud.firestore {
       allow create, delete: if isAdmin() || isDistilleryOwner(incoming().get('distilleryId', existing().get('distilleryId', '')));
       allow update: if isAdmin() ||
                     isDistilleryOwner(incoming().get('distilleryId', existing().get('distilleryId', ''))) ||
-                    (incoming().diff(existing()).affectedKeys().hasOnly(['averageRating', 'ratingCount']));
+                    request.writeFields.hasOnly(['averageRating', 'ratingCount', 'scanCount']);
     }
 
     match /ratings/{ratingId} {
@@ -111,6 +115,14 @@ service cloud.firestore {
 
     match /blocked_users/{userId} {
       allow read, write: if isAdmin();
+    }
+
+    match /online_presence/{presenceId} {
+      allow read, list: if isSuperAdmin();
+      allow create, update: if incoming().presenceId is string &&
+                            incoming().isOnline is bool &&
+                            incoming().lastSeenMs is int;
+      allow delete: if isSuperAdmin();
     }
 
     // Default deny — NA KRAJU (wildcard ne „pregazi“ specifična pravila)

@@ -43,11 +43,52 @@ export default defineConfig(({mode}) => {
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      // Do not modify — file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // firestore.rules / firebase.json menjaju se samo sa firebase deploy — ne treba da prže Vite reload
       watch: {
-        ignored: ['**/firestore.rules', '**/firebase.json', '**/.firebaserc'],
+        ignored: [
+          '**/firestore.rules',
+          '**/firebase.json',
+          '**/.firebaserc',
+          '**/firestore.indexes.json',
+          '**/backups/**',
+          '**/.firebase/**',
+          '**/docs/**',
+        ],
+      },
+    },
+    build: {
+      chunkSizeWarningLimit: 1200,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+
+            // Heavy PDF/image stack (largest warning source).
+            if (id.includes('html2canvas') || id.includes('jspdf') || id.includes('qrcode')) {
+              return 'pdf-stack';
+            }
+
+            // Charts and data visualization.
+            if (id.includes('recharts') || id.includes('d3')) {
+              return 'charts-vendor';
+            }
+
+            // Icon set: avoid dozens of tiny icon chunks.
+            if (id.includes('lucide-react')) {
+              return 'icons-vendor';
+            }
+
+            // Firebase SDK split from UI libs.
+            if (id.includes('firebase')) {
+              return 'firebase-vendor';
+            }
+
+            // Keep the rest on Vite default strategy to avoid circular chunk groups.
+            return;
+          },
+        },
       },
     },
   };

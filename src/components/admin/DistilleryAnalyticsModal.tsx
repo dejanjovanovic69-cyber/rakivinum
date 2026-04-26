@@ -15,13 +15,20 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, 
   LineChart, Line, CartesianGrid, PieChart, Pie, Cell 
 } from 'recharts';
-import { GoogleGenAI } from '@google/genai';
-import { jsPDF } from 'jspdf';
 
 interface AnalyticsModalProps {
-  distillery: any;
+  distillery: { id: string; name?: string };
   onClose: () => void;
 }
+
+type ProductRow = {
+  id: string;
+  name?: string;
+  scanCount?: number;
+  ratingCount?: number;
+  averageRating?: number;
+};
+type RatingRow = { rating?: number; productId?: string; reviewText?: string };
 
 const COLORS = [
   "var(--color-gold-500)",
@@ -33,8 +40,8 @@ const COLORS = [
 
 export default function DistilleryAnalyticsModal({ distillery, onClose }: AnalyticsModalProps) {
   const [loading, setLoading] = useState(true);
-  const [products, setProducts] = useState<any[]>([]);
-  const [ratings, setRatings] = useState<any[]>([]);
+  const [products, setProducts] = useState<ProductRow[]>([]);
+  const [ratings, setRatings] = useState<RatingRow[]>([]);
   const [aiSummary, setAiSummary] = useState<string>('');
   const [generatingAi, setGeneratingAi] = useState(false);
   /** Prosečna ocena na uzorku platforme (isključujući vaše proizvode kad je uzorak dovoljno velik), inače null. */
@@ -49,7 +56,7 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
     setLoading(true);
     try {
       // 1. Fetch products
-      const qProd = query(collection(db, 'products'), where('distilleryId', '==', distillery.id));
+      const qProd = query(collection(db, "products"), where("distilleryId", "==", distillery.id), limit(500));
       const pSnap = await getDocs(qProd);
       const prodData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       setProducts(prodData);
@@ -73,7 +80,7 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
         const chunk = pIds.slice(i, i + 10);
         if (chunk.length === 0) continue;
         try {
-          const qRat = query(collection(db, 'ratings'), where('productId', 'in', chunk));
+          const qRat = query(collection(db, "ratings"), where("productId", "in", chunk), limit(120));
           const rSnap = await getDocs(qRat);
           addRatingSnap(rSnap);
         } catch (e) {
@@ -142,6 +149,7 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
       }
 
       // AI Studio injects GEMINI_API_KEY into process.env.GEMINI_API_KEY via vite.config.ts
+      const { GoogleGenAI } = await import('@google/genai');
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const prompt = `Ti si somelijer i ekspert za balkanske rakije. Pročitaj ove recenzije za proizvode destilerije "${distillery.name}":\n\n${texts}\n\nNapiši profesionalni, ohrabrujući poslovni izveštaj (do 150 reči) namenjen menadžmentu ove destilerije. Istakni šta kupci najviše vole i na šta eventualno treba obratiti pažnju. Zadrži poslovni, autoritativni i pozitivan ton B2B konsultanta.`;
 
@@ -159,7 +167,8 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
     }
   };
 
-  const exportPDF = () => {
+  const exportPDF = async () => {
+    const { jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const GOLD = [184, 134, 11];
     
@@ -205,7 +214,7 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
       doc.setFontSize(10);
       
       const splitText = doc.splitTextToSize(aiSummary.replace(/[čćžšđČĆŽŠĐ]/g, match => {
-        const charMap: any = { 'č':'c', 'ć':'c', 'ž':'z', 'š':'s', 'đ':'d', 'Č':'C', 'Ć':'C', 'Ž':'Z', 'Š':'S', 'Đ':'D' };
+        const charMap: Record<string, string> = { 'č':'c', 'ć':'c', 'ž':'z', 'š':'s', 'đ':'d', 'Č':'C', 'Ć':'C', 'Ž':'Z', 'Š':'S', 'Đ':'D' };
         return charMap[match] || match;
       }), 170);
       

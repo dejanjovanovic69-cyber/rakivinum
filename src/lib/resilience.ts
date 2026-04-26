@@ -4,8 +4,9 @@ type CacheEnvelope<T> = {
 };
 
 export function isQuotaError(err: unknown): boolean {
-  const code = String((err as any)?.code || "").toLowerCase();
-  const msg = String((err as any)?.message || "").toLowerCase();
+  const e = err as { code?: unknown; message?: unknown } | null;
+  const code = String(e?.code || "").toLowerCase();
+  const msg = String(e?.message || "").toLowerCase();
   return code.includes("resource-exhausted") || msg.includes("quota") || msg.includes("resource exhausted");
 }
 

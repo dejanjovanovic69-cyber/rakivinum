@@ -2,6 +2,8 @@ import { addDoc, collection, doc, increment, serverTimestamp, updateDoc } from "
 import { auth, db } from "./firebase";
 import { recordScanAchievement } from "./achievements";
 
+const ENABLE_SCANCOUNT_WRITE = String(import.meta.env.VITE_ENABLE_SCANCOUNT_WRITE || "") === "1";
+
 const enrichScanLocation = async (lat: number, lng: number) => {
   const fallback = {
     city: "Privatna Konzumacija",
@@ -105,12 +107,17 @@ export async function logProductScan(
       source,
     });
 
-    try {
-      await updateDoc(doc(db, "products", finalProductId), {
-        scanCount: increment(1),
-      });
-    } catch (e) {
-      console.warn("Could not increment scan count", e);
+    if (ENABLE_SCANCOUNT_WRITE) {
+      try {
+        await updateDoc(doc(db, "products", finalProductId), {
+          scanCount: increment(1),
+        });
+      } catch (e) {
+        const code = String((e as { code?: unknown } | null)?.code || "");
+        if (!code.includes("permission-denied")) {
+          console.warn("Could not increment scan count", e);
+        }
+      }
     }
 
     recordScanAchievement(finalProductData?.type);

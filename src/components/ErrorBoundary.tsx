@@ -14,7 +14,7 @@ interface State {
 export class ErrorBoundary extends React.Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    (this as any).state = {
+    this.state = {
       hasError: false,
       error: null,
       componentStack: "",
@@ -23,7 +23,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
   public static getDerivedStateFromError(error: Error): State {
     // Update state so the next render will show the fallback UI.
-    return { hasError: true, error };
+    return { hasError: true, error, componentStack: "" };
   }
 
   public componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
@@ -32,10 +32,10 @@ export class ErrorBoundary extends React.Component<Props, State> {
   }
 
   public render() {
-    if ((this as any).state.hasError) {
+    if (this.state.hasError) {
       let errorMessage = "Došlo je do neočekivane greške.";
-      let details = (this as any).state.error?.message;
-      const stack = (this as any).state.componentStack as string;
+      let details = this.state.error?.message;
+      const stack = this.state.componentStack;
 
       // Try parsing Firebase error context if it exists
       try {
@@ -78,6 +78,6 @@ export class ErrorBoundary extends React.Component<Props, State> {
       );
     }
 
-    return (this as any).props.children;
+    return this.props.children;
   }
 }

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { useSearchParams, useNavigate } from "react-router-dom";
+import { useSearchParams, useLocation, useNavigate } from "react-router-dom";
 import { 
   Droplet, 
   Flame, 
@@ -22,16 +22,26 @@ import { cn } from "../lib/utils";
 import { WorkshopField, WorkshopResult, WorkshopCard } from "../components/WorkshopComponents";
 
 // --- History Logic ---
+type HistoryInputs = Record<string, string | number>;
+type HistoryEntry = {
+  id: number;
+  toolLabel: string;
+  result: string;
+  inputs: HistoryInputs;
+  timestamp: string;
+};
+type ToolSaveHandler = (res: string, inputs: HistoryInputs) => void;
+
 function useWorkshopHistory() {
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
 
   useEffect(() => {
     const saved = localStorage.getItem('workshop_history');
     if (saved) setHistory(JSON.parse(saved));
   }, []);
 
-  const saveToHistory = (toolLabel: string, result: string, inputs: any) => {
-    const newItem = {
+  const saveToHistory = (toolLabel: string, result: string, inputs: HistoryInputs) => {
+    const newItem: HistoryEntry = {
       id: Date.now(),
       toolLabel,
       result,
@@ -53,7 +63,7 @@ function useWorkshopHistory() {
 
 // --- Tool Implementations ---
 
-function Komina({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function Komina({ onSave }: { onSave: ToolSaveHandler }) {
   const [brix, setBrix] = useState(18);
   const babo = brix * 0.85;
   const oechsle = brix * 4.25;
@@ -89,7 +99,7 @@ function Komina({ onSave }: { onSave: (res: string, inputs: any) => void }) {
   );
 }
 
-function Razblazivanje({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function Razblazivanje({ onSave }: { onSave: ToolSaveHandler }) {
   const [liters, setLiters] = useState(10);
   const [currentPct, setCurrentPct] = useState(65);
   const [targetPct, setTargetPct] = useState(42);
@@ -142,7 +152,7 @@ function Razblazivanje({ onSave }: { onSave: (res: string, inputs: any) => void 
   );
 }
 
-function Prvenac({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function Prvenac({ onSave }: { onSave: ToolSaveHandler }) {
   const [voce, setVoce] = useState("Šljiva (1%)");
   const [meka, setMeka] = useState(100);
   
@@ -199,7 +209,7 @@ function Prvenac({ onSave }: { onSave: (res: string, inputs: any) => void }) {
   );
 }
 
-function Kvasci({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function Kvasci({ onSave }: { onSave: ToolSaveHandler }) {
   const [kg, setKg] = useState(100);
 
   return (
@@ -228,7 +238,7 @@ function Kvasci({ onSave }: { onSave: (res: string, inputs: any) => void }) {
   );
 }
 
-function Patoka({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function Patoka({ onSave }: { onSave: ToolSaveHandler }) {
   const [voce, setVoce] = useState("Šljiva");
   const saveti: Record<string, string> = {
     "Šljiva": "40 - 45%",
@@ -285,7 +295,7 @@ function Patoka({ onSave }: { onSave: (res: string, inputs: any) => void }) {
   );
 }
 
-function Kupaza({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function Kupaza({ onSave }: { onSave: ToolSaveHandler }) {
   const [v1, setV1] = useState(10);
   const [j1, setJ1] = useState(60);
   const [v2, setV2] = useState(5);
@@ -333,7 +343,7 @@ function Kupaza({ onSave }: { onSave: (res: string, inputs: any) => void }) {
   );
 }
 
-function Temperatura({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function Temperatura({ onSave }: { onSave: ToolSaveHandler }) {
   const [j, setJ] = useState(45);
   const [t, setT] = useState(15);
   const s = j + (20 - t) * 0.3;
@@ -370,7 +380,7 @@ function Temperatura({ onSave }: { onSave: (res: string, inputs: any) => void })
   );
 }
 
-function Bure({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function Bure({ onSave }: { onSave: ToolSaveHandler }) {
   const [h, setH] = useState(70);
   const [ds, setDs] = useState(60);
   const [dk, setDk] = useState(50);
@@ -415,7 +425,7 @@ function Bure({ onSave }: { onSave: (res: string, inputs: any) => void }) {
 
 // --- Wine Tools ---
 
-function VinskiSecer({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function VinskiSecer({ onSave }: { onSave: ToolSaveHandler }) {
   const [brix, setBrix] = useState(20);
   const alc = brix * 0.59;
   const babo = brix * 0.85;
@@ -439,7 +449,7 @@ function VinskiSecer({ onSave }: { onSave: (res: string, inputs: any) => void })
   );
 }
 
-function Sumporisanje({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function Sumporisanje({ onSave }: { onSave: ToolSaveHandler }) {
   const [liters, setLiters] = useState(100);
   const [target, setTarget] = useState(30);
   const [current, setCurrent] = useState(10);
@@ -470,7 +480,7 @@ function Sumporisanje({ onSave }: { onSave: (res: string, inputs: any) => void }
   );
 }
 
-function KiselostVina({ onSave }: { onSave: (res: string, inputs: any) => void }) {
+function KiselostVina({ onSave }: { onSave: ToolSaveHandler }) {
   const [liters, setLiters] = useState(100);
   const [currentAcidity, setCurrentAcidity] = useState(5);
   const [targetAcidity, setTargetAcidity] = useState(6.5);
@@ -519,8 +529,23 @@ const TOOLS = [
 
 export default function Workshop() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const goBackSafe = () => {
+    const navState = location.state as { returnTo?: string } | null;
+    if (navState?.returnTo) {
+      navigate(navState.returnTo);
+      return;
+    }
+    const rt = new URLSearchParams(location.search).get("rt");
+    if (rt) {
+      navigate(rt);
+      return;
+    }
+    navigate("/menu", { replace: true });
+  };
   const [searchParams, setSearchParams] = useSearchParams();
-  const [category, setCategory] = useState<'rakija' | 'vino'>( (searchParams.get("cat") as any) || "rakija");
+  const initialCategory = searchParams.get("cat") === "vino" ? "vino" : "rakija";
+  const [category, setCategory] = useState<'rakija' | 'vino'>(initialCategory);
   const currentTabId = searchParams.get("tab") || (category === 'rakija' ? "komina" : "vinski_secer");
   const { history, saveToHistory, clearHistory } = useWorkshopHistory();
   const [showHistory, setShowHistory] = useState(false);
@@ -535,7 +560,7 @@ export default function Workshop() {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center gap-4">
-          <button onClick={() => navigate(-1)} className="p-2 -ml-2 text-text-secondary hover:text-white transition-colors">
+          <button onClick={goBackSafe} className="p-2 -ml-2 text-text-secondary hover:text-white transition-colors">
             <ArrowLeft className="w-6 h-6" />
           </button>
           <div className="space-y-1">

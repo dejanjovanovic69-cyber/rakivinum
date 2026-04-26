@@ -1,4 +1,4 @@
-Cloudflare Faza 2 - Prvi Worker Read API
+﻿Cloudflare Faza 2 - Prvi Worker Read API
 =======================================
 
 Sta je uradjeno u kodu:
@@ -53,11 +53,12 @@ Faza 3 status (startovan):
   - `/api/public/club-actions`
   - `/api/public/club-memberships/:visitorId`
   - `/api/public/license/:token`
-  - `/api/public/community-links?limit=...` (pomoćni linkovi u meniju)
+  - `/api/public/community-links?limit=...` (pomocni linkovi u meniju)
   - `/api/public/products-by-distillery/:distilleryId?limit=...`
   - `/api/public/club-actions-by-distillery/:distilleryId?limit=...`
-  - `/api/public/club-membership-count/:distilleryId` (broj članova kluba, do ~2500 po upitu)
+  - `/api/public/club-membership-count/:distilleryId` (tacan broj clanova kluba (agregacija))
   - `/api/public/product-lookup?n=...&r=...` (barkod: `barcodeNormalized` pa `barcode`)
+  - /api/public/scan-clusters/:productId?limit=... (agregovani top regioni skenova)
 - Frontend `Distillery` je prebacen na worker-first read tok (uz Firebase fallback).
 - Deploy i verifikacija uradjeni (`rakivinum.pages.dev`).
 
@@ -66,4 +67,7 @@ Operativne komande:
   - `npm run cf:deploy:resilient`
 - Brzi smoke svih glavnih ruta:
   - `npm run cf:smoke:edge`
+
+
+
 

@@ -2,10 +2,69 @@ import { Users as UsersIcon, ChevronRight, MapPin, Star, Loader2, MessageCircle,
 import { useNavigate, useLocation } from "react-router-dom";
 import React, { useState, useEffect } from "react";
 import { db } from "../lib/firebase";
-import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { doc, updateDoc } from "firebase/firestore";
 import { cn } from "../lib/utils";
-import { isQuotaError } from "../lib/resilience";
-import { fetchCommunityEvents, fetchPublicDistilleries, fetchPublicProducts } from "../lib/dataService";
+import { isQuotaError, readCache } from "../lib/resilience";
+import { fetchCommunityEvents, fetchCommunityRatings, fetchPublicDistilleries, fetchPublicProducts } from "../lib/dataService";
+import { shouldRunRefresh } from "../lib/refreshGate";
+import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
+
+type RatingItem = {
+  id: string;
+  productId: string;
+  productName?: string;
+  productImage?: string;
+  rating: number;
+  reviewText?: string;
+  comment?: string;
+  userLocation?: string;
+  createdAt?: { seconds?: number; toDate?: () => Date } | string | Date | null;
+  isFlagged?: boolean;
+};
+
+type ProductItem = {
+  id: string;
+  name?: string;
+  type?: string;
+  category?: string;
+  distillery?: string;
+  distilleryId?: string;
+  image?: string;
+  bottleImageUrl?: string;
+  averageRating?: number;
+  alcoholPercentage?: number;
+  _sum?: number;
+  _count?: number;
+};
+
+type DistilleryItem = {
+  id: string;
+  name?: string;
+  region?: string;
+  logoUrl?: string;
+  isVerified?: boolean;
+  location?: { city?: string; address?: string } | string;
+};
+
+type CommunityEventItem = {
+  id: string;
+  eventDate?: string;
+  title?: string;
+  location?: string;
+  description?: string;
+  websiteUrl?: string;
+  link?: string;
+  mapsUrl?: string;
+  [key: string]: unknown;
+};
+
+type ComparePersistState = {
+  filter?: string;
+  leftQuery?: string;
+  rightQuery?: string;
+  leftId?: string;
+  rightId?: string;
+};
 
 function safeStr(v: unknown): string {
   if (typeof v === "string") return v;
@@ -17,21 +76,34 @@ function safeStr(v: unknown): string {
   return "";
 }
 
+function formatRatingDate(value: RatingItem["createdAt"]): string {
+  if (!value) return "Sada";
+  if (typeof value === "string") {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? "Sada" : d.toLocaleDateString("sr-RS");
+  }
+  if (value instanceof Date) return value.toLocaleDateString("sr-RS");
+  if (typeof value === "object" && value !== null && typeof (value as { toDate?: () => Date }).toDate === "function") {
+    return (value as { toDate: () => Date }).toDate().toLocaleDateString("sr-RS");
+  }
+  return "Sada";
+}
+
 export default function Community() {
   const PRODUCTS_FETCH_LIMIT = 350;
   const DISTILLERIES_FETCH_LIMIT = 220;
   const EVENTS_FETCH_LIMIT = 60;
-  const [ratings, setRatings] = useState<any[]>([]);
+  const [ratings, setRatings] = useState<RatingItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeSection, setActiveSection] = useState<"reviews" | "tops" | "compare" | "producers" | "events">("reviews");
-  const [products, setProducts] = useState<any[]>([]);
-  const [distilleries, setDistilleries] = useState<any[]>([]);
+  const [activeSection, setActiveSection] = useState<"reviews" | "tops" | "compare" | "producers" | "search" | "events">("reviews");
+  const [products, setProducts] = useState<ProductItem[]>([]);
+  const [distilleries, setDistilleries] = useState<DistilleryItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [activeProductFilter, setActiveProductFilter] = useState("all");
   const [producerView, setProducerView] = useState<"regions" | "list">("regions");
   const [selectedRegion, setSelectedRegion] = useState("");
-  const [communityEvents, setCommunityEvents] = useState<any[]>([]);
+  const [communityEvents, setCommunityEvents] = useState<CommunityEventItem[]>([]);
   const [eventsView, setEventsView] = useState<"active" | "archive">("active");
   const [isCatalogLoaded, setIsCatalogLoaded] = useState(false);
   const [producerSearch, setProducerSearch] = useState("");
@@ -69,19 +141,25 @@ export default function Community() {
   ];
 
   useEffect(() => {
-    const qRatings = query(collection(db, "ratings"), orderBy("createdAt", "desc"), limit(20));
-    const unsubscribeRatings = onSnapshot(
-      qRatings,
-      (snapshot) => {
-        setRatings(snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as any)).filter((r) => !r.isFlagged));
-        setLoading(false);
-      },
-      (error) => {
-        console.error("Community ratings snapshot error:", error);
+    let cancelled = false;
+    const refreshRatings = async () => {
+      if (!shouldRunRefresh("community:ratings", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      try {
+        const rows = await fetchCommunityRatings({
+          limitCount: 20,
+          cacheKey: "rakivinum_cache_community_ratings_v1",
+          ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
+        });
+        if (!cancelled) {
+          setRatings(rows.filter((r) => !r.isFlagged) as RatingItem[]);
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error("Community ratings refresh error:", error);
         if (isQuotaError(error)) setQuotaExceeded(true);
-        setLoading(false);
-      },
-    );
+        if (!cancelled) setLoading(false);
+      }
+    };
 
     const fetchDataForSearch = async () => {
       try {
@@ -90,12 +168,12 @@ export default function Community() {
           fetchPublicProducts({
             limitCount: PRODUCTS_FETCH_LIMIT,
             cacheKey: "rakivinum_cache_community_products_v1",
-            ttlMs: 15 * 60 * 1000,
+            ttlMs: CACHE_TTL.PRODUCTS_6H,
           }),
           fetchPublicDistilleries({
             limitCount: DISTILLERIES_FETCH_LIMIT,
             cacheKey: "rakivinum_cache_community_distilleries_v1",
-            ttlMs: 15 * 60 * 1000,
+            ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
           }),
         ]);
 
@@ -104,7 +182,7 @@ export default function Community() {
         } else {
           console.error("Error fetching products:", prodResult.reason);
           if (isQuotaError(prodResult.reason)) setQuotaExceeded(true);
-          const cachedProducts = readCache<any[]>("rakivinum_cache_community_products_v1");
+          const cachedProducts = readCache<ProductItem[]>("rakivinum_cache_community_products_v1");
           if (cachedProducts && cachedProducts.length > 0) setProducts(cachedProducts);
         }
 
@@ -113,7 +191,7 @@ export default function Community() {
         } else {
           console.error("Error fetching distilleries:", distResult.reason);
           if (isQuotaError(distResult.reason)) setQuotaExceeded(true);
-          const cachedDistilleries = readCache<any[]>("rakivinum_cache_community_distilleries_v1");
+          const cachedDistilleries = readCache<DistilleryItem[]>("rakivinum_cache_community_distilleries_v1");
           setDistilleries(cachedDistilleries || []);
         }
       } catch (error) {
@@ -127,25 +205,40 @@ export default function Community() {
         const events = await fetchCommunityEvents({
           limitCount: EVENTS_FETCH_LIMIT,
           cacheKey: "rakivinum_cache_community_events_v1",
-          ttlMs: 15 * 60 * 1000,
+          ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
         });
         setCommunityEvents(events);
       } catch (err) {
         if (isQuotaError(err)) setQuotaExceeded(true);
-        const cachedEvents = readCache<any[]>("rakivinum_cache_community_events_v1");
+        const cachedEvents = readCache<CommunityEventItem[]>("rakivinum_cache_community_events_v1");
         if (cachedEvents) setCommunityEvents(cachedEvents);
       }
     };
 
+    void refreshRatings();
     fetchDataForSearch();
-    return () => unsubscribeRatings();
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshRatings();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
+    };
   }, []);
 
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem("rakivinum_community_compare_v1");
       if (!raw) return;
-      const parsed = JSON.parse(raw) as any;
+      const parsed = JSON.parse(raw) as ComparePersistState;
       if (typeof parsed?.filter === "string") setCompareFilter(parsed.filter);
       if (typeof parsed?.leftQuery === "string") setCompareLeftQuery(parsed.leftQuery);
       if (typeof parsed?.rightQuery === "string") setCompareRightQuery(parsed.rightQuery);
@@ -159,8 +252,15 @@ export default function Community() {
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const tab = params.get("tab");
-    if (tab === "reviews" || tab === "tops" || tab === "compare" || tab === "producers" || tab === "events") {
+    if (tab === "reviews" || tab === "tops" || tab === "compare" || tab === "producers" || tab === "search" || tab === "events") {
       setActiveSection(tab);
+    }
+    if (tab === "search") {
+      const q = params.get("q");
+      const pf = params.get("pf");
+      const allowed = new Set(filterOptions.map((x) => x.id));
+      if (typeof q === "string") setSearchQuery(q);
+      if (pf && allowed.has(pf)) setActiveProductFilter(pf);
     }
     if (tab === "compare") {
       const cf = params.get("cf");
@@ -194,17 +294,29 @@ export default function Community() {
     }
   }, [compareFilter, compareLeftQuery, compareRightQuery, compareLeftId, compareRightId]);
 
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("rakivinum_last_community_tab_v1", activeSection);
+    } catch {
+      // best effort persistence
+    }
+    if (activeSection !== "search" && searchQuery) {
+      setSearchQuery("");
+      setIsSearching(false);
+    }
+  }, [activeSection, searchQuery]);
+
   const normalizeText = (value: unknown) =>
     String(value || "").toLowerCase()
       .replace(/š/g, "s").replace(/č/g, "c").replace(/ć/g, "c")
       .replace(/ž/g, "z").replace(/đ/g, "dj");
 
-  const isWineProduct = (p: any) => {
+  const isWineProduct = (p: ProductItem) => {
     const t = `${normalizeText(p?.name)} ${normalizeText(p?.type)} ${normalizeText(p?.category)}`;
     return t.includes("vino") || t.includes("wine");
   };
 
-  const matchesProductFilter = (p: any) => {
+  const matchesProductFilter = (p: ProductItem) => {
     if (activeProductFilter === "all") return true;
     const t = `${normalizeText(p?.name)} ${normalizeText(p?.type)} ${normalizeText(p?.category)}`;
     if (activeProductFilter === "sve-rakije") return !isWineProduct(p);
@@ -219,8 +331,8 @@ export default function Community() {
   };
 
   const ratedProductsFallback = React.useMemo(() => {
-    const grouped = new Map<string, { id: string; name: string; type: string; averageRating: number; _sum: number; _count: number; image?: string }>();
-    ratings.forEach((r: any) => {
+    const grouped = new Map<string, ProductItem>();
+    ratings.forEach((r) => {
       const id = String(r?.productId || "");
       if (!id) return;
       const prev = grouped.get(id) || {
@@ -233,9 +345,9 @@ export default function Community() {
         image: safeStr(r?.productImage) || "",
       };
       const ratingVal = typeof r?.rating === "number" && Number.isFinite(r.rating) ? r.rating : 0;
-      prev._sum += ratingVal;
-      prev._count += ratingVal > 0 ? 1 : 0;
-      prev.averageRating = prev._count > 0 ? prev._sum / prev._count : 0;
+      prev._sum = (prev._sum || 0) + ratingVal;
+      prev._count = (prev._count || 0) + (ratingVal > 0 ? 1 : 0);
+      prev.averageRating = (prev._count || 0) > 0 ? (prev._sum || 0) / (prev._count || 0) : 0;
       grouped.set(id, prev);
     });
     return Array.from(grouped.values());
@@ -249,10 +361,15 @@ export default function Community() {
     return matchesSearch && matchesProductFilter(p);
   });
   const filteredDistilleries = distilleries.filter((d) =>
+    {
+      const loc = typeof d.location === "object" && d.location !== null ? d.location : null;
+      return (
     normalizeText(d.name).includes(nq) ||
-    normalizeText(d.location?.address).includes(nq) ||
-    normalizeText(d.location?.city).includes(nq) ||
-    normalizeText(d.region).includes(nq),
+    normalizeText(loc?.address).includes(nq) ||
+    normalizeText(loc?.city).includes(nq) ||
+    normalizeText(d.region).includes(nq)
+      );
+    }
   );
   const filteredMapDistilleries = distilleries
     .filter((d) => {
@@ -265,8 +382,9 @@ export default function Community() {
     .filter((d) => {
       const q = normalizeText(producerSearch.trim());
       if (!q) return true;
+      const loc = typeof d.location === "object" && d.location !== null ? d.location : null;
       return normalizeText(d.name).includes(q) || normalizeText(d.region).includes(q) ||
-        normalizeText(d.location?.city).includes(q) || normalizeText(d.location?.address).includes(q);
+        normalizeText(loc?.city).includes(q) || normalizeText(loc?.address).includes(q);
     });
 
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -274,12 +392,10 @@ export default function Community() {
     ? communityEvents.filter((ev) => !ev.eventDate || String(ev.eventDate) >= todayIso)
     : communityEvents.filter((ev) => ev.eventDate && String(ev.eventDate) < todayIso));
   const hasSearchQuery = searchQuery.trim() !== "";
-  // Results mode is only for explicit search.
-  // Filters should not hide core community tabs and ratings feed.
-  const isResultsMode = hasSearchQuery;
-  const activeProductIds = new Set(catalogProducts.map((p: any) => p.id));
+  const isResultsMode = activeSection === "search";
+  const activeProductIds = new Set(catalogProducts.map((p) => p.id));
   // If catalog is unavailable/empty, never hide existing ratings.
-  const visibleRatings = activeProductIds.size > 0 ? ratings.filter((r: any) => activeProductIds.has(r.productId)) : ratings;
+  const visibleRatings = activeProductIds.size > 0 ? ratings.filter((r) => activeProductIds.has(r.productId)) : ratings;
 
   const handleReport = async (e: React.MouseEvent, ratingId: string) => {
     e.stopPropagation();
@@ -299,7 +415,7 @@ export default function Community() {
       active ? "bg-gold-500 text-black shadow-[0_4px_12px_rgba(212,175,55,0.22)]" : "text-text-secondary hover:text-white",
     );
 
-  const distLocation = (d: any) =>
+  const distLocation = (d: DistilleryItem) =>
     typeof d.location === "string" ? d.location :
     (d.location?.city || d.location?.address)
       ? [d.location.city, d.location.address].filter(Boolean).join(", ")
@@ -359,39 +475,36 @@ export default function Community() {
     setCompareLeftQuery("");
     setCompareRightQuery("");
   };
+  const searchReturnTo = `/community?tab=search&q=${encodeURIComponent(searchQuery)}&pf=${encodeURIComponent(activeProductFilter)}`;
+  const reviewsReturnTo = `/community?tab=reviews`;
+  const topsReturnTo = `/community?tab=tops`;
+  const labelHref = (productId: string, returnTo: string) =>
+    `/label/${productId}?rt=${encodeURIComponent(returnTo)}`;
+  const openLabelWithReturn = (productId: string, returnTo: string) => {
+    try {
+      sessionStorage.setItem("rakivinum_last_label_return_v1", returnTo);
+      sessionStorage.setItem("rakivinum_last_community_return_v1", returnTo);
+      const tab = returnTo.includes("tab=") ? returnTo.split("tab=")[1]?.split("&")[0] : activeSection;
+      if (tab) sessionStorage.setItem("rakivinum_last_community_tab_v1", tab);
+    } catch {
+      // best effort
+    }
+    navigate(labelHref(productId, returnTo), { state: { returnTo } });
+  };
 
   return (
       <div className="p-4 space-y-5 animate-in fade-in duration-300 pb-24">
 
       {/* Header */}
-      <div className="space-y-1">
-        <h2 className="page-title">Zajednica</h2>
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <h2 className="page-title">Zajednica</h2>
+        </div>
         <p className="page-subtitle">Utisci, top liste i sertifikovani proizvođači.</p>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-text-secondary pointer-events-none" aria-hidden />
-        <input
-          type="search"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          onFocus={() => setIsSearching(true)}
-          placeholder="Pretraži proizvode, destilerije, vinarije…"
-          className="w-full card-elevated border border-white/10 rounded-2xl py-4 pl-12 pr-12 text-white text-sm transition-all"
-          autoComplete="off"
-        />
-        {searchQuery && (
-          <button type="button" onClick={() => { setSearchQuery(""); setIsSearching(false); }}
-            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full text-text-secondary hover:text-white hover:bg-white/10 transition-colors"
-            aria-label="Obriši">
-            <X className="w-4 h-4" />
-          </button>
-        )}
-      </div>
-
-      {/* Filter pills — only shown on reviews/tops tabs */}
-      {(activeSection === "reviews" || activeSection === "tops") && !hasSearchQuery && (
+      {/* Filter pills — only shown on Search tab */}
+      {activeSection === "search" && (
         <div className="overflow-x-auto grab-scrollbar -mx-4 px-4 pb-1">
           <div className="flex gap-2 min-w-max">
             {filterOptions.map((opt) => (
@@ -411,14 +524,47 @@ export default function Community() {
       {/* ══ RESULTS MODE ══ */}
       {isResultsMode ? (
         <div className="space-y-6 animate-in fade-in">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] uppercase tracking-widest font-bold text-text-secondary">Pretraga</p>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveSection("reviews");
+                navigate("/community?tab=reviews", { replace: true });
+              }}
+              className="px-3 py-1.5 rounded-full border border-white/15 text-[10px] font-black uppercase tracking-wide text-text-secondary hover:text-white hover:border-white/35 transition-colors"
+            >
+              Nazad u Zajednicu
+            </button>
+          </div>
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-text-secondary pointer-events-none" aria-hidden />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => setIsSearching(true)}
+              placeholder="Pretraži proizvode, destilerije, vinarije…"
+              className="w-full card-elevated border border-white/25 rounded-2xl py-4 pl-12 pr-12 text-white text-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/35 focus-visible:border-gold-500/35"
+              autoComplete="off"
+            />
+            {searchQuery && (
+              <button type="button" onClick={() => { setSearchQuery(""); setIsSearching(false); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full text-text-secondary hover:text-white hover:bg-white/10 transition-colors"
+                aria-label="Obriši">
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
           {filteredProducts.length > 0 && (
             <div className="space-y-3">
               <h3 className="section-title px-1">Proizvodi ({filteredProducts.length})</h3>
               <div className="grid grid-cols-2 gap-3">
                 {filteredProducts.map((prod) => (
-                  <button key={prod.id} type="button" onClick={() => navigate(`/label/${prod.id}`)}
+                  <button key={prod.id} type="button" onClick={() => openLabelWithReturn(prod.id, searchReturnTo)}
                     className="card-elevated border border-white/8 rounded-[20px] p-3.5 flex flex-col items-center gap-2.5 text-center hover:border-gold-500/30 transition-all active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base">
-                    <div className="w-16 h-20 rounded-xl bg-black/60 border border-white/8 flex items-center justify-center overflow-hidden">
+                    <div className="w-16 h-20 rounded-xl bg-black/60 border border-gold-500/45 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.16)] flex items-center justify-center overflow-hidden">
                       <img src={prod.bottleImageUrl || prod.image || `https://picsum.photos/seed/${prod.id}/200/300`}
                         className="h-full w-full object-contain object-center media-crisp p-0.5"
                         onError={(e) => { (e.target as HTMLImageElement).src = "https://picsum.photos/seed/rakivinum/200/200"; }}
@@ -452,11 +598,11 @@ export default function Community() {
             </div>
           )}
 
-          {filteredProducts.length === 0 && (!hasSearchQuery || filteredDistilleries.length === 0) && (
+          {hasSearchQuery && filteredProducts.length === 0 && filteredDistilleries.length === 0 && (
             <div className="empty-state card-elevated max-w-md mx-auto py-10 px-6 text-center space-y-4 rounded-[28px]">
               <SearchSlash className="w-10 h-10 text-gold-500/35 mx-auto" aria-hidden />
               <p className="text-sm text-text-secondary leading-relaxed">
-                {hasSearchQuery ? `Nema rezultata za „${searchQuery}"` : "Nema rezultata za izabrani filter."}
+                {`Nema rezultata za „${searchQuery}"`}
               </p>
               <button type="button" onClick={() => { setActiveProductFilter("all"); setSearchQuery(""); setSelectedRegion(""); setProducerView("regions"); }}
                 className="w-full max-w-xs mx-auto py-2.5 btn-tertiary text-[11px]">
@@ -471,28 +617,35 @@ export default function Community() {
         <div className="space-y-5">
 
           {/* ── Single flat tab bar ── */}
-          <div className="flex gap-1 p-1 card-elevated border border-white/10 rounded-2xl">
-            {([
-              { id: "reviews", label: "Utisci" },
-              { id: "tops",    label: "Top 10" },
-              { id: "compare", label: "Uporedi", icon: <Scale className="w-3 h-3" /> },
-              { id: "producers", label: "Destilerije", icon: <Compass className="w-3 h-3" /> },
-              { id: "events", label: "Događaji", icon: <CalendarDays className="w-3 h-3" /> },
-            ] as const).map((tab) => (
-              <button key={tab.id} type="button"
-                onClick={() => {
-                  setActiveSection(tab.id);
-                  navigate(`/community?tab=${tab.id}`, { replace: true });
-                }}
-                className={cn(
-                  "flex-1 min-h-[44px] px-1 py-2.5 text-[9px] font-black uppercase tracking-wide whitespace-nowrap leading-none rounded-xl transition-all duration-200 active:scale-[0.98] inline-flex items-center justify-center gap-1",
-                  activeSection === tab.id
-                    ? "bg-gold-500 text-black shadow-[0_4px_12px_rgba(212,175,55,0.22)]"
-                    : "text-text-secondary hover:text-white"
-                )}>
-                {tab.icon ?? null}{tab.label}
-              </button>
-            ))}
+          <div className="card-elevated border border-white/10 rounded-2xl p-1 overflow-x-auto grab-scrollbar -mx-1 px-1 pb-1">
+            <div className="flex gap-1 min-w-max snap-x snap-mandatory">
+              {([
+                { id: "reviews", label: "Utisci" },
+                { id: "tops",    label: "Top 10" },
+                { id: "compare", label: "Uporedi", icon: <Scale className="w-3 h-3" /> },
+                { id: "producers", label: "Destilerije", icon: <Compass className="w-3 h-3" /> },
+                  { id: "search", label: "Pretraga", icon: <Search className="w-3 h-3" /> },
+                { id: "events", label: "Događaji", icon: <CalendarDays className="w-3 h-3" /> },
+              ] as ReadonlyArray<{ id: "reviews" | "tops" | "compare" | "producers" | "search" | "events"; label: string; icon?: React.ReactNode }>).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveSection(tab.id);
+                    navigate(`/community?tab=${tab.id}`, { replace: true });
+                  }}
+                  className={cn(
+                    "min-h-[42px] min-w-[116px] px-3 py-2 text-[10px] font-black uppercase tracking-wide whitespace-nowrap leading-none rounded-xl transition-all duration-200 active:scale-[0.98] inline-flex items-center justify-center gap-1 snap-start",
+                    activeSection === tab.id
+                      ? "bg-gold-500 text-black shadow-[0_4px_12px_rgba(212,175,55,0.22)]"
+                      : "text-text-secondary hover:text-white"
+                  )}
+                >
+                  {tab.icon ?? null}
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* ─── UTISCI TAB ─── */}
@@ -531,11 +684,11 @@ export default function Community() {
                             key={rating.id}
                             role="button"
                             tabIndex={0}
-                            onClick={() => navigate(`/label/${rating.productId}`)}
+                            onClick={() => openLabelWithReturn(rating.productId, reviewsReturnTo)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter" || e.key === " ") {
                                 e.preventDefault();
-                                navigate(`/label/${rating.productId}`);
+                                openLabelWithReturn(rating.productId, reviewsReturnTo);
                               }
                             }}
                             className="py-5 first:pt-0 last:pb-0 cursor-pointer group hover:bg-white/[0.02] -mx-4 px-4 rounded-2xl transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
@@ -554,7 +707,7 @@ export default function Community() {
                                     </p>
                                   ) : null}
                                   <p className="text-[10px] text-text-secondary/60 tabular-nums mt-0.5">
-                                    {rating.createdAt?.toDate ? new Date(rating.createdAt.toDate()).toLocaleDateString("sr-RS") : "Sada"}
+                                    {formatRatingDate(rating.createdAt)}
                                   </p>
                                 </div>
                               </div>
@@ -564,7 +717,7 @@ export default function Community() {
                               </div>
                             </div>
                             <div className="flex gap-3 items-start">
-                              <div className="w-14 h-[72px] rounded-xl bg-black/60 border border-white/8 overflow-hidden shrink-0">
+                              <div className="w-14 h-[72px] rounded-xl bg-black/60 border border-gold-500/55 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)] overflow-hidden shrink-0">
                                 <img src={rating.productImage || `https://picsum.photos/seed/rakivinum_${rating.productId}/200/300`}
                                   alt="Piće" referrerPolicy="no-referrer"
                                   className="h-full w-full object-contain object-center p-0.5 media-crisp group-hover:scale-[1.03] transition-transform duration-500" />
@@ -602,7 +755,7 @@ export default function Community() {
                     <Star className="w-3 h-3" /> Top 10 Rakija
                   </p>
                   {topRakija.map((p, i) => (
-                    <button key={p.id} type="button" onClick={() => navigate(`/label/${p.id}`)}
+                    <button key={p.id} type="button" onClick={() => openLabelWithReturn(p.id, topsReturnTo)}
                       className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl hover:bg-gold-500/5 transition-all group active:scale-[0.99]">
                       <div className="flex items-center gap-3 min-w-0">
                         <span className={cn("text-xs font-black italic w-5 text-center shrink-0", i < 3 ? "text-gold-500" : "text-white/20")}>{i + 1}</span>
@@ -627,7 +780,7 @@ export default function Community() {
                     <Sparkles className="w-3 h-3" /> Top 10 Vina
                   </p>
                   {topVina.map((p, i) => (
-                    <button key={p.id} type="button" onClick={() => navigate(`/label/${p.id}`)}
+                    <button key={p.id} type="button" onClick={() => openLabelWithReturn(p.id, topsReturnTo)}
                       className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl hover:bg-purple-500/5 transition-all group active:scale-[0.99]">
                       <div className="flex items-center gap-3 min-w-0">
                         <span className={cn("text-xs font-black italic w-5 text-center shrink-0", i < 3 ? "text-purple-400" : "text-white/20")}>{i + 1}</span>
@@ -778,9 +931,9 @@ export default function Community() {
                             type="button"
                             onClick={() => {
                               const rt = `/community?tab=compare&cf=${encodeURIComponent(compareFilter)}&l=${encodeURIComponent(compareLeftId)}&r=${encodeURIComponent(compareRightId)}&lq=${encodeURIComponent(compareLeftQuery)}&rq=${encodeURIComponent(compareRightQuery)}`;
-                              navigate(`/label/${p.id}`, { state: { returnTo: rt } });
+                              openLabelWithReturn(p.id, rt);
                             }}
-                            className="w-full rounded-xl overflow-hidden border border-white/10 bg-black/60"
+                            className="w-full rounded-xl overflow-hidden border border-gold-500/55 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)] bg-black/60"
                             title="Otvori etiketu"
                           >
                             <img

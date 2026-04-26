@@ -1,10 +1,11 @@
 import { ReactNode } from "react";
+import { LucideIcon } from "lucide-react";
 import { cn } from "../lib/utils";
 
 interface FieldProps {
   label: string;
-  value: number | string;
-  onChange: (val: any) => void;
+  value: number;
+  onChange: (val: number) => void;
   type?: string;
   unit?: string;
   step?: string;
@@ -23,7 +24,7 @@ export function WorkshopField({ label, value, onChange, type = "number", unit, s
           value={value} 
           step={step}
           min={min}
-          onChange={(e) => onChange(type === "number" ? Number(e.target.value) : e.target.value)}
+          onChange={(e) => onChange(Number(e.target.value))}
           className="w-full bg-bg-base border border-white/10 rounded-xl p-3.5 pr-24 text-white font-mono text-lg focus:border-gold-500/50 focus:ring-1 focus:ring-gold-500/20 outline-none transition-all appearance-none"
         />
         {unit && (
@@ -79,7 +80,7 @@ export function WorkshopResult({ label, value, unit, variant = "gold", subResult
   );
 }
 
-export function WorkshopCard({ children, title, icon: Icon, description }: { children: ReactNode; title: string; icon: any; description: string }) {
+export function WorkshopCard({ children, title, icon: Icon, description }: { children: ReactNode; title: string; icon: LucideIcon; description: string }) {
   return (
     <div className="card-soft card-elevated rounded-[32px] p-6 space-y-8 shadow-2xl relative overflow-hidden">
       <div className="flex items-start justify-between">

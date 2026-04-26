@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$BaseUrl = "https://rakivinum-api.ldjs1969.workers.dev",
   [string]$SampleProductId = "MVP-mvp-sljiva-stara",
   [string]$SampleVisitorId = "",
@@ -55,7 +55,8 @@ $targets = @(
   @{ Name = "products-by-distillery"; Url = "$BaseUrl/api/public/products-by-distillery/smoke-test?limit=5&_cb=$cb" },
   @{ Name = "club-actions-by-distillery"; Url = "$BaseUrl/api/public/club-actions-by-distillery/smoke-test?limit=5&_cb=$cb" },
   @{ Name = "club-membership-count"; Url = "$BaseUrl/api/public/club-membership-count/smoke-test?_cb=$cb" },
-  @{ Name = "product-lookup"; Url = "$BaseUrl/api/public/product-lookup?n=0&r=0&_cb=$cb" }
+  @{ Name = "product-lookup"; Url = "$BaseUrl/api/public/product-lookup?n=0&r=0&_cb=$cb" },
+  @{ Name = "scan-clusters"; Url = "$BaseUrl/api/public/scan-clusters/$SampleProductId?limit=5&_cb=$cb" }
 )
 
 if ($SampleVisitorId -and $SampleVisitorId.Trim()) {
@@ -82,3 +83,6 @@ if ($failed.Count -gt 0) {
 
 Write-Host ""
 Write-Host "Smoke OK: all edge checks passed." -ForegroundColor Green
+
+
+

@@ -1,12 +1,34 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, MapPin, Loader2, ChevronRight, Award, Search, X } from "lucide-react";
 import { isQuotaError } from "../lib/resilience";
 import { fetchPublicDistilleries } from "../lib/dataService";
 
+type DistilleryRow = {
+  id: string;
+  name?: string;
+  logoUrl?: string;
+  region?: string;
+  location?: string | { address?: string; city?: string };
+};
+
 export default function Distilleries() {
   const navigate = useNavigate();
-  const [distilleries, setDistilleries] = useState<any[]>([]);
+  const location = useLocation();
+  const goBackSafe = () => {
+    const navState = location.state as { returnTo?: string } | null;
+    if (navState?.returnTo) {
+      navigate(navState.returnTo);
+      return;
+    }
+    const rt = new URLSearchParams(location.search).get("rt");
+    if (rt) {
+      navigate(rt);
+      return;
+    }
+    navigate("/", { replace: true });
+  };
+  const [distilleries, setDistilleries] = useState<DistilleryRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [quotaExceeded, setQuotaExceeded] = useState(false);
@@ -40,11 +62,12 @@ export default function Distilleries() {
 
   const filteredDistilleries = distilleries.filter(d => {
     const q = normalizeText(searchQuery);
+    const locationObj = typeof d.location === "object" && d.location !== null ? d.location : null;
     return (
       normalizeText(d.name).includes(q) ||
       normalizeText(d.location).includes(q) ||
-      normalizeText(d.location?.address).includes(q) ||
-      normalizeText(d.location?.city).includes(q) ||
+      normalizeText(locationObj?.address).includes(q) ||
+      normalizeText(locationObj?.city).includes(q) ||
       normalizeText(d.region).includes(q)
     );
   });
@@ -91,7 +114,7 @@ export default function Distilleries() {
         <div className="flex items-center gap-4">
           <button
             type="button"
-            onClick={() => navigate(-1)}
+            onClick={goBackSafe}
             className="p-3 card-soft card-elevated border border-white/10 rounded-2xl text-text-secondary hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
           >
             <ArrowLeft className="w-5 h-5" />
