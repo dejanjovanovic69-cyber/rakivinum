@@ -405,7 +405,7 @@ export default function Home() {
       } catch (error) {
         // Fallback when composite index is not ready in a given environment.
         try {
-          const ratingQuery = query(collection(db, "ratings"), where("userId", "==", userId), limit(200));
+          const ratingQuery = query(collection(db, "ratings"), where("userId", "==", userId), limit(60));
           const snap = await getDocs(ratingQuery);
           meterDbRead("home:user_ratings_fallback", snap.size);
           if (!snap.empty) {
