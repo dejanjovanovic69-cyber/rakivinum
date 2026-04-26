@@ -30,10 +30,10 @@ Status legend:
    - Date: `2026-04-26`
    - Evidence (`docs/PHASE5-WEEKLY-OPS-REPORT-TEMPLATE.md` instance): `docs/PHASE5-WEEKLY-OPS-REPORT-2026-04-26.md`
 
-5. `[ ]` Deploy quality gates applied on latest production deployment
-   - Owner:
-   - Date:
-   - Evidence (pipeline/run log):
+5. `[x]` Deploy quality gates applied on latest production deployment
+   - Owner: `AI agent`
+   - Date: `2026-04-26`
+   - Evidence (pipeline/run log): `docs/PHASE5-QUALITY-GATE-RUN-2026-04-26.md`
 
 6. `[x]` Rollback drill executed (or documented simulation)
    - Owner: `AI agent (documented simulation)`

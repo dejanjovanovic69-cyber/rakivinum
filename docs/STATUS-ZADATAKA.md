@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - odrađen je prvi Faza 5 incident drill (`docs/PHASE5-INCIDENT-DRILL-2026-04-26.md`) i checklist je dodatno zatvoren (incident drill + rollback simulation evidence).
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - dodat je prvi Faza 5 quality-gate evidence zapis (`docs/PHASE5-QUALITY-GATE-RUN-2026-04-26.md`) i checklist je dalje zatvoren (deploy quality gate stavka).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -81,6 +81,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Faza 5 enable checklist:** dodat `docs/PHASE5-ENABLE-CHECKLIST.md` za formalno uključivanje Faze 5 (go/no-go odluka + 14-dnevni follow-up).
 - **Faza 5 weekly report #1:** dodat `docs/PHASE5-WEEKLY-OPS-REPORT-2026-04-26.md` kao prvi realan baseline izveštaj.
 - **Faza 5 incident drill #1:** dodat `docs/PHASE5-INCIDENT-DRILL-2026-04-26.md` kao prva simulacija incident/rollback odgovora.
+- **Faza 5 quality gate evidence #1:** dodat `docs/PHASE5-QUALITY-GATE-RUN-2026-04-26.md` kao dokaz primene lint/build/smoke gate seta.
 
 ---
 
