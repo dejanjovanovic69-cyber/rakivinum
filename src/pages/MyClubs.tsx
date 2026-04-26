@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { db } from "../lib/firebase";
-import { collection, query, where, getDocs, doc, getDoc, deleteDoc, limit } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, deleteDoc, limit, documentId } from "firebase/firestore";
 import { ArrowLeft, Gift, ShieldX, Loader2, Star, CheckCircle2, ChevronRight, Users } from "lucide-react";
 import { cn } from "../lib/utils";
 import {
@@ -130,16 +130,33 @@ export default function MyClubs() {
 
         const clubsData: ClubRow[] = [];
 
-        for (const id of allIds) {
-          let distillery: Record<string, unknown> | null = (await fetchPublicDistilleryById(id)) as Record<
-            string,
-            unknown
-          > | null;
-          if (!distillery) {
-            const dSnap = await getDoc(doc(db, "distilleries", id));
-            if (!dSnap.exists()) continue;
-            distillery = { id: dSnap.id, ...dSnap.data() };
+        const distilleryById = new Map<string, Record<string, unknown>>();
+        const missingIds: string[] = [];
+        await Promise.all(
+          allIds.map(async (distilleryId) => {
+            try {
+              const distillery = (await fetchPublicDistilleryById(distilleryId)) as Record<string, unknown> | null;
+              if (distillery) distilleryById.set(distilleryId, distillery);
+              else missingIds.push(distilleryId);
+            } catch {
+              missingIds.push(distilleryId);
+            }
+          }),
+        );
+        if (missingIds.length > 0) {
+          const uniqueMissing = Array.from(new Set(missingIds));
+          for (let i = 0; i < uniqueMissing.length; i += 10) {
+            const chunk = uniqueMissing.slice(i, i + 10);
+            const snap = await getDocs(query(collection(db, "distilleries"), where(documentId(), "in", chunk)));
+            snap.forEach((d) => {
+              distilleryById.set(d.id, { id: d.id, ...d.data() });
+            });
           }
+        }
+
+        for (const id of allIds) {
+          const distillery = distilleryById.get(id);
+          if (!distillery) continue;
 
           const actionRows = await fetchPublicClubActionsForDistillery(id, 60);
           const actions: ClubAction[] = actionRows.map((row) => ({ id: row.id, ...(row as object) } as ClubAction));
