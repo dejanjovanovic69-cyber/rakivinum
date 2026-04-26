@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - objavljen je prvi Faza 5 nedeljni ops izveštaj (`docs/PHASE5-WEEKLY-OPS-REPORT-2026-04-26.md`) i checklist je delimično zatvoren (weekly report + baseline evidence).
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - odrađen je prvi Faza 5 incident drill (`docs/PHASE5-INCIDENT-DRILL-2026-04-26.md`) i checklist je dodatno zatvoren (incident drill + rollback simulation evidence).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -80,6 +80,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Faza 5 templates:** dodati `docs/PHASE5-INCIDENT-REPORT-TEMPLATE.md` i `docs/PHASE5-WEEKLY-OPS-REPORT-TEMPLATE.md` za standardizovan incident i nedeljni operativni reporting.
 - **Faza 5 enable checklist:** dodat `docs/PHASE5-ENABLE-CHECKLIST.md` za formalno uključivanje Faze 5 (go/no-go odluka + 14-dnevni follow-up).
 - **Faza 5 weekly report #1:** dodat `docs/PHASE5-WEEKLY-OPS-REPORT-2026-04-26.md` kao prvi realan baseline izveštaj.
+- **Faza 5 incident drill #1:** dodat `docs/PHASE5-INCIDENT-DRILL-2026-04-26.md` kao prva simulacija incident/rollback odgovora.
 
 ---
 

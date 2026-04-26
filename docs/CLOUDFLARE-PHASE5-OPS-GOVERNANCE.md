@@ -116,6 +116,8 @@ Use these templates to keep operations consistent:
 
 - Incident report template:
   - `docs/PHASE5-INCIDENT-REPORT-TEMPLATE.md`
+- Incident drill example:
+  - `docs/PHASE5-INCIDENT-DRILL-2026-04-26.md`
 - Weekly ops report template:
   - `docs/PHASE5-WEEKLY-OPS-REPORT-TEMPLATE.md`
 - Phase-5 enable checklist:

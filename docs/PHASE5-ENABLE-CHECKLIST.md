@@ -20,10 +20,10 @@ Status legend:
    - Date:
    - Evidence (screenshot/link):
 
-3. `[ ]` Incident template tested on at least one drill
-   - Owner:
-   - Date:
-   - Evidence (`docs/PHASE5-INCIDENT-REPORT-TEMPLATE.md` instance):
+3. `[x]` Incident template tested on at least one drill
+   - Owner: `AI agent (drill), owner review pending`
+   - Date: `2026-04-26`
+   - Evidence (`docs/PHASE5-INCIDENT-REPORT-TEMPLATE.md` instance): `docs/PHASE5-INCIDENT-DRILL-2026-04-26.md`
 
 4. `[x]` Weekly ops report published at least once
    - Owner: `AI agent (initial draft), owner review pending`
@@ -35,10 +35,10 @@ Status legend:
    - Date:
    - Evidence (pipeline/run log):
 
-6. `[ ]` Rollback drill executed (or documented simulation)
-   - Owner:
-   - Date:
-   - Evidence:
+6. `[x]` Rollback drill executed (or documented simulation)
+   - Owner: `AI agent (documented simulation)`
+   - Date: `2026-04-26`
+   - Evidence: `docs/PHASE5-INCIDENT-DRILL-2026-04-26.md`
 
 7. `[x]` Phase 4 baseline attached to weekly report
    - Owner: `AI agent`
