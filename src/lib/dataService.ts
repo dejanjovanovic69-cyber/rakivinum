@@ -392,14 +392,24 @@ export async function fetchPublicClubMembershipCount(distilleryId: string): Prom
   const safeId = String(distilleryId || "").trim();
   if (!safeId) return 0;
   return dedupe(`clubMemberCount:${safeId}`, async () => {
+    const cacheKey = `rakivinum_cache_club_membership_count_${safeId}_v1`;
+    const cached = readCache<number>(cacheKey);
+    if (typeof cached === "number" && Number.isFinite(cached)) return Math.max(0, Math.floor(cached));
+
     const json = await fetchEdgeRawJson(`/api/public/club-membership-count/${encodeURIComponent(safeId)}`);
     const c = json?.count;
-    if (typeof c === "number" && Number.isFinite(c)) return Math.max(0, Math.floor(c));
+    if (typeof c === "number" && Number.isFinite(c)) {
+      const count = Math.max(0, Math.floor(c));
+      writeCache(cacheKey, count, CACHE_TTL.CLUB_MEMBERSHIP_COUNT_2M);
+      return count;
+    }
 
     const q = query(collection(db, "club_memberships"), where("distilleryId", "==", safeId));
     const countSnap = await getCountFromServer(q);
     meterDbRead("dataService:club_membership_count", 1);
-    return countSnap.data().count;
+    const count = Math.max(0, Number(countSnap.data().count) || 0);
+    writeCache(cacheKey, count, CACHE_TTL.CLUB_MEMBERSHIP_COUNT_2M);
+    return count;
   });
 }
 
@@ -430,10 +440,17 @@ export async function fetchPublicProductRatingSummary(productId: string): Promis
   const safeId = String(productId || "").trim();
   if (!safeId) return null;
   return dedupe(`ratingSummary:${safeId}`, async () => {
+    const cacheKey = `rakivinum_cache_product_rating_summary_${safeId}_v1`;
+    const cached = readCache<ProductRatingSummaryPublic>(cacheKey);
+    if (cached) return cached;
+
     const edge = await fetchEdgeItem<ProductRatingSummaryPublic>(
       `/api/public/ratings-summary/${encodeURIComponent(safeId)}`,
     );
-    if (edge) return edge;
+    if (edge) {
+      writeCache(cacheKey, edge, CACHE_TTL.PRODUCT_RATING_SUMMARY_10M);
+      return edge;
+    }
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:product_rating_summary_fallback", 1);
     if (!snap.exists()) return null;
@@ -441,13 +458,15 @@ export async function fetchPublicProductRatingSummary(productId: string): Promis
     const scanCount = Number(row.scanCount) || 0;
     const ratingCount = Number(row.ratingCount) || 0;
     const averageRating = Number(row.averageRating) || 0;
-    return {
+    const summary = {
       productId: safeId,
       averageRating,
       ratingCount,
       scanCount,
       conversionRate: scanCount > 0 ? Math.round((ratingCount / scanCount) * 10000) / 100 : 0,
     };
+    writeCache(cacheKey, summary, CACHE_TTL.PRODUCT_RATING_SUMMARY_10M);
+    return summary;
   });
 }
 

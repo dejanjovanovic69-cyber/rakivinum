@@ -89,6 +89,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 | Read | Napomena |
 |------|----------|
 | Proizvod (zaglavlje KPI) | **`fetchScannerProductById`** (1h by-id cache; bez duplog `getDoc` posle `fetchPublic`). |
+| KPI summary (`ratings-summary`) | **`fetchPublicProductRatingSummary`** worker-first + 10m cache po proizvodu. |
 | `product-ratings` / `scan clusters` | **[Urađeno]** `fetchPublicProductRatings` i `fetchPublicScanClustersByProductId` preko Worker endpointa, uz dodatni 1h client cache u `dataService` da ponovni ulasci ne povlače isti read odmah. |
 
 ---
@@ -107,7 +108,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 | Read | Napomena |
 |------|----------|
 | Katalog proizvoda | **`fetchPublicProductsByDistilleryId`** worker-first + 1h cache (ista destilerija/limit kombinacija). |
-| Članstvo posetioca + broj članova | **`fetchPublicClubMembershipsByVisitorId`**, **`fetchPublicClubMembershipCount`**; join/leave i dalje piše u Firestore, “leave” koristi poznat `membershipId`, a posle join/leave broj članova se lokalno +/- koriguje (bez dodatnog count read-a, uz periodični refresh). |
+| Članstvo posetioca + broj članova | **`fetchPublicClubMembershipsByVisitorId`**, **`fetchPublicClubMembershipCount`** (kratki 2m cache po distileriji); join/leave i dalje piše u Firestore, “leave” koristi poznat `membershipId`, a posle join/leave broj članova se lokalno +/- koriguje (bez dodatnog count read-a, uz periodični refresh). |
 
 ---
 
