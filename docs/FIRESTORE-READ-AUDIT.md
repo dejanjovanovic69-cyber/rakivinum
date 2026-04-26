@@ -79,7 +79,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 | Read | Napomena |
 |------|----------|
 | `guest_saved_items` / `users/.../savedItems` `getDoc` | Korisnički stanje — Firestore; dodat lokalni `saved` cache po korisniku/gostu+proizvodu da se pri povratku na etiketu često izbegne ponovni `getDoc`. |
-| `getDocs` na `ratings` (provera postojeće ocene) | Pravila ocene — ostaje Firestore ili privatni endpoint. |
+| `getDocs` na `ratings` (provera postojeće ocene) | Pravila ocene — ostaje Firestore ili privatni endpoint; dodat session cache za dnevni rezultat provere da se pri ponovnom otvaranju etikete u istoj sesiji izbegne isti read. |
 | Glavni proizvod / destilerija / reviews | Proizvod: **`fetchScannerProductById`** + iste javne provere (`isApproved`, arhiva, `publicLabelDisabled`); destilerija i ocene preko `dataService` Worker-first. |
 
 ---

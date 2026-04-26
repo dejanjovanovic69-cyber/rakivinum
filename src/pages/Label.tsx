@@ -247,6 +247,24 @@ export default function Label() {
     return country || "Srbija";
   };
   const ensureVisitorId = () => getOrCreateVisitorId();
+  const getRatedCheckCacheKey = (actorKey: string, ymd: string) => `rakivinum_rated_check_${actorKey}_${ymd}`;
+  const readRatedCheckCache = (actorKey: string, ymd: string): boolean | null => {
+    try {
+      const raw = sessionStorage.getItem(getRatedCheckCacheKey(actorKey, ymd));
+      if (raw === "1") return true;
+      if (raw === "0") return false;
+    } catch {
+      // ignore session cache read errors
+    }
+    return null;
+  };
+  const writeRatedCheckCache = (actorKey: string, ymd: string, value: boolean) => {
+    try {
+      sessionStorage.setItem(getRatedCheckCacheKey(actorKey, ymd), value ? "1" : "0");
+    } catch {
+      // ignore session cache write errors
+    }
+  };
   const getSavedStateCacheKey = (productId: string, uid: string | null, visitorId: string | null) =>
     `rakivinum_saved_state_${uid ? `u:${uid}` : `v:${visitorId || "anon"}`}_${productId}`;
   const readSavedStateCache = (productId: string, uid: string | null, visitorId: string | null): boolean | null => {
@@ -527,6 +545,15 @@ export default function Label() {
           return;
         }
 
+        const actorKey = auth.currentUser?.uid ? `u:${auth.currentUser.uid}` : visitorId ? `v:${visitorId}` : "";
+        if (!isAdminTester && actorKey) {
+          const cached = readRatedCheckCache(actorKey, ymd);
+          if (typeof cached === "boolean") {
+            setHasRatedToday(cached);
+            return;
+          }
+        }
+
         // Zlatno pravilo: jedan dan, jedan glas (jedna ocena dnevno po korisniku/gostu, bilo koje piće)
         let q;
         if (auth.currentUser?.uid) {
@@ -548,8 +575,11 @@ export default function Label() {
         }
 
         const querySnapshot = await getDocs(q);
-        if (!isAdminTester && !querySnapshot.empty) {
-          setHasRatedToday(true);
+        if (!isAdminTester) {
+          const hasToday = !querySnapshot.empty;
+          setHasRatedToday(hasToday);
+          const actorKey = auth.currentUser?.uid ? `u:${auth.currentUser.uid}` : visitorId ? `v:${visitorId}` : "";
+          if (actorKey) writeRatedCheckCache(actorKey, ymd, hasToday);
         }
       } catch (error) {
         console.error("Greška pri proveri prethodnih ocena:", error);

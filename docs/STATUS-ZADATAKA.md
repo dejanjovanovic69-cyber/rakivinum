@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++) - `Home` top-rating fallback cap smanjen (`limit(200)` -> `limit(60)`), pa i bez indexa fallback manje opterećuje Firestore.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++) - `Label` rating-day check dobio session cache (po user/visitor + datum), pa se pri ponovnom ulasku na etiketu u istoj sesiji izbegava ponovni read iste dnevne provere.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -22,6 +22,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Cache/refresh standard:** centralizovan policy (`cachePolicy.ts`) + uklonjen agresivni interval refresh sa glavnih stranica.
 - **Label tok:** uklonjen oslonac na nepostojeci `submitRatingSecure` cloud function po default-u; ostavljen fallback preko Firestore transaction.
 - **Label tok (saved check):** dodat lokalni cache stanja "sačuvano" (user/visitor + product) radi smanjenja ponovljenih read-ova pri povratku na etiketu.
+- **Label tok (rated-today check):** dodat session cache rezultata dnevne provere ocene (po user/visitor + datum) radi manjeg broja ponovljenih `ratings` read-ova u istoj sesiji.
 - **Read optimizacije:** cache-first prosiren na `Home`, `Distillery`, `AdminAudit`, `DistilleryDashboard`, `Collection`; dodat dev read-meter (`requestMeter`).
 - **Cloudflare Worker (Faza 2 priprema):**
   - Worker deployovan: `https://rakivinum-api.ldjs1969.workers.dev`
