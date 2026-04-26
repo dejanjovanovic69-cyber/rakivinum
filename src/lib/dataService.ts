@@ -282,7 +282,7 @@ export async function fetchPublicDistilleriesByIds(ids: string[]): Promise<Disti
     qs.set("ids", safeIds.join(","));
     const json = await fetchEdgeRawJson(`/api/public/distilleries-by-ids?${qs.toString()}`);
     const edgeItemsRaw = json?.items;
-    if (Array.isArray(edgeItemsRaw) && edgeItemsRaw.length > 0) {
+    if (Array.isArray(edgeItemsRaw)) {
       return edgeItemsRaw
         .filter((row): row is DistilleryPublic => !!row && typeof row === "object")
         .filter((row) => row.isArchived !== true && row.isVerified === true);
