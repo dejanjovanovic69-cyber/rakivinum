@@ -287,14 +287,20 @@ export async function fetchPublicDistilleriesByIds(ids: string[]): Promise<Disti
   const safeIds = [...uniqueIds].sort((a, b) => a.localeCompare(b));
   if (safeIds.length === 0) return [];
   return dedupe(`distilleryByIds:${safeIds.join(",")}`, async () => {
+    const cacheKey = `rakivinum_cache_distilleries_by_ids_${safeIds.join("_")}_v1`;
+    const cached = readCache<DistilleryPublic[]>(cacheKey);
+    if (cached) return cached;
+
     const qs = new URLSearchParams();
     qs.set("ids", safeIds.join(","));
     const json = await fetchEdgeRawJson(`/api/public/distilleries-by-ids?${qs.toString()}`);
     const edgeItemsRaw = json?.items;
     if (Array.isArray(edgeItemsRaw)) {
-      return edgeItemsRaw
+      const rows = edgeItemsRaw
         .filter((row): row is DistilleryPublic => !!row && typeof row === "object")
         .filter((row) => row.isArchived !== true && row.isVerified === true);
+      writeCache(cacheKey, rows, CACHE_TTL.DISTILLERIES_BY_IDS_1H);
+      return rows;
     }
 
     const byId = new Map<string, DistilleryPublic>();
@@ -308,7 +314,9 @@ export async function fetchPublicDistilleriesByIds(ids: string[]): Promise<Disti
       });
     }
 
-    return safeIds.map((id) => byId.get(id)).filter((row): row is DistilleryPublic => Boolean(row));
+    const rows = safeIds.map((id) => byId.get(id)).filter((row): row is DistilleryPublic => Boolean(row));
+    writeCache(cacheKey, rows, CACHE_TTL.DISTILLERIES_BY_IDS_1H);
+    return rows;
   });
 }
 
@@ -316,20 +324,28 @@ export async function fetchPublicProductsByDistilleryId(distilleryId: string, li
   const safeId = String(distilleryId || "").trim();
   if (!safeId) return [];
   return dedupe(`productsByDistillery:${safeId}:${limitCount}`, async () => {
+    const cacheKey = `rakivinum_cache_products_by_distillery_${safeId}_${limitCount}_v1`;
+    const cached = readCache<ProductPublic[]>(cacheKey);
+    if (cached) return cached;
+
     const edgeRows = await fetchEdgeItems<ProductPublic>(
       `/api/public/products-by-distillery/${encodeURIComponent(safeId)}`,
       limitCount,
     );
     if (edgeRows && edgeRows.length > 0) {
-      return edgeRows.filter(
+      const rows = edgeRows.filter(
         (p) => p.isApproved !== false && !p.isArchivedByDistillery && p.publicLabelDisabled !== true,
       );
+      writeCache(cacheKey, rows, CACHE_TTL.PRODUCTS_BY_DISTILLERY_1H);
+      return rows;
     }
     const snap = await getDocs(query(collection(db, "products"), where("distilleryId", "==", safeId), limit(limitCount)));
     meterDbRead("dataService:products_by_distillery", snap.size);
-    return snap.docs
+    const rows = snap.docs
       .map((d) => ({ id: d.id, ...d.data() } as ProductPublic))
       .filter((p) => p.isApproved !== false && !p.isArchivedByDistillery && p.publicLabelDisabled !== true);
+    writeCache(cacheKey, rows, CACHE_TTL.PRODUCTS_BY_DISTILLERY_1H);
+    return rows;
   });
 }
 
