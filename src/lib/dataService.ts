@@ -92,7 +92,7 @@ export async function fetchPublicDistilleries(options?: {
   return dedupe(`distilleries:${limitCount}:${cacheKey}`, async () => {
     try {
       const edgeRows = await fetchEdgeItems<DistilleryPublic>("/api/public/distilleries", limitCount);
-      if (edgeRows && edgeRows.length > 0) {
+      if (Array.isArray(edgeRows)) {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
@@ -125,7 +125,7 @@ export async function fetchPublicProducts(options?: {
   return dedupe(`products:${limitCount}:${cacheKey}`, async () => {
     try {
       const edgeRows = await fetchEdgeItems<ProductPublic>("/api/public/products", limitCount);
-      if (edgeRows && edgeRows.length > 0) {
+      if (Array.isArray(edgeRows)) {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
@@ -158,7 +158,7 @@ export async function fetchCommunityEvents(options?: {
   return dedupe(`events:${limitCount}:${cacheKey}`, async () => {
     try {
       const edgeRows = await fetchEdgeItems<CommunityEventPublic>("/api/public/community-events", limitCount);
-      if (edgeRows && edgeRows.length > 0) {
+      if (Array.isArray(edgeRows)) {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
@@ -191,7 +191,7 @@ export async function fetchCommunityLinks(options?: {
   return dedupe(`communityLinks:${limitCount}:${cacheKey}`, async () => {
     try {
       const edgeRows = await fetchEdgeItems<CommunityLinkPublic>("/api/public/community-links", limitCount);
-      if (edgeRows && edgeRows.length > 0) {
+      if (Array.isArray(edgeRows)) {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
@@ -230,7 +230,7 @@ export async function fetchCommunityRatings(options?: {
   return dedupe(`ratingsFeed:${limitCount}:${cacheKey}`, async () => {
     try {
       const edgeRows = await fetchEdgeItems<CommunityRatingPublic>("/api/public/ratings-feed", limitCount);
-      if (edgeRows && edgeRows.length > 0) {
+      if (Array.isArray(edgeRows)) {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
@@ -332,7 +332,7 @@ export async function fetchPublicProductsByDistilleryId(distilleryId: string, li
       `/api/public/products-by-distillery/${encodeURIComponent(safeId)}`,
       limitCount,
     );
-    if (edgeRows && edgeRows.length > 0) {
+    if (Array.isArray(edgeRows)) {
       const rows = edgeRows.filter(
         (p) => p.isApproved !== false && !p.isArchivedByDistillery && p.publicLabelDisabled !== true,
       );
@@ -491,7 +491,7 @@ export async function fetchPublicProductRatings(productId: string, limitCount = 
       `/api/public/product-ratings/${encodeURIComponent(safeId)}`,
       limitCount,
     );
-    if (edgeRows && edgeRows.length > 0) {
+    if (Array.isArray(edgeRows)) {
       const rows = edgeRows.filter((r) => r.isFlagged !== true);
       writeCache(cacheKey, rows, CACHE_TTL.PRODUCT_RATINGS_1H);
       return rows;
@@ -519,7 +519,7 @@ export async function fetchPublicScanClustersByProductId(productId: string, clus
       `/api/public/scan-clusters/${encodeURIComponent(safeId)}`,
       clusterLimit,
     );
-    if (edgeRows && edgeRows.length > 0) {
+    if (Array.isArray(edgeRows)) {
       writeCache(cacheKey, edgeRows, CACHE_TTL.SCAN_CLUSTERS_1H);
       return edgeRows;
     }
@@ -554,7 +554,7 @@ export async function fetchPublicClubActions(limitCount = 20): Promise<ClubActio
     if (cached) return cached;
 
     const edgeRows = await fetchEdgeItems<ClubActionPublic>("/api/public/club-actions", limitCount);
-    if (edgeRows && edgeRows.length > 0) {
+    if (Array.isArray(edgeRows)) {
       const rows = edgeRows.filter((a) => a.isActive === true);
       writeCache(cacheKey, rows, CACHE_TTL.CLUB_ACTIONS_1H);
       return rows;
@@ -580,7 +580,7 @@ export async function fetchPublicClubActionsForDistillery(distilleryId: string, 
       `/api/public/club-actions-by-distillery/${encodeURIComponent(safeId)}`,
       limitCount,
     );
-    if (edgeRows && edgeRows.length > 0) {
+    if (Array.isArray(edgeRows)) {
       const rows = edgeRows.filter((a) => a.isActive !== false);
       writeCache(cacheKey, rows, CACHE_TTL.CLUB_ACTIONS_BY_DISTILLERY_1H);
       return rows;
@@ -613,7 +613,7 @@ export async function fetchPublicClubMembershipsByVisitorId(visitorId: string, l
       `/api/public/club-memberships/${encodeURIComponent(safeId)}`,
       limitCount,
     );
-    if (edgeRows && edgeRows.length > 0) {
+    if (Array.isArray(edgeRows)) {
       writeCache(cacheKey, edgeRows, CACHE_TTL.CLUB_MEMBERSHIPS_1H);
       return edgeRows;
     }
