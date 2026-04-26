@@ -13,6 +13,7 @@
     "cf:worker:dev": "wrangler dev",
     "cf:worker:deploy": "wrangler deploy",
     "cf:smoke:edge": "powershell -ExecutionPolicy Bypass -File ./scripts/smoke-edge.ps1",
+    "cf:monitor:edge": "powershell -ExecutionPolicy Bypass -File ./scripts/monitor-edge.ps1",
     "cf:deploy:resilient": "powershell -ExecutionPolicy Bypass -File ./scripts/cf-deploy-resilient.ps1",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",

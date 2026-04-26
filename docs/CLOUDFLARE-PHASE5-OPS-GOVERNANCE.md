@@ -133,6 +133,10 @@ Use these templates to keep operations consistent:
 
 - Health and route smoke:
   - `npm run cf:smoke:edge`
+- Multi-run hotspot monitor (median/p95 + CSV log):
+  - `npm run cf:monitor:edge`
+- Example (8 runs, 10s pause):
+  - `npm run cf:monitor:edge -- -Runs 8 -DelaySec 10`
 - Local quality checks:
   - `npm run lint`
   - `npm run build`
