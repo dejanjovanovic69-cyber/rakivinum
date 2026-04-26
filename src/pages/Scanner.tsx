@@ -284,7 +284,7 @@ export default function Scanner() {
 
         // Preferred lookup: normalized barcode (fast + format-safe)
         if (!finalProductId && scannedBarcode) {
-          const qNorm = query(collection(db, "products"), where("barcodeNormalized", "==", scannedBarcode), limit(5));
+          const qNorm = query(collection(db, "products"), where("barcodeNormalized", "==", scannedBarcode), limit(1));
           const normSnap = await getDocs(qNorm);
           meterDbRead("scanner:barcode_normalized_lookup", normSnap.size);
           if (!normSnap.empty) {
@@ -295,7 +295,7 @@ export default function Scanner() {
 
         // Fallback A: some records keep digits in raw `barcode` field.
         if (!finalProductId && scannedBarcode) {
-          const qDigits = query(collection(db, "products"), where("barcode", "==", scannedBarcode), limit(5));
+          const qDigits = query(collection(db, "products"), where("barcode", "==", scannedBarcode), limit(1));
           const digitsSnap = await getDocs(qDigits);
           meterDbRead("scanner:barcode_digits_lookup", digitsSnap.size);
           if (!digitsSnap.empty) {
@@ -307,7 +307,7 @@ export default function Scanner() {
         // Fallback B: exact raw text match (legacy records / QR payloads).
         // Skip when raw text is the same as digit-only barcode to avoid duplicate query.
         if (!finalProductId && (!scannedBarcode || st !== scannedBarcode)) {
-          const q = query(collection(db, "products"), where("barcode", "==", st), limit(5));
+          const q = query(collection(db, "products"), where("barcode", "==", st), limit(1));
           const querySnapshot = await getDocs(q);
           meterDbRead("scanner:barcode_raw_lookup", querySnapshot.size);
           

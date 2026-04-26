@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+++++++++) - `Scanner` ID lookup guard pooštren: direct ID read ide samo za `/label/...` i ID-like payload, pa nasumični QR/barkod tekstovi ne troše nepotreban ID read.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++) - `Scanner` barcode Firestore fallback upiti spušteni na `limit(1)` (koristi se samo prvi pogodak), dodatno smanjenje read-ova po skenu.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -43,7 +43,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 
 - **Firestore / kvota:** `limit()` na upitima, kes/dedup (`dataService`, `resilience`), smanjeni `onSnapshot` gde nije neophodno, `refreshGate` za `focus` burst (`Home`, `Menu`, `Distillery`, itd.).
 - **Zajednica (`Community`):** ocene (feed) vise nisu teski `onSnapshot` - kontrolisan `getDocs` + periodicno/fokus osvezavanje + gate.
-- **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (kes/dedup), bez `getDocs` cele `products` kolekcije; direct ID lookup radi samo za `/label/...` i ID-like payload, a za numerički barkod se preskače i dupli raw barkod upit.
+- **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (kes/dedup), bez `getDocs` cele `products` kolekcije; direct ID lookup radi samo za `/label/...` i ID-like payload, za numerički barkod se preskače dupli raw barkod upit, a Firestore barcode fallback ide sa `limit(1)`.
 - **Pocetna (`Home`):** sacuvano - `getCountFromServer` + poslednji artikal preko `orderBy(createdAt)+limit(1)`; top-ocena ide preko `limit(1)` upita (fallback na legacy upit ako index nije spreman).
 - **Kolekcija (`Collection`):** ucitavanje sacuvanog sa `limit` (+ `orderBy` za ulogovanog); fallback za product detalje je batched (`documentId in`) umesto pojedinacnih `getDoc`.
 - **Admin / audit / dashboard:** manje real-time slusanje gde je bilo skupo; kontrolisani refresh; prisustvo (online broj) za superadmin; paginacija brisanja proizvoda pri brisanju destilerije.

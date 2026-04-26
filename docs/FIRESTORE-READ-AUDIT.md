@@ -38,7 +38,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 | Read | Napomena / sledeći korak |
 |------|---------------------------|
 | ID | **`fetchScannerProductById`**. |
-| Barkod | **`fetchPublicProductByBarcodeLookup`** → `/api/public/product-lookup`; ID lookup se radi samo za `/label/...` i ID-like payload, pa se za čiste/nestrukturisane barkod skenove preskaču nepotrebni ID readovi + dupli raw barkod query. |
+| Barkod | **`fetchPublicProductByBarcodeLookup`** → `/api/public/product-lookup`; ID lookup se radi samo za `/label/...` i ID-like payload, pa se za čiste/nestrukturisane barkod skenove preskaču nepotrebni ID readovi + dupli raw barkod query; Firestore barcode fallback upiti su `limit(1)` jer koristimo samo prvi pogodak. |
 
 ---
 
