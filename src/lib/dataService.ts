@@ -521,12 +521,22 @@ export async function fetchPublicScanClustersByProductId(productId: string, clus
 
 export async function fetchPublicClubActions(limitCount = 20): Promise<ClubActionPublic[]> {
   return dedupe(`clubActions:${limitCount}`, async () => {
+    const cacheKey = `rakivinum_cache_club_actions_${limitCount}_v1`;
+    const cached = readCache<ClubActionPublic[]>(cacheKey);
+    if (cached) return cached;
+
     const edgeRows = await fetchEdgeItems<ClubActionPublic>("/api/public/club-actions", limitCount);
-    if (edgeRows && edgeRows.length > 0) return edgeRows.filter((a) => a.isActive === true);
+    if (edgeRows && edgeRows.length > 0) {
+      const rows = edgeRows.filter((a) => a.isActive === true);
+      writeCache(cacheKey, rows, CACHE_TTL.CLUB_ACTIONS_1H);
+      return rows;
+    }
 
     const snap = await getDocs(query(collection(db, "club_actions"), where("isActive", "==", true), limit(limitCount)));
     meterDbRead("dataService:club_actions_fallback", snap.size);
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ClubActionPublic));
+    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ClubActionPublic));
+    writeCache(cacheKey, rows, CACHE_TTL.CLUB_ACTIONS_1H);
+    return rows;
   });
 }
 
@@ -534,11 +544,19 @@ export async function fetchPublicClubActionsForDistillery(distilleryId: string, 
   const safeId = String(distilleryId || "").trim();
   if (!safeId) return [];
   return dedupe(`clubActionsForDistillery:${safeId}:${limitCount}`, async () => {
+    const cacheKey = `rakivinum_cache_club_actions_distillery_${safeId}_${limitCount}_v1`;
+    const cached = readCache<ClubActionPublic[]>(cacheKey);
+    if (cached) return cached;
+
     const edgeRows = await fetchEdgeItems<ClubActionPublic>(
       `/api/public/club-actions-by-distillery/${encodeURIComponent(safeId)}`,
       limitCount,
     );
-    if (edgeRows && edgeRows.length > 0) return edgeRows.filter((a) => a.isActive !== false);
+    if (edgeRows && edgeRows.length > 0) {
+      const rows = edgeRows.filter((a) => a.isActive !== false);
+      writeCache(cacheKey, rows, CACHE_TTL.CLUB_ACTIONS_BY_DISTILLERY_1H);
+      return rows;
+    }
 
     const snap = await getDocs(
       query(
@@ -549,7 +567,9 @@ export async function fetchPublicClubActionsForDistillery(distilleryId: string, 
       ),
     );
     meterDbRead("dataService:club_actions_by_distillery", snap.size);
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ClubActionPublic));
+    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ClubActionPublic));
+    writeCache(cacheKey, rows, CACHE_TTL.CLUB_ACTIONS_BY_DISTILLERY_1H);
+    return rows;
   });
 }
 
