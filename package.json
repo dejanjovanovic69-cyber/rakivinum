@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "cf:pages:build": "npm run build",
-    "cf:pages:deploy": "wrangler pages deploy dist --project-name rakivinum",
+    "cf:pages:deploy": "wrangler pages deploy --project-name rakivinum --config wrangler-pages.toml",
     "cf:whoami": "wrangler whoami",
     "cf:worker:dev": "wrangler dev",
     "cf:worker:deploy": "wrangler deploy",

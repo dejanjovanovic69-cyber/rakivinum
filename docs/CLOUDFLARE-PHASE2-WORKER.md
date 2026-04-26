@@ -58,9 +58,11 @@ Faza 3 status (startovan):
   - `/api/public/club-actions-by-distillery/:distilleryId?limit=...`
   - `/api/public/club-membership-count/:distilleryId` (tacan broj clanova kluba (agregacija))
   - `/api/public/product-lookup?n=...&r=...` (barkod: `barcodeNormalized` pa `barcode`)
-  - /api/public/scan-clusters/:productId?limit=... (agregovani top regioni skenova)
+  - `/api/public/scan-clusters/:productId?limit=...` (agregovani top regioni skenova)
 - Frontend `Distillery` je prebacen na worker-first read tok (uz Firebase fallback).
 - Deploy i verifikacija uradjeni (`rakivinum.pages.dev`).
+
+Deploy Pages koristi **`wrangler-pages.toml`** (`pages_build_output_dir = dist`) da se ne meša sa Worker `wrangler.toml` i da Wrangler ne tretira ceo repo kao samo-Pages projekat.
 
 Operativne komande:
 - Worker+Pages resilient deploy (retry za Cloudflare 10500/500):

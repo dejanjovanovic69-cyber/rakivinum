@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import { useState, useEffect } from "react";
 import { auth, db } from "../lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, query, where, getDocs, getCountFromServer, orderBy, limit } from "firebase/firestore";
+import { collection, query, where, getDocs, getDoc, doc, getCountFromServer, orderBy, limit } from "firebase/firestore";
 import { cn } from "../lib/utils";
 import { isQuotaError, readCache, writeCache } from "../lib/resilience";
 import {
@@ -367,10 +367,10 @@ export default function Home() {
               nextLastSavedProduct = { id: pub.id, ...pub } as ProductLite;
               setLastSavedProduct(nextLastSavedProduct);
             } else {
-              const prodSnap = await getDocs(query(collection(db, "products"), where("__name__", "==", lastId), limit(1)));
-              meterDbRead("home:user_saved_product", prodSnap.size);
-              if (!prodSnap.empty) {
-                nextLastSavedProduct = { id: prodSnap.docs[0].id, ...prodSnap.docs[0].data() } as ProductLite;
+              const prodSnap = await getDoc(doc(db, "products", lastId));
+              meterDbRead("home:user_saved_product", prodSnap.exists() ? 1 : 0);
+              if (prodSnap.exists()) {
+                nextLastSavedProduct = { id: prodSnap.id, ...prodSnap.data() } as ProductLite;
                 setLastSavedProduct(nextLastSavedProduct);
               } else {
                 nextLastSavedProduct = null;

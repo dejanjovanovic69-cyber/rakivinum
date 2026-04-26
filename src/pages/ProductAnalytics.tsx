@@ -27,10 +27,8 @@ import {
   Radar,
 } from "recharts";
 import { cn } from "../lib/utils";
-import { db } from "../lib/firebase";
-import { doc, getDoc } from "firebase/firestore";
 import {
-  fetchPublicProductById,
+  fetchScannerProductById,
   fetchPublicProductRatingSummary,
   fetchPublicProductRatings,
   fetchPublicScanClustersByProductId,
@@ -52,7 +50,7 @@ type RatingDoc = {
 const RADAR_LABELS: { key: keyof NonNullable<RatingDoc["sensoryScores"]>; subject: string }[] = [
   { key: "aroma", subject: "Miris" },
   { key: "taste", subject: "Ukus" },
-  { key: "color", subject: "ÄŒistoÄ‡a" },
+  { key: "color", subject: "Čistoća" },
   { key: "finish", subject: "Aftertaste" },
   { key: "harmony", subject: "Harmonija" },
 ];
@@ -63,7 +61,7 @@ function formatRelativeSr(date: Date): string {
   if (h < 1) return "Upravo sada";
   if (h < 24) return `Pre ${h}h`;
   const d = Math.floor(h / 24);
-  if (d === 1) return "JuÄe";
+  if (d === 1) return "Juče";
   if (d < 7) return `Pre ${d} dana`;
   return date.toLocaleDateString("sr-RS");
 }
@@ -108,56 +106,33 @@ export default function ProductAnalytics() {
       setLoading(true);
       setError(null);
       try {
-        const edgeProduct = await fetchPublicProductById(id);
+        const row = await fetchScannerProductById(id);
         const summary = await fetchPublicProductRatingSummary(id);
         if (cancelled) return;
 
-        if (!edgeProduct) {
-          const pRef = doc(db, "products", id);
-          const pSnap = await getDoc(pRef);
-          if (cancelled) return;
-          if (!pSnap.exists()) {
-            setProduct(null);
-            setError("Proizvod nije pronaÄ‘en.");
-            setLoading(false);
-            return;
-          }
-          const pdata = pSnap.data() as Record<string, unknown>;
-          setProduct({
-            name: (pdata.name as string) || "Proizvod",
-            scanCount: Number(summary?.scanCount ?? pdata.scanCount) || 0,
-            averageRating:
-              typeof summary?.averageRating === "number"
-                ? summary.averageRating
-                : typeof pdata.averageRating === "number"
-                  ? pdata.averageRating
-                  : undefined,
-            ratingCount:
-              typeof summary?.ratingCount === "number"
-                ? summary.ratingCount
-                : typeof pdata.ratingCount === "number"
-                  ? pdata.ratingCount
-                  : undefined,
-          });
-        } else {
-          const pdata = edgeProduct as Record<string, unknown>;
-          setProduct({
-            name: (pdata.name as string) || "Proizvod",
-            scanCount: Number(summary?.scanCount ?? pdata.scanCount) || 0,
-            averageRating:
-              typeof summary?.averageRating === "number"
-                ? summary.averageRating
-                : typeof pdata.averageRating === "number"
-                  ? pdata.averageRating
-                  : undefined,
-            ratingCount:
-              typeof summary?.ratingCount === "number"
-                ? summary.ratingCount
-                : typeof pdata.ratingCount === "number"
-                  ? pdata.ratingCount
-                  : undefined,
-          });
+        if (!row) {
+          setProduct(null);
+          setError("Proizvod nije pronađen.");
+          setLoading(false);
+          return;
         }
+        const pdata = row as Record<string, unknown>;
+        setProduct({
+          name: (pdata.name as string) || "Proizvod",
+          scanCount: Number(summary?.scanCount ?? pdata.scanCount) || 0,
+          averageRating:
+            typeof summary?.averageRating === "number"
+              ? summary.averageRating
+              : typeof pdata.averageRating === "number"
+                ? pdata.averageRating
+                : undefined,
+          ratingCount:
+            typeof summary?.ratingCount === "number"
+              ? summary.ratingCount
+              : typeof pdata.ratingCount === "number"
+                ? pdata.ratingCount
+                : undefined,
+        });
 
         if (cancelled) return;
         const list = await fetchPublicProductRatings(id, 200);
@@ -270,7 +245,7 @@ export default function ProductAnalytics() {
     if (avgRating != null && avgRating >= 4.5) {
       out.push({
         title: "Jak utisak kupaca",
-        body: `ProseÄna ocena na uzorku od ${ratings.length} ocena je ${avgRating.toFixed(1)}/5 â€” percepcija kvaliteta je visoka.`,
+        body: `Prosečna ocena na uzorku od ${ratings.length} ocena je ${avgRating.toFixed(1)}/5 — percepcija kvaliteta je visoka.`,
         highlight: true,
       });
     }
@@ -278,7 +253,7 @@ export default function ProductAnalytics() {
       if (trendDelta > 0.05) {
         out.push({
           title: "Trend kvaliteta",
-          body: `U poslednjim zabeleÅ¾enim danima proseÄna ocena raste (oko +${trendDelta.toFixed(2)} po koraku na grafikonu).`,
+          body: `U poslednjim zabeleženim danima prosečna ocena raste (oko +${trendDelta.toFixed(2)} po koraku na grafikonu).`,
         });
       } else if (trendDelta < -0.05) {
         out.push({
@@ -290,7 +265,7 @@ export default function ProductAnalytics() {
     if (scanClusters.length > 0) {
       out.push({
         title: "Geografski klasteri skenova",
-        body: `NajviÅ¡e skenova u uzorku: ${scanClusters[0].region} (${scanClusters[0].val}). Koordinate su grubo grupisane (bez adrese).`,
+        body: `Najviše skenova u uzorku: ${scanClusters[0].region} (${scanClusters[0].val}). Koordinate su grubo grupisane (bez adrese).`,
       });
     }
     if (out.length === 0) {
@@ -298,8 +273,8 @@ export default function ProductAnalytics() {
         title: "Skupljanje podataka",
         body:
           ratings.length === 0
-            ? "JoÅ¡ nema ocena za ovaj proizvod. Podstaknite goste na sken i ocenu sa etikete."
-            : "Kad bude viÅ¡e ocena sa tekstom i senzorskim profilom, uvidi Ä‡e biti bogatiji.",
+            ? "Još nema ocena za ovaj proizvod. Podstaknite goste na sken i ocenu sa etikete."
+            : "Kad bude više ocena sa tekstom i senzorskim profilom, uvid će biti bogatiji.",
       });
     }
     return out.slice(0, 3);
@@ -316,7 +291,7 @@ export default function ProductAnalytics() {
   if (error || !product) {
     return (
       <div className="min-h-screen bg-bg-base flex flex-col items-center justify-center p-6 text-center gap-4">
-        <p className="text-text-secondary text-sm">{error || "Proizvod nije pronaÄ‘en."}</p>
+        <p className="text-text-secondary text-sm">{error || "Proizvod nije pronađen."}</p>
         <button
           type="button"
           onClick={goBackSafe}
@@ -370,8 +345,8 @@ export default function ProductAnalytics() {
       <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 flex gap-3 text-left">
         <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
         <p className="text-[11px] text-amber-100/90 leading-relaxed">
-          KPI, trend, komentari i klasteri skenova uÄitavaju se iz Firestore-a za ovaj proizvod. Senzorski radar
-          prikazuje proseke samo kada ocene sadrÅ¾e senzorski profil (kao sa etikete).
+          KPI, trend, komentari i klasteri skenova učitavaju se iz Firestore-a za ovaj proizvod. Senzorski radar
+          prikazuje proseke samo kada ocene sadrže senzorski profil (kao sa etikete).
         </p>
       </div>
 
@@ -387,7 +362,7 @@ export default function ProductAnalytics() {
           type="button"
           onClick={exportProductCSV}
           className="p-2 text-gold-500 hover:text-gold-400"
-          title="Preuzmi CSV izveÅ¡taj"
+          title="Preuzmi CSV izveštaj"
         >
           <Download className="w-5 h-5" />
         </button>
@@ -397,7 +372,7 @@ export default function ProductAnalytics() {
         {[
           {
             label: "Ocena",
-            val: displayAvg != null ? displayAvg.toFixed(1) : "â€”",
+            val: displayAvg != null ? displayAvg.toFixed(1) : "—",
             icon: Star,
             color: "text-gold-500",
           },
@@ -415,7 +390,7 @@ export default function ProductAnalytics() {
           },
           {
             label: "Conv",
-            val: displayScans > 0 ? `${convPct}%` : "â€”",
+            val: displayScans > 0 ? `${convPct}%` : "—",
             icon: TrendingUp,
             color: "text-purple-400",
           },
@@ -457,7 +432,7 @@ export default function ProductAnalytics() {
             </ResponsiveContainer>
           ) : (
             <p className="text-sm text-text-secondary italic self-center text-center px-4">
-              Nema dovoljno ocena sa senzorskim skorovima (miris, ukus, â€¦). Radar Ä‡e se pojaviti kada korisnici
+              Nema dovoljno ocena sa senzorskim skorovima (miris, ukus, …). Radar će se pojaviti kada korisnici
               ocenjuju preko etikete sa punim upitnikom.
             </p>
           )}
