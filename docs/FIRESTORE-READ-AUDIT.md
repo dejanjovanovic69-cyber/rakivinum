@@ -157,7 +157,7 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 
 | Read | Napomena |
 |------|----------|
-| `updateDoc` (flag) | Write — Firestore. Feed read već Worker-first gde je implementirano. |
+| `updateDoc` (flag) | Write — Firestore. Utisci: `fetchCommunityRatings` Worker-first. Teški listovi `products`/`distilleries` (**limit 350/220**) učitavaju se **samo** na tabovima Top / Uporedi / Destilerije / Pretraga (ne na default „Utisci“). `fetchCommunityEvents` tek na tabu „Događaji“. |
 
 ---
 

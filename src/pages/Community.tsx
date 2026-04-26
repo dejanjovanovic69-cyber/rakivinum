@@ -1,6 +1,6 @@
 import { Users as UsersIcon, ChevronRight, MapPin, Star, Loader2, MessageCircle, Search, SearchSlash, Compass, CheckCircle, Flag, Sparkles, Info, CalendarDays, X, Scale } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { db } from "../lib/firebase";
 import { doc, updateDoc } from "firebase/firestore";
 import { cn } from "../lib/utils";
@@ -106,6 +106,7 @@ export default function Community() {
   const [communityEvents, setCommunityEvents] = useState<CommunityEventItem[]>([]);
   const [eventsView, setEventsView] = useState<"active" | "archive">("active");
   const [isCatalogLoaded, setIsCatalogLoaded] = useState(false);
+  const catalogFetchLock = useRef(false);
   const [producerSearch, setProducerSearch] = useState("");
   const [compareFilter, setCompareFilter] = useState("all");
   const [compareLeftQuery, setCompareLeftQuery] = useState("");
@@ -142,12 +143,21 @@ export default function Community() {
 
   useEffect(() => {
     let cancelled = false;
+    const ratingsCacheKey = "rakivinum_cache_community_ratings_v1";
+
     const refreshRatings = async () => {
-      if (!shouldRunRefresh("community:ratings", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      if (!shouldRunRefresh("community:ratings", REFRESH_INTERVAL.USER_LIGHT_1H)) {
+        const cached = readCache<RatingItem[]>(ratingsCacheKey);
+        if (cached && Array.isArray(cached) && !cancelled) {
+          setRatings(cached.filter((r) => !r?.isFlagged) as RatingItem[]);
+        }
+        if (!cancelled) setLoading(false);
+        return;
+      }
       try {
         const rows = await fetchCommunityRatings({
           limitCount: 20,
-          cacheKey: "rakivinum_cache_community_ratings_v1",
+          cacheKey: ratingsCacheKey,
           ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
         });
         if (!cancelled) {
@@ -161,9 +171,35 @@ export default function Community() {
       }
     };
 
-    const fetchDataForSearch = async () => {
+    void refreshRatings();
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshRatings();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
+    };
+  }, []);
+
+  /** Heavy product/distillery lists — only tabs that need them (not default „Utisci“). Saves ~400+ Firestore reads per visit. */
+  useEffect(() => {
+    const needsCatalog = ["tops", "compare", "producers", "search"].includes(activeSection);
+    if (!needsCatalog || isCatalogLoaded) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      if (catalogFetchLock.current) return;
+      catalogFetchLock.current = true;
       try {
-        // Fetch independently so one failing query does not blank the whole screen.
         const [prodResult, distResult] = await Promise.allSettled([
           fetchPublicProducts({
             limitCount: PRODUCTS_FETCH_LIMIT,
@@ -176,6 +212,8 @@ export default function Community() {
             ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
           }),
         ]);
+
+        if (cancelled) return;
 
         if (prodResult.status === "fulfilled") {
           setProducts(prodResult.value);
@@ -198,41 +236,41 @@ export default function Community() {
         console.error("Error fetching community catalog:", error);
         if (isQuotaError(error)) setQuotaExceeded(true);
       } finally {
-        setIsCatalogLoaded(true);
+        if (!cancelled) setIsCatalogLoaded(true);
+        catalogFetchLock.current = false;
       }
+    };
 
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, isCatalogLoaded]);
+
+  useEffect(() => {
+    if (activeSection !== "events") return;
+    let cancelled = false;
+
+    const run = async () => {
       try {
         const events = await fetchCommunityEvents({
           limitCount: EVENTS_FETCH_LIMIT,
           cacheKey: "rakivinum_cache_community_events_v1",
           ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
         });
-        setCommunityEvents(events);
+        if (!cancelled) setCommunityEvents(events);
       } catch (err) {
         if (isQuotaError(err)) setQuotaExceeded(true);
         const cachedEvents = readCache<CommunityEventItem[]>("rakivinum_cache_community_events_v1");
-        if (cachedEvents) setCommunityEvents(cachedEvents);
+        if (!cancelled && cachedEvents) setCommunityEvents(cachedEvents);
       }
     };
 
-    void refreshRatings();
-    fetchDataForSearch();
-    const onFocusRefresh = () => {
-      if (document.visibilityState !== "visible") return;
-      void refreshRatings();
-    };
-    const onVisibilityRefresh = () => {
-      if (document.visibilityState !== "visible") return;
-      onFocusRefresh();
-    };
-    window.addEventListener("focus", onFocusRefresh);
-    document.addEventListener("visibilitychange", onVisibilityRefresh);
+    void run();
     return () => {
       cancelled = true;
-      window.removeEventListener("focus", onFocusRefresh);
-      document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
-  }, []);
+  }, [activeSection]);
 
   useEffect(() => {
     try {
@@ -660,7 +698,7 @@ export default function Community() {
                     <h3 className="text-sm font-black text-white uppercase tracking-widest italic">Utisci zajednice</h3>
                   </div>
                   <div className="p-4">
-                    {loading || !isCatalogLoaded ? (
+                    {loading ? (
                       <div className="flex flex-col items-center justify-center py-16 gap-3">
                         <Loader2 className="w-8 h-8 text-gold-500 animate-spin motion-reduce:animate-none" />
                         <p className="text-sm text-text-secondary italic">Osluškujemo tajne buradi…</p>
