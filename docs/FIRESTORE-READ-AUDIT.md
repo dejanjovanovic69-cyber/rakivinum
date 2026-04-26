@@ -39,7 +39,7 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 | Read | Napomena / sledeći korak |
 |------|---------------------------|
 | ID | **`fetchScannerProductById`**. |
-| Barkod | **`fetchPublicProductByBarcodeLookup`** → `/api/public/product-lookup`; ID lookup se radi samo za `/label/...` i ID-like payload, pa se za čiste/nestrukturisane barkod skenove preskaču nepotrebni ID readovi + dupli raw barkod query; za nepostojeći rezultat dodat je kratki negativni cache (2m) da isti invalidan payload ne ponavlja odmah read tok. |
+| Barkod | **`fetchPublicProductByBarcodeLookup`** → `/api/public/product-lookup`; ID lookup se radi samo za `/label/...` i ID-like payload, pa se za čiste/nestrukturisane barkod skenove preskaču nepotrebni ID readovi + dupli raw barkod query; za nepostojeći rezultat dodat je kratki negativni cache (2m), ali se upisuje samo kada edge potvrdi `item: null` (ne pri edge nedostupnosti). |
 
 ---
 
