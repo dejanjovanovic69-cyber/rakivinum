@@ -175,35 +175,56 @@ export default function App() {
     <Router>
       <NotificationSystem />
       <PwaManager />
-      <Suspense fallback={routeFallback}>
-        <Routes>
-          <Route path="/activate" element={<Activate />} />
-          <Route path="/admin" element={<Admin />} />
-          
-          {/* PUBLIC ROUTES - NO BURDEN */}
-          <Route path="/" element={<MobileLayout />}>
-            <Route index element={<Home />} />
-            <Route path="scan" element={<Scanner />} />
-            <Route path="radionica" element={<Workshop />} />
-            <Route path="community" element={<Community />} />
-            <Route path="menu" element={<Menu />} />
-            <Route path="my-clubs" element={<MyClubs />} />
-            <Route path="distilleries" element={<Distilleries />} />
-            <Route path="collection" element={<Collection />} />
-            
-            {/* PREMIUM ROUTES - LICENSED */}
-          </Route>
-          
-          {/* Public Full screen routes */}
-          <Route path="/label/:id" element={<Label />} />
-          <Route path="/distillery/:id" element={<Distillery />} />
-          
-          {/* Professional/B2B routes */}
-          <Route path="/distillery-dashboard" element={<LicenseGuard><DistilleryDashboard /></LicenseGuard>} />
-          <Route path="/product-analytics/:id" element={<LicenseGuard><ProductAnalytics /></LicenseGuard>} />
-          <Route path="/admin-audit" element={<LicenseGuard><AdminAudit /></LicenseGuard>} />
-        </Routes>
-      </Suspense>
+      <Routes>
+        <Route path="/activate" element={<Suspense fallback={routeFallback}><Activate /></Suspense>} />
+        <Route path="/admin" element={<Suspense fallback={routeFallback}><Admin /></Suspense>} />
+
+        {/* PUBLIC ROUTES — lazy Outlet is suspended inside MobileLayout (header/nav ostaju vidljivi). */}
+        <Route path="/" element={<MobileLayout />}>
+          <Route index element={<Home />} />
+          <Route path="scan" element={<Scanner />} />
+          <Route path="radionica" element={<Workshop />} />
+          <Route path="community" element={<Community />} />
+          <Route path="menu" element={<Menu />} />
+          <Route path="my-clubs" element={<MyClubs />} />
+          <Route path="distilleries" element={<Distilleries />} />
+          <Route path="collection" element={<Collection />} />
+        </Route>
+
+        <Route path="/label/:id" element={<Suspense fallback={routeFallback}><Label /></Suspense>} />
+        <Route path="/distillery/:id" element={<Suspense fallback={routeFallback}><Distillery /></Suspense>} />
+
+        <Route
+          path="/distillery-dashboard"
+          element={
+            <Suspense fallback={routeFallback}>
+              <LicenseGuard>
+                <DistilleryDashboard />
+              </LicenseGuard>
+            </Suspense>
+          }
+        />
+        <Route
+          path="/product-analytics/:id"
+          element={
+            <Suspense fallback={routeFallback}>
+              <LicenseGuard>
+                <ProductAnalytics />
+              </LicenseGuard>
+            </Suspense>
+          }
+        />
+        <Route
+          path="/admin-audit"
+          element={
+            <Suspense fallback={routeFallback}>
+              <LicenseGuard>
+                <AdminAudit />
+              </LicenseGuard>
+            </Suspense>
+          }
+        />
+      </Routes>
     </Router>
   );
 }

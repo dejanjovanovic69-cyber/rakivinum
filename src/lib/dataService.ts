@@ -24,6 +24,8 @@ type ProductRatingSummaryPublic = {
 
 const inFlight = new Map<string, Promise<unknown>>();
 const EDGE_API_BASE = String(import.meta.env.VITE_EDGE_API_BASE || "").trim();
+/** Sprečava beskonačno čekanje na Worker (spor mreža / zaglavljen edge) — posle toga fallback na Firestore ili keš. */
+const EDGE_FETCH_TIMEOUT_MS = 15_000;
 
 function dedupe<T>(key: string, factory: () => Promise<T>): Promise<T> {
   const existing = inFlight.get(key);
@@ -40,6 +42,7 @@ async function fetchEdgeItems<T>(path: string, limitCount: number): Promise<T[] 
     const res = await fetch(`${base}${path}?limit=${encodeURIComponent(String(limitCount))}`, {
       method: "GET",
       headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(EDGE_FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     const payload = (await res.json()) as { items?: T[] };
@@ -56,6 +59,7 @@ async function fetchEdgeItemWithAvailability<T>(path: string): Promise<{ availab
     const res = await fetch(`${base}${path}`, {
       method: "GET",
       headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(EDGE_FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return { available: false, item: null };
     const payload = (await res.json()) as { item?: T | null };
@@ -72,6 +76,7 @@ async function fetchEdgeRawJson(pathAndQuery: string): Promise<Record<string, un
     const res = await fetch(`${base}${pathAndQuery}`, {
       method: "GET",
       headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(EDGE_FETCH_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     return (await res.json()) as Record<string, unknown>;

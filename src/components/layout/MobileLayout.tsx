@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Home, ScanLine, FlaskConical, Users, Settings, Bell, X, Sparkles } from "lucide-react";
+import { Home, ScanLine, FlaskConical, Users, Settings, Bell, X, Sparkles, Loader2 } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 
 export default function MobileLayout() {
   const navigate = useNavigate();
@@ -90,7 +90,19 @@ export default function MobileLayout() {
 
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto pb-24 scroll-smooth">
-        <Outlet />
+        <Suspense
+          fallback={
+            <div
+              className="flex min-h-[45dvh] flex-col items-center justify-center gap-3 px-6 text-text-secondary text-sm"
+              aria-busy="true"
+            >
+              <Loader2 className="h-8 w-8 shrink-0 animate-spin text-gold-500 motion-reduce:animate-none" aria-hidden />
+              <span>Učitavanje stranice…</span>
+            </div>
+          }
+        >
+          <Outlet />
+        </Suspense>
       </main>
 
       {/* Bottom Navigation */}

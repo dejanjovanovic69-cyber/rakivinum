@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 — dodat **Playwright** javni smoke (`npm run test:e2e`, vidi `docs/QA-E2E.md`): age gate, početna, Zajednica (nema zaglavljenog „buradi“), Destilerije.
+**Poslednji zapis:** 2026-04-26 — **Suspense** samo oko `Outlet` u `MobileLayout` (nav ostaje pri lazy prelasku); pun `Suspense` oko ceo `Routes` uklonjen. Edge `fetch` u `dataService` sa **15s timeout** (Worker ne može držati UI beskonačno).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
