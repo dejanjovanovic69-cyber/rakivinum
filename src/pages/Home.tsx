@@ -232,8 +232,29 @@ export default function Home() {
   // Public catalog slices for the home hero — not tied to userId so we do not re-fetch when
   // auth resolves from null → uid (that transition used to duplicate heavy Worker/Firestore work).
   useEffect(() => {
-    const fetchDailyRecommendation = async () => {
+    /** Isti ključ kao u effect-u iznad za mapu — jedan dedupe/network umesto tri odvojena fetch-a destilerija. */
+    const HOME_DISTILLERY_LIST_KEY = "rakivinum_cache_home_distillery_list_v1";
+
+    const cachedFullList = readCache<DistilleryLite[]>(HOME_DISTILLERY_LIST_KEY);
+    if (cachedFullList && cachedFullList.length > 0) {
+      setDistilleries(cachedFullList.slice(0, 5));
+    } else {
+      const topOnly = readCache<DistilleryLite[]>("rakivinum_cache_home_distilleries_v1");
+      if (topOnly?.length) setDistilleries(topOnly);
+    }
+
+    const cachedRec = readCache<{ rakija: ProductLite | null; vino: ProductLite | null }>(
+      "rakivinum_cache_home_recommendation_v1",
+    );
+    if (cachedRec && (cachedRec.rakija || cachedRec.vino)) {
+      setRecommendedRakija(cachedRec.rakija || null);
+      setRecommendedVino(cachedRec.vino || null);
+      setIsLoadingRec(false);
+    } else {
       setIsLoadingRec(true);
+    }
+
+    const fetchDailyRecommendation = async () => {
       try {
         const [products, distilleries] = await Promise.all([
           fetchPublicProducts({
@@ -243,10 +264,14 @@ export default function Home() {
           }),
           fetchPublicDistilleries({
             limitCount: 250,
-            cacheKey: "rakivinum_cache_home_distilleries_for_rec_v1",
+            cacheKey: HOME_DISTILLERY_LIST_KEY,
             ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
           }),
         ]);
+        const topDistilleries = (distilleries as DistilleryLite[]).slice(0, 5);
+        setDistilleries(topDistilleries);
+        writeCache("rakivinum_cache_home_distilleries_v1", topDistilleries, CACHE_TTL.DISTILLERY_LIST_6H);
+
         if (products.length > 0) {
           const publicDistilleryIds = new Set(distilleries.map((d: DistilleryLite) => d.id));
           const eligibleProducts = (products as ProductLite[]).filter((p) => p.distilleryId && publicDistilleryIds.has(p.distilleryId));
@@ -309,26 +334,7 @@ export default function Home() {
       }
     };
 
-    const fetchDistilleries = async () => {
-      try {
-        const allDistilleries = await fetchPublicDistilleries({
-          limitCount: 120,
-          cacheKey: "rakivinum_cache_home_distilleries_v1",
-          ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
-        });
-        const topDistilleries = allDistilleries.slice(0, 5);
-        setDistilleries(topDistilleries);
-        writeCache("rakivinum_cache_home_distilleries_v1", topDistilleries, CACHE_TTL.DISTILLERY_LIST_6H);
-      } catch (e) {
-        console.error("Error fetching homepage distilleries:", e);
-        if (isQuotaError(e)) setQuotaExceeded(true);
-        const cachedDistilleries = readCache<DistilleryLite[]>("rakivinum_cache_home_distilleries_v1");
-        if (cachedDistilleries) setDistilleries(cachedDistilleries);
-      }
-    };
-
     void fetchDailyRecommendation();
-    void fetchDistilleries();
   }, []);
 
   useEffect(() => {

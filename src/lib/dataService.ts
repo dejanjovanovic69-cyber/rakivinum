@@ -25,7 +25,8 @@ type ProductRatingSummaryPublic = {
 const inFlight = new Map<string, Promise<unknown>>();
 const EDGE_API_BASE = String(import.meta.env.VITE_EDGE_API_BASE || "").trim();
 /** Sprečava beskonačno čekanje na Worker (spor mreža / zaglavljen edge) — posle toga fallback na Firestore ili keš. */
-const EDGE_FETCH_TIMEOUT_MS = 15_000;
+/** Kraće čekanje na edge — spor fallback na Firestore/keš umesto 15s „vrtnje“. */
+const EDGE_FETCH_TIMEOUT_MS = 6_000;
 
 function dedupe<T>(key: string, factory: () => Promise<T>): Promise<T> {
   const existing = inFlight.get(key);
