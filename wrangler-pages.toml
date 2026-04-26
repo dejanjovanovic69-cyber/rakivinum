@@ -1,4 +1,0 @@
-# Samo za `wrangler pages deploy` — ne mešati sa Worker `wrangler.toml` (izbegava upozorenje da je ceo repo "Pages" projekat).
-name = "rakivinum-pages"
-pages_build_output_dir = "dist"
-compatibility_date = "2026-04-25"
