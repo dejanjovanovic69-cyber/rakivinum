@@ -1,11 +1,11 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (podne) - zavrsen end-to-end ciklus: read dedupe na `Home` i `ProductAnalytics`, ciscenje `.firebase` cache artefakta iz git-a, uspesan resilient deploy i smoke (`master.rakivinum.pages.dev`).
+**Poslednji zapis:** 2026-04-26 (popodne) - dodat korenski `AGENTS.md` sa uputstvom da agent prvo cita ovaj fajl i radi cele pakete (lint/build/smoke) bez cekanja „nastavi“ u istoj sesiji.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
 **Sta da napises Cursoru na pocetku sledeceg rada:**  
-"Prvo procitaj `docs/STATUS-ZADATAKA.md` i nastavi od tamo."
+"Prvo procitaj `AGENTS.md` i `docs/STATUS-ZADATAKA.md`, pa nastavi od tamo."
 
 **Brza lokalna provera (bez eksternih testera):**  
 `npm run cf:smoke:edge` (proverava health + glavne public Worker rute i vraca status/latenciju/payload size).
