@@ -300,7 +300,8 @@ export default function Scanner() {
         }
 
         // Fallback B: exact raw text match (legacy records / QR payloads).
-        if (!finalProductId) {
+        // Skip when raw text is the same as digit-only barcode to avoid duplicate query.
+        if (!finalProductId && (!scannedBarcode || st !== scannedBarcode)) {
           const q = query(collection(db, "products"), where("barcode", "==", st), limit(5));
           const querySnapshot = await getDocs(q);
           meterDbRead("scanner:barcode_raw_lookup", querySnapshot.size);
