@@ -124,6 +124,8 @@ Use these templates to keep operations consistent:
   - `docs/PHASE5-ENABLE-CHECKLIST.md`
 - Quality gate run evidence:
   - `docs/PHASE5-QUALITY-GATE-RUN-2026-04-26.md`
+- Activation status snapshot:
+  - `docs/PHASE5-ACTIVATION-STATUS-2026-04-26.md`
 
 ## Quick Commands
 
