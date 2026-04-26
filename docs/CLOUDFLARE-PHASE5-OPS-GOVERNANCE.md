@@ -126,6 +126,8 @@ Use these templates to keep operations consistent:
   - `docs/PHASE5-QUALITY-GATE-RUN-2026-04-26.md`
 - Activation status snapshot:
   - `docs/PHASE5-ACTIVATION-STATUS-2026-04-26.md`
+- Owner gate completion guide:
+  - `docs/PHASE5-OWNER-GATES-HOWTO.md`
 
 ## Quick Commands
 

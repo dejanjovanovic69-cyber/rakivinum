@@ -17,9 +17,9 @@ Date: `2026-04-26`
 ## Owner Actions Required (to reach GO)
 
 1. Confirm SLO acceptance
-   - Fill checklist gate #1 owner/date/evidence
+   - Fill checklist gate #1 owner/date/evidence (see `docs/PHASE5-OWNER-GATES-HOWTO.md`)
 2. Configure and confirm budget alerts
-   - Fill checklist gate #2 owner/date/evidence
+   - Fill checklist gate #2 owner/date/evidence (see `docs/PHASE5-OWNER-GATES-HOWTO.md`)
 
 ## Current Recommendation
 

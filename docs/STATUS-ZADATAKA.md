@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - dodat je Faza 5 activation status snapshot (`docs/PHASE5-ACTIVATION-STATUS-2026-04-26.md`) sa jasnim preostalim gate-ovima za formalni GO.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - dodat je owner how-to za preostala Faza 5 gate-a (`docs/PHASE5-OWNER-GATES-HOWTO.md`), pa je put do formalnog GO sada potpuno operativno opisan.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -83,6 +83,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Faza 5 incident drill #1:** dodat `docs/PHASE5-INCIDENT-DRILL-2026-04-26.md` kao prva simulacija incident/rollback odgovora.
 - **Faza 5 quality gate evidence #1:** dodat `docs/PHASE5-QUALITY-GATE-RUN-2026-04-26.md` kao dokaz primene lint/build/smoke gate seta.
 - **Faza 5 activation snapshot #1:** dodat `docs/PHASE5-ACTIVATION-STATUS-2026-04-26.md` (5/7 gate-ova zatvoreno; preostaju SLO acceptance i budget alert evidence).
+- **Faza 5 owner gates how-to:** dodat `docs/PHASE5-OWNER-GATES-HOWTO.md` sa koracima i evidence formatom za zatvaranje preostala 2 gate-a.
 
 ---
 
