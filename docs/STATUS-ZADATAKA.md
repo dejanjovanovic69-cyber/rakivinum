@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - Faza 4 baseline merenje (3 uzastopna smoke prolaza) je završeno: sve rute su 200/OK; median latencije su stabilne (`distilleries` ~1383ms, `ratings-feed` ~997ms, `product-lookup` ~712ms).
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - Faza 4 checkpoint (još 2 smoke prolaza) potvrđuje stabilan obrazac: svi endpointi su i dalje 200/OK, uz očekivan spike obrazac na `distilleries`/`ratings-feed` (jedan viši, jedan niži run).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -150,6 +150,12 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - 3x uzastopni `npm run cf:smoke:edge` prošli bez greške.
 - Svi endpointi `Status=200`, bez regresije payload size.
 - Trenutni fokus za praćenje: `distilleries` i `ratings-feed` latency trend (zbog povremenih viših spike-ova).
+
+**Checkpoint #2 (isti dan):**
+- Dodatna 2x `npm run cf:smoke:edge` prošla bez greške (svi endpointi 200).
+- `distilleries`: 2306ms -> 1332ms (spike pa povratak).
+- `ratings-feed`: 1473ms -> 1043ms (spike pa povratak).
+- Zaključak: za sada nema regresije, nastaviti 24h trend praćenje pre bilo kakvog novog endpoint/tuning zahvata.
 
 ---
 
