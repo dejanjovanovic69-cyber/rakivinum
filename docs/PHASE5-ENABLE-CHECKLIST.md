@@ -10,15 +10,15 @@ Status legend:
 
 ## Enable Gates
 
-1. `[ ]` SLO targets accepted
-   - Owner:
-   - Date:
-   - Evidence (link/doc):
+1. `[x]` SLO targets accepted
+   - Owner: `dejan jovanovic`
+   - Date: `2026-04-26`
+   - Evidence (link/doc): `SLO accepted per docs/CLOUDFLARE-PHASE5-OPS-GOVERNANCE.md`
 
-2. `[ ]` Budget alerts configured (50/70/90)
-   - Owner:
-   - Date:
-   - Evidence (screenshot/link):
+2. `[x]` Budget alerts configured (50/70/90)
+   - Owner: `dejan jovanovic`
+   - Date: `2026-04-26`
+   - Evidence (screenshot/link): `Owner confirmed budget alerts configured (50/70/90)`
 
 3. `[x]` Incident template tested on at least one drill
    - Owner: `AI agent (drill), owner review pending`
@@ -47,14 +47,14 @@ Status legend:
 
 ## Go/No-Go Decision
 
-- Decision: `GO | NO-GO`
-- Decided by:
-- Decision date:
-- Notes:
+- Decision: `GO`
+- Decided by: `dejan jovanovic`
+- Decision date: `2026-04-26`
+- Notes: `All 7/7 enable gates completed; Phase 5 formally enabled.`
 
 ## Post-Enable Follow-up (first 14 days)
 
-- Day 1 check complete: `[ ]`
+- Day 1 check complete: `[-]`
 - Day 3 check complete: `[ ]`
 - Day 7 check complete: `[ ]`
 - Day 14 check complete: `[ ]`
