@@ -147,7 +147,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 
 | Read | Napomena |
 |------|----------|
-| `getDoc(licenses/{token})` | **Ne zamenjivati** javnim Worker odgovorom za aktivaciju: `toLicenseItem` na edge-u **ne vraća** `activatedDevices`, `maxDevices`, itd. — potrebno za poslovnu logiku. Opciono: poseban **zaštićeni** endpoint kasnije. |
+| `getDoc(licenses/{token})` | **Ne zamenjivati** javnim Worker odgovorom za aktivaciju: `toLicenseItem` na edge-u **ne vraća** `activatedDevices`, `maxDevices`, itd. — potrebno za poslovnu logiku. Opciono: poseban **zaštićeni** endpoint kasnije. Za javni `license-by-token` helper uveden je kratki negativni cache (2m) za nepostojeći token, da se ublaže ponovljeni invalid lookup-i. |
 
 ---
 

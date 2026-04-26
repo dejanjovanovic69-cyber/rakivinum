@@ -603,20 +603,23 @@ export async function fetchPublicLicenseByToken(token: string): Promise<LicenseP
   if (!safeToken) return null;
   return dedupe(`licenseByToken:${safeToken}`, async () => {
     const cacheKey = `rakivinum_cache_license_by_token_${safeToken}_v1`;
-    const cached = readCache<LicensePublic>(cacheKey);
-    if (cached) return cached;
+    const cached = readCache<{ found: boolean; item: LicensePublic | null }>(cacheKey);
+    if (cached) return cached.found ? cached.item : null;
 
     const edge = await fetchEdgeItem<LicensePublic>(`/api/public/license/${encodeURIComponent(safeToken)}`);
     if (edge) {
-      writeCache(cacheKey, edge, CACHE_TTL.LICENSE_BY_TOKEN_10M);
+      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.LICENSE_BY_TOKEN_10M);
       return edge;
     }
 
     const snap = await getDocs(query(collection(db, "licenses"), where("token", "==", safeToken), limit(1)));
     meterDbRead("dataService:license_by_token_fallback", snap.size);
-    if (snap.empty) return null;
+    if (snap.empty) {
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.LICENSE_BY_TOKEN_NEGATIVE_2M);
+      return null;
+    }
     const row = { id: snap.docs[0].id, ...snap.docs[0].data() } as LicensePublic;
-    writeCache(cacheKey, row, CACHE_TTL.LICENSE_BY_TOKEN_10M);
+    writeCache(cacheKey, { found: true, item: row }, CACHE_TTL.LICENSE_BY_TOKEN_10M);
     return row;
   });
 }
