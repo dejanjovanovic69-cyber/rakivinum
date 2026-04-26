@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 — **Worker:** duži edge keš istog GET URL-a (**900s** umesto 120s), jači `Cache-Control` (s-maxage 7200); **niži max limit-i** na javnim listama (`products` max 500, `distilleries` max 400, `products-by-distillery` max 400, itd.) da jedan zahtev ne može da „povuče“ 800+ dokumenata.
+**Poslednji zapis:** 2026-04-26 — **Katalog ne mora na sekund:** klijentski `CACHE_TTL` za liste (destilerije, proizvodi, događaji, home map, club actions) = **24h**; Worker `servePublicCached(..., "catalog")` sa **max-age/s-maxage 24h** za iste javne rute (bez ponovnog Firestore-a na svakom ulasku). Interaktivne rute (ocene, članstva, licence) ostaju kraći keš.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

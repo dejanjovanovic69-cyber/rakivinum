@@ -29,8 +29,10 @@ const GCP_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const FIRESTORE_SCOPE = "https://www.googleapis.com/auth/datastore";
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 120;
-/** Koliko Worker `caches.default` drži identičan GET pre novog Firestore poziva (isti URL = 0 novih read-ova u tom prozoru). */
-const EDGE_CACHE_TTL_SECONDS = 900;
+/** Kratki keš za „žive“ rute (ocene, članstva…). */
+const EDGE_CACHE_TTL_INTERACTIVE_SEC = 900;
+/** Javni katalog — ne mora na sekund; isti URL satima ne pali Firestore. */
+const EDGE_CACHE_TTL_CATALOG_SEC = 86_400;
 
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
 let rateLimitState = new Map<string, { count: number; resetAt: number }>();
@@ -72,10 +74,16 @@ function withDefaultHeaders(response: Response): Response {
   return new Response(response.body, { status: response.status, headers });
 }
 
+type PublicCacheProfile = "catalog" | "interactive";
+
 async function servePublicCached(
   request: Request,
   handler: () => Promise<Response>,
+  profile: PublicCacheProfile = "interactive",
 ): Promise<Response> {
+  const edgeSec = profile === "catalog" ? EDGE_CACHE_TTL_CATALOG_SEC : EDGE_CACHE_TTL_INTERACTIVE_SEC;
+  const sMax = profile === "catalog" ? EDGE_CACHE_TTL_CATALOG_SEC : 7_200;
+
   const cache = caches.default;
   const cacheKey = new Request(request.url, { method: "GET" });
   const hit = await cache.match(cacheKey);
@@ -84,7 +92,7 @@ async function servePublicCached(
   const fresh = await handler();
   if (fresh.ok) {
     const headers = new Headers(fresh.headers);
-    headers.set("cache-control", `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=7200`);
+    headers.set("cache-control", `public, max-age=${edgeSec}, s-maxage=${sMax}`);
     const responseToCache = new Response(fresh.body, { status: fresh.status, headers });
     await cache.put(cacheKey, responseToCache.clone());
     return responseToCache;
@@ -553,65 +561,85 @@ export default {
       }
 
       if (url.pathname === "/api/public/distilleries") {
-        return servePublicCached(request, async () => {
-          const limitCount = parseLimit(url, 250, 400);
-          const rows = await fetchCollection(env, "distilleries", limitCount);
-          const filtered = rows.filter((d) => d.isArchived !== true && d.isVerified === true);
-          const lightItems = filtered.map((row) => toDistilleryListItem(row));
-          return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const limitCount = parseLimit(url, 250, 400);
+            const rows = await fetchCollection(env, "distilleries", limitCount);
+            const filtered = rows.filter((d) => d.isArchived !== true && d.isVerified === true);
+            const lightItems = filtered.map((row) => toDistilleryListItem(row));
+            return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname === "/api/public/distilleries-by-ids") {
-        return servePublicCached(request, async () => {
-          const raw = String(url.searchParams.get("ids") || "");
-          const ids = Array.from(
-            new Set(
-              raw
-                .split(",")
-                .map((x) => String(x || "").trim())
-                .filter((x) => x.length > 0),
-            ),
-          ).slice(0, 40);
-          if (ids.length === 0) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
+        return servePublicCached(
+          request,
+          async () => {
+            const raw = String(url.searchParams.get("ids") || "");
+            const ids = Array.from(
+              new Set(
+                raw
+                  .split(",")
+                  .map((x) => String(x || "").trim())
+                  .filter((x) => x.length > 0),
+              ),
+            ).slice(0, 40);
+            if (ids.length === 0) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
 
-          const rows = await Promise.all(ids.map((id) => fetchDocumentById(env, "distilleries", id)));
-          const filtered = rows.filter((d) => d && d.isArchived !== true && d.isVerified === true);
-          return new Response(JSON.stringify({ items: filtered }), { headers: jsonHeaders });
-        });
+            const rows = await Promise.all(ids.map((id) => fetchDocumentById(env, "distilleries", id)));
+            const filtered = rows.filter((d) => d && d.isArchived !== true && d.isVerified === true);
+            return new Response(JSON.stringify({ items: filtered }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname === "/api/public/products") {
-        return servePublicCached(request, async () => {
-          const limitCount = parseLimit(url, 300, 500);
-          const rows = await fetchCollection(env, "products", limitCount);
-          const filtered = rows.filter(
-            (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
-          );
-          const lightItems = filtered.map((row) => toProductListItem(row));
-          return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const limitCount = parseLimit(url, 300, 500);
+            const rows = await fetchCollection(env, "products", limitCount);
+            const filtered = rows.filter(
+              (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
+            );
+            const lightItems = filtered.map((row) => toProductListItem(row));
+            return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname === "/api/public/community-events") {
-        return servePublicCached(request, async () => {
-          const limitCount = parseLimit(url, 60, 200);
-          const rows = await fetchCollection(env, "community_events", limitCount);
-          const sorted = rows.sort((a, b) => String(b.eventDate || "").localeCompare(String(a.eventDate || "")));
-          return new Response(JSON.stringify({ items: sorted }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const limitCount = parseLimit(url, 60, 200);
+            const rows = await fetchCollection(env, "community_events", limitCount);
+            const sorted = rows.sort((a, b) => String(b.eventDate || "").localeCompare(String(a.eventDate || "")));
+            return new Response(JSON.stringify({ items: sorted }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname === "/api/public/community-links") {
-        return servePublicCached(request, async () => {
-          const limitCount = parseLimit(url, 80, 200);
-          const rows = await fetchCollection(env, "community_links", limitCount);
-          const items = rows
-            .filter((r) => String(asText(r.url) || "").trim().length > 0)
-            .map((r) => toCommunityLinkItem(r))
-            .sort((a, b) => String(a.label || "").localeCompare(String(b.label || ""), "sr"));
-          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const limitCount = parseLimit(url, 80, 200);
+            const rows = await fetchCollection(env, "community_links", limitCount);
+            const items = rows
+              .filter((r) => String(asText(r.url) || "").trim().length > 0)
+              .map((r) => toCommunityLinkItem(r))
+              .sort((a, b) => String(a.label || "").localeCompare(String(b.label || ""), "sr"));
+            return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname === "/api/public/ratings-feed") {
@@ -628,16 +656,20 @@ export default {
       }
 
       if (url.pathname === "/api/public/club-actions") {
-        return servePublicCached(request, async () => {
-          const limitCount = parseLimit(url, 20, 80);
-          const rows = await fetchCollection(env, "club_actions", 120);
-          const items = rows
-            .filter((r) => r.isActive === true)
-            .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-            .slice(0, limitCount)
-            .map((r) => toClubActionItem(r));
-          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const limitCount = parseLimit(url, 20, 80);
+            const rows = await fetchCollection(env, "club_actions", 120);
+            const items = rows
+              .filter((r) => r.isActive === true)
+              .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+              .slice(0, limitCount)
+              .map((r) => toClubActionItem(r));
+            return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname.startsWith("/api/public/club-memberships/")) {
@@ -662,47 +694,59 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/public/distillery/")) {
-        return servePublicCached(request, async () => {
-          const id = decodeURIComponent(url.pathname.replace("/api/public/distillery/", "").trim());
-          if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
-          const row = await fetchDocumentById(env, "distilleries", id);
-          const item = row && row.isArchived !== true && row.isVerified === true ? row : null;
-          return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const id = decodeURIComponent(url.pathname.replace("/api/public/distillery/", "").trim());
+            if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
+            const row = await fetchDocumentById(env, "distilleries", id);
+            const item = row && row.isArchived !== true && row.isVerified === true ? row : null;
+            return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname.startsWith("/api/public/products-by-distillery/")) {
-        return servePublicCached(request, async () => {
-          const distilleryId = decodeURIComponent(
-            url.pathname.replace("/api/public/products-by-distillery/", "").trim(),
-          );
-          if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
-          const limitCount = parseLimit(url, 250, 400);
-          const rows = await fetchCollectionWhereEquals(env, "products", "distilleryId", distilleryId, limitCount);
-          const filtered = rows.filter(
-            (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
-          );
-          const lightItems = filtered.map((row) => toProductListItem(row));
-          return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const distilleryId = decodeURIComponent(
+              url.pathname.replace("/api/public/products-by-distillery/", "").trim(),
+            );
+            if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
+            const limitCount = parseLimit(url, 250, 400);
+            const rows = await fetchCollectionWhereEquals(env, "products", "distilleryId", distilleryId, limitCount);
+            const filtered = rows.filter(
+              (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
+            );
+            const lightItems = filtered.map((row) => toProductListItem(row));
+            return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname.startsWith("/api/public/club-actions-by-distillery/")) {
-        return servePublicCached(request, async () => {
-          const distilleryId = decodeURIComponent(
-            url.pathname.replace("/api/public/club-actions-by-distillery/", "").trim(),
-          );
-          if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
-          const limitCount = parseLimit(url, 40, 120);
-          const fetchCap = Math.min(200, Math.max(limitCount * 3, 80));
-          const rows = await fetchCollectionWhereEquals(env, "club_actions", "distilleryId", distilleryId, fetchCap);
-          const items = rows
-            .filter((r) => r.isActive === true)
-            .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-            .slice(0, limitCount)
-            .map((r) => toClubActionItem(r));
-          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const distilleryId = decodeURIComponent(
+              url.pathname.replace("/api/public/club-actions-by-distillery/", "").trim(),
+            );
+            if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
+            const limitCount = parseLimit(url, 40, 120);
+            const fetchCap = Math.min(200, Math.max(limitCount * 3, 80));
+            const rows = await fetchCollectionWhereEquals(env, "club_actions", "distilleryId", distilleryId, fetchCap);
+            const items = rows
+              .filter((r) => r.isActive === true)
+              .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+              .slice(0, limitCount)
+              .map((r) => toClubActionItem(r));
+            return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname.startsWith("/api/public/club-membership-count/")) {
@@ -739,34 +783,42 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/public/product/")) {
-        return servePublicCached(request, async () => {
-          const id = decodeURIComponent(url.pathname.replace("/api/public/product/", "").trim());
-          if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
-          const row = await fetchDocumentById(env, "products", id);
-          const item = row &&
-            row.isApproved !== false &&
-            row.isArchivedByDistillery !== true &&
-            row.publicLabelDisabled !== true
-            ? row
-            : null;
-          return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const id = decodeURIComponent(url.pathname.replace("/api/public/product/", "").trim());
+            if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
+            const row = await fetchDocumentById(env, "products", id);
+            const item = row &&
+              row.isApproved !== false &&
+              row.isArchivedByDistillery !== true &&
+              row.publicLabelDisabled !== true
+              ? row
+              : null;
+            return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname.startsWith("/api/public/ratings-summary/")) {
-        return servePublicCached(request, async () => {
-          const productId = decodeURIComponent(url.pathname.replace("/api/public/ratings-summary/", "").trim());
-          if (!productId) {
-            return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
-          }
-          const row = await fetchDocumentById(env, "products", productId);
-          const isPublic = row &&
-            row.isApproved !== false &&
-            row.isArchivedByDistillery !== true &&
-            row.publicLabelDisabled !== true;
-          const item = isPublic ? toProductRatingSummary(row) : null;
-          return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
-        });
+        return servePublicCached(
+          request,
+          async () => {
+            const productId = decodeURIComponent(url.pathname.replace("/api/public/ratings-summary/", "").trim());
+            if (!productId) {
+              return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
+            }
+            const row = await fetchDocumentById(env, "products", productId);
+            const isPublic = row &&
+              row.isApproved !== false &&
+              row.isArchivedByDistillery !== true &&
+              row.publicLabelDisabled !== true;
+            const item = isPublic ? toProductRatingSummary(row) : null;
+            return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname.startsWith("/api/public/product-ratings/")) {
