@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++++) - `Collection` striktno cache-first kada cache postoji (`readCache`), pa se izbegava automatski Firestore fetch pri svakom ponovnom ulasku u kolekciju.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++) - `dataService` dobio 1h cache za `fetchPublicProductRatings` i `fetchPublicScanClustersByProductId`, pa `ProductAnalytics` pri ponovnim ulascima manje često radi iste read-ove.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -39,7 +39,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
   - Worker public GET rute imaju best-effort rate-limit + edge cache
   - `ProductAnalytics` koristi Worker-first summary tok (uz Firebase fallback)
   - `Community` reviews feed koristi Worker-first tok preko `/api/public/ratings-feed` (uz Firebase fallback)
-  - `ProductAnalytics` koristi Worker-first i za listu ocena preko `/api/public/product-ratings/:productId` (uz Firebase fallback)
+  - `ProductAnalytics` koristi Worker-first i za listu ocena preko `/api/public/product-ratings/:productId` (uz Firebase fallback + 1h client cache)
   - `Home` aktivne akcije/pogodnosti koriste Worker-first tok preko `/api/public/club-actions` (uz Firebase fallback)
   - `Home` clanstva i licenca koriste Worker-first tokove preko `/api/public/club-memberships/:visitorId` i `/api/public/license/:token` (uz Firebase fallback)
 

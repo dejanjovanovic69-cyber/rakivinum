@@ -414,17 +414,27 @@ export async function fetchPublicProductRatings(productId: string, limitCount = 
   const safeId = String(productId || "").trim();
   if (!safeId) return [];
   return dedupe(`productRatings:${safeId}:${limitCount}`, async () => {
+    const cacheKey = `rakivinum_cache_product_ratings_${safeId}_${limitCount}_v1`;
+    const cached = readCache<ProductRatingPublic[]>(cacheKey);
+    if (cached) return cached;
+
     const edgeRows = await fetchEdgeItems<ProductRatingPublic>(
       `/api/public/product-ratings/${encodeURIComponent(safeId)}`,
       limitCount,
     );
-    if (edgeRows && edgeRows.length > 0) return edgeRows.filter((r) => r.isFlagged !== true);
+    if (edgeRows && edgeRows.length > 0) {
+      const rows = edgeRows.filter((r) => r.isFlagged !== true);
+      writeCache(cacheKey, rows, CACHE_TTL.PRODUCT_RATINGS_1H);
+      return rows;
+    }
 
     const snap = await getDocs(query(collection(db, "ratings"), where("productId", "==", safeId), limit(limitCount)));
     meterDbRead("dataService:product_ratings_fallback", snap.size);
-    return snap.docs
+    const rows = snap.docs
       .map((d) => ({ id: d.id, ...d.data() } as ProductRatingPublic))
       .filter((r) => r.isFlagged !== true);
+    writeCache(cacheKey, rows, CACHE_TTL.PRODUCT_RATINGS_1H);
+    return rows;
   });
 }
 
@@ -432,11 +442,18 @@ export async function fetchPublicScanClustersByProductId(productId: string, clus
   const safeId = String(productId || "").trim();
   if (!safeId) return [];
   return dedupe(`scanClusters:${safeId}:${clusterLimit}`, async () => {
+    const cacheKey = `rakivinum_cache_scan_clusters_${safeId}_${clusterLimit}_v1`;
+    const cached = readCache<ScanClusterPublic[]>(cacheKey);
+    if (cached) return cached;
+
     const edgeRows = await fetchEdgeItems<ScanClusterPublic>(
       `/api/public/scan-clusters/${encodeURIComponent(safeId)}`,
       clusterLimit,
     );
-    if (edgeRows && edgeRows.length > 0) return edgeRows;
+    if (edgeRows && edgeRows.length > 0) {
+      writeCache(cacheKey, edgeRows, CACHE_TTL.SCAN_CLUSTERS_1H);
+      return edgeRows;
+    }
 
     const clusters = new Map<string, number>();
     try {
@@ -452,10 +469,12 @@ export async function fetchPublicScanClustersByProductId(productId: string, clus
     } catch {
       return [];
     }
-    return [...clusters.entries()]
+    const rows = [...clusters.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, clusterLimit)
       .map(([region, val]) => ({ region, val }));
+    writeCache(cacheKey, rows, CACHE_TTL.SCAN_CLUSTERS_1H);
+    return rows;
   });
 }
 

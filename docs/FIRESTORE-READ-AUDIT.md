@@ -89,7 +89,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 | Read | Napomena |
 |------|----------|
 | Proizvod (zaglavlje KPI) | **`fetchScannerProductById`** (jedan edge/Firestore tok, bez duplog `getDoc` posle `fetchPublic`). |
-| scan clusters | **[Urađeno]** `fetchPublicScanClustersByProductId` → `/api/public/scan-clusters/:productId` (uz fallback). |
+| `product-ratings` / `scan clusters` | **[Urađeno]** `fetchPublicProductRatings` i `fetchPublicScanClustersByProductId` preko Worker endpointa, uz dodatni 1h client cache u `dataService` da ponovni ulasci ne povlače isti read odmah. |
 
 ---
 
