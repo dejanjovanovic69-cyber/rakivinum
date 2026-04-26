@@ -118,6 +118,8 @@ Use these templates to keep operations consistent:
   - `docs/PHASE5-INCIDENT-REPORT-TEMPLATE.md`
 - Weekly ops report template:
   - `docs/PHASE5-WEEKLY-OPS-REPORT-TEMPLATE.md`
+- Phase-5 enable checklist:
+  - `docs/PHASE5-ENABLE-CHECKLIST.md`
 
 ## Quick Commands
 
