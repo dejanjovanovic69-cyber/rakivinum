@@ -17,6 +17,9 @@
     "cf:deploy:resilient": "powershell -ExecutionPolicy Bypass -File ./scripts/cf-deploy-resilient.ps1",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
     "backup:local": "powershell -ExecutionPolicy Bypass -File ./scripts/backup-project.ps1 -Mode daily",
     "backup:local:keep30": "powershell -ExecutionPolicy Bypass -File ./scripts/backup-project.ps1 -KeepLast 30 -Mode daily",
     "backup:full": "powershell -ExecutionPolicy Bypass -File ./scripts/backup-project.ps1 -Mode full -KeepLast 8"
@@ -54,6 +57,7 @@
     "autoprefixer": "^10.4.21",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
+    "@playwright/test": "^1.52.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vite-plugin-pwa": "^1.2.0",
