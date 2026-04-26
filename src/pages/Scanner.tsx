@@ -250,17 +250,22 @@ export default function Scanner() {
     }
 
     try {
+      const scannedBarcode = normalizeBarcode(scannedText);
+      const isLabelUrl = scannedText.includes("/label/");
+      const rawLooksLikeDigitsBarcode = Boolean(scannedBarcode) && st === scannedBarcode;
+
       // In a real app, the QR code might be a full URL (e.g. https://app.com/label/123)
       let productId = scannedText;
-      if (scannedText.includes('/label/')) {
+      if (isLabelUrl) {
         const parts = scannedText.split('/label/');
         const rawPart = parts[parts.length - 1] || "";
         productId = rawPart.split(/[?#]/)[0] || rawPart;
       }
       productId = decodeURIComponent(String(productId || "").trim());
 
-      // Check if product exists by ID first (Worker-first when edge returns public item; else jedan getDoc)
-      const productRow = await fetchScannerProductById(productId);
+      // Avoid unnecessary ID read for plain numeric barcode scans.
+      const shouldTryDirectIdLookup = isLabelUrl || !rawLooksLikeDigitsBarcode;
+      const productRow = shouldTryDirectIdLookup ? await fetchScannerProductById(productId) : null;
 
       let finalProductId = "";
       let finalProductData: ProductLookupData | null = null;
@@ -269,8 +274,6 @@ export default function Scanner() {
         finalProductId = productRow.id;
         finalProductData = productRow as ProductLookupData;
       } else {
-        const scannedBarcode = normalizeBarcode(scannedText);
-
         const edgeBarcodeHit = await fetchPublicProductByBarcodeLookup(scannedBarcode, st);
         if (edgeBarcodeHit) {
           finalProductId = edgeBarcodeHit.id;

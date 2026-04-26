@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++) - `Scanner` barcode fallback dedupe: preskače se dupli `barcode == rawText` upit kada je sirovi sken već isti digits barkod.
+**Poslednji zapis:** 2026-04-26 (popodne+++++) - `Scanner` optimizovan za numerički barkod: preskače nepotreban početni ID lookup i dupli `barcode == rawText` upit kada je raw već isti digits barkod.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -43,7 +43,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 
 - **Firestore / kvota:** `limit()` na upitima, kes/dedup (`dataService`, `resilience`), smanjeni `onSnapshot` gde nije neophodno, `refreshGate` za `focus` burst (`Home`, `Menu`, `Distillery`, itd.).
 - **Zajednica (`Community`):** ocene (feed) vise nisu teski `onSnapshot` - kontrolisan `getDocs` + periodicno/fokus osvezavanje + gate.
-- **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (kes/dedup), bez `getDocs` cele `products` kolekcije; uklonjen dupli raw barkod upit kada je raw vec numericki barkod.
+- **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (kes/dedup), bez `getDocs` cele `products` kolekcije; za numerički barkod preskače se početni ID lookup i dupli raw barkod upit.
 - **Pocetna (`Home`):** sacuvano - `getCountFromServer` + poslednji artikal preko `orderBy(createdAt)+limit(1)`; fokus na korisnicke statistike sa gate-om.
 - **Kolekcija (`Collection`):** ucitavanje sacuvanog sa `limit` (+ `orderBy` za ulogovanog); fallback za product detalje je batched (`documentId in`) umesto pojedinacnih `getDoc`.
 - **Admin / audit / dashboard:** manje real-time slusanje gde je bilo skupo; kontrolisani refresh; prisustvo (online broj) za superadmin; paginacija brisanja proizvoda pri brisanju destilerije.
