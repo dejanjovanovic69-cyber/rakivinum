@@ -98,7 +98,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 | Read | Napomena |
 |------|----------|
 | `club_memberships`, `distilleries`, `club_actions` | **[Delom urađeno]** `fetchPublicClubMembershipsByVisitorId`, `fetchPublicDistilleryById` (+ `getDoc` fallback), `fetchPublicClubActionsForDistillery`. |
-| `scans`, `ratings` (napredak po visitoru) | Ostaje Firestore (nema javnog Worker-a). |
+| `scans`, `ratings` (napredak po visitoru) | Ostaje Firestore (nema javnog Worker-a), ali je optimizovano na **2 upita ukupno po ekranu** (jedan za `scans`, jedan za `ratings`) umesto 2 upita po klubu/akciji. |
 
 ---
 

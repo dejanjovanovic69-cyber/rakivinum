@@ -81,6 +81,39 @@ export default function MyClubs() {
     const fetchClubs = async () => {
       setIsLoading(true);
       try {
+        // Read visitor progress once, then reuse per-club to avoid N x Firestore queries.
+        const scansByDistillery = new Map<string, number>();
+        const ratingsByDistillery = new Map<string, number>();
+        const [scansSnap, ratingsSnap] = await Promise.all([
+          getDocs(
+            query(
+              collection(db, "scans"),
+              where("visitorId", "==", visitorId),
+              limit(1200),
+            ),
+          ),
+          getDocs(
+            query(
+              collection(db, "ratings"),
+              where("visitorId", "==", visitorId),
+              where("rating", ">=", 4.5),
+              limit(1200),
+            ),
+          ),
+        ]);
+        scansSnap.forEach((d) => {
+          const row = d.data() as { distilleryId?: unknown };
+          const distilleryId = String(row?.distilleryId || "").trim();
+          if (!distilleryId) return;
+          scansByDistillery.set(distilleryId, (scansByDistillery.get(distilleryId) || 0) + 1);
+        });
+        ratingsSnap.forEach((d) => {
+          const row = d.data() as { distilleryId?: unknown };
+          const distilleryId = String(row?.distilleryId || "").trim();
+          if (!distilleryId) return;
+          ratingsByDistillery.set(distilleryId, (ratingsByDistillery.get(distilleryId) || 0) + 1);
+        });
+
         const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);
         const joinedClubsIds = memberships.map((m) => m.distilleryId).filter((x): x is string => typeof x === "string" && x.length > 0);
         
@@ -112,30 +145,9 @@ export default function MyClubs() {
           const actions: ClubAction[] = actionRows.map((row) => ({ id: row.id, ...(row as object) } as ClubAction));
 
           // Calculate Progress for each action
-          const actionsWithProgress = await Promise.all(actions.map(async (action) => {
-            let currentScans = 0;
-            let currentRatings = 0;
-            
-            // Get Scans
-            const qScans = query(
-              collection(db, 'scans'),
-              where('visitorId', '==', visitorId),
-              where('distilleryId', '==', id),
-              limit(500)
-            );
-            const scansSnap = await getDocs(qScans);
-            currentScans = scansSnap.size;
-
-            // Get Ratings
-            const qRatings = query(
-              collection(db, 'ratings'),
-              where('visitorId', '==', visitorId),
-              where('distilleryId', '==', id),
-              where('rating', '>=', 4.5),
-              limit(500)
-            );
-            const ratingsSnap = await getDocs(qRatings);
-            currentRatings = ratingsSnap.size;
+          const currentScans = scansByDistillery.get(id) || 0;
+          const currentRatings = ratingsByDistillery.get(id) || 0;
+          const actionsWithProgress = actions.map((action) => {
 
             let progress = 0;
             let targets: ClubTarget[] = [];
@@ -156,12 +168,12 @@ export default function MyClubs() {
               targets = [{ label: 'Ocene', current: currentRatings, target: action.targetValue || 1 }];
             }
 
-            return { 
-              ...action, 
+            return {
+              ...action,
               progress: Math.min(progress, 100),
-              targets 
+              targets,
             };
-          }));
+          });
 
           const distilleryIdStr = String((distillery as { id?: unknown }).id ?? id);
           clubsData.push({
