@@ -89,12 +89,22 @@ function formatRatingDate(value: RatingItem["createdAt"]): string {
   return "Sada";
 }
 
+const COMMUNITY_RATINGS_CACHE_KEY = "rakivinum_cache_community_ratings_v1";
+
+/** Null = nema važećeg keša (prvi ulazak); niz (može prazan) = odmah prikaži bez „buradi“ pri povratku na stranicu. */
+function readCommunityRatingsCache(): RatingItem[] | null {
+  const cached = readCache<RatingItem[]>(COMMUNITY_RATINGS_CACHE_KEY);
+  if (cached === null || cached === undefined) return null;
+  if (!Array.isArray(cached)) return null;
+  return cached.filter((r) => !r?.isFlagged) as RatingItem[];
+}
+
 export default function Community() {
   const PRODUCTS_FETCH_LIMIT = 350;
   const DISTILLERIES_FETCH_LIMIT = 220;
   const EVENTS_FETCH_LIMIT = 60;
-  const [ratings, setRatings] = useState<RatingItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [ratings, setRatings] = useState<RatingItem[]>(() => readCommunityRatingsCache() ?? []);
+  const [loading, setLoading] = useState(() => readCommunityRatingsCache() === null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSection, setActiveSection] = useState<"reviews" | "tops" | "compare" | "producers" | "search" | "events">("reviews");
   const [products, setProducts] = useState<ProductItem[]>([]);
@@ -143,21 +153,18 @@ export default function Community() {
 
   useEffect(() => {
     let cancelled = false;
-    const ratingsCacheKey = "rakivinum_cache_community_ratings_v1";
 
     const refreshRatings = async () => {
       if (!shouldRunRefresh("community:ratings", REFRESH_INTERVAL.USER_LIGHT_1H)) {
-        const cached = readCache<RatingItem[]>(ratingsCacheKey);
-        if (cached && Array.isArray(cached) && !cancelled) {
-          setRatings(cached.filter((r) => !r?.isFlagged) as RatingItem[]);
-        }
+        const fromCache = readCommunityRatingsCache();
+        if (fromCache !== null && !cancelled) setRatings(fromCache);
         if (!cancelled) setLoading(false);
         return;
       }
       try {
         const rows = await fetchCommunityRatings({
           limitCount: 20,
-          cacheKey: ratingsCacheKey,
+          cacheKey: COMMUNITY_RATINGS_CACHE_KEY,
           ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
         });
         if (!cancelled) {

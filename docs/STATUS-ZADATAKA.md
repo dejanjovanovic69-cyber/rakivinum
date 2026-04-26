@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 — `Community`: teški katalog (proizvodi+destilerije) se više ne vuče na default tabu „Utisci“; događaji tek na tabu „Događaji“; ispravljen spinner kada `refreshGate` preskoči mrežu (keš + `setLoading(false)`). Manje Firestore read-ova pri ulasku u Zajednicu.
+**Poslednji zapis:** 2026-04-26 — `Community`: lazy katalog + utisci iz `localStorage` pri prvom renderu (nema „buradi“ pri povratku na `/community` dok je keš validan); ostalo kao ranije.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
