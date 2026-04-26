@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - pokrenuta je paralelna Faza 5 priprema kroz operativni governance dokument (`docs/CLOUDFLARE-PHASE5-OPS-GOVERNANCE.md`), bez rizičnih runtime izmena.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - Faza 5 priprema proširena je operativnim šablonima za incident i weekly ops izveštaj, pa je governance paket spreman za redovnu upotrebu bez runtime rizika.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -77,6 +77,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Dokumentacija u repou:** ovaj fajl + komentar u `src/lib/refreshGate.ts` koji ovde vodi.
 - **Faza 4 (aktivna):** operativna stabilizacija posle Faze 3; menjamo kod samo ako metrika pokaže novo usko grlo.
 - **Faza 5 (priprema paralelno):** definisani su SLO/cost/incident/rollback/deploy-gate okviri u `docs/CLOUDFLARE-PHASE5-OPS-GOVERNANCE.md`.
+- **Faza 5 templates:** dodati `docs/PHASE5-INCIDENT-REPORT-TEMPLATE.md` i `docs/PHASE5-WEEKLY-OPS-REPORT-TEMPLATE.md` za standardizovan incident i nedeljni operativni reporting.
 
 ---
 

@@ -110,6 +110,15 @@ Phase 5 is considered enabled when:
 - Deploy quality gates are consistently applied
 - At least one weekly ops summary is produced
 
+## 8) Reporting Templates
+
+Use these templates to keep operations consistent:
+
+- Incident report template:
+  - `docs/PHASE5-INCIDENT-REPORT-TEMPLATE.md`
+- Weekly ops report template:
+  - `docs/PHASE5-WEEKLY-OPS-REPORT-TEMPLATE.md`
+
 ## Quick Commands
 
 - Health and route smoke:
