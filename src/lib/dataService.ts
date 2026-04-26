@@ -49,19 +49,19 @@ async function fetchEdgeItems<T>(path: string, limitCount: number): Promise<T[] 
   }
 }
 
-async function fetchEdgeItem<T>(path: string): Promise<T | null> {
-  if (!EDGE_API_BASE) return null;
+async function fetchEdgeItemWithAvailability<T>(path: string): Promise<{ available: boolean; item: T | null }> {
+  if (!EDGE_API_BASE) return { available: false, item: null };
   try {
     const base = EDGE_API_BASE.endsWith("/") ? EDGE_API_BASE.slice(0, -1) : EDGE_API_BASE;
     const res = await fetch(`${base}${path}`, {
       method: "GET",
       headers: { accept: "application/json" },
     });
-    if (!res.ok) return null;
+    if (!res.ok) return { available: false, item: null };
     const payload = (await res.json()) as { item?: T | null };
-    return (payload?.item ?? null) as T | null;
+    return { available: true, item: (payload?.item ?? null) as T | null };
   } catch {
-    return null;
+    return { available: false, item: null };
   }
 }
 
@@ -261,10 +261,14 @@ export async function fetchPublicDistilleryById(id: string): Promise<DistilleryP
     const cached = readCache<{ found: boolean; item: DistilleryPublic | null }>(cacheKey);
     if (cached) return cached.found ? cached.item : null;
 
-    const edge = await fetchEdgeItem<DistilleryPublic>(`/api/public/distillery/${encodeURIComponent(safeId)}`);
-    if (edge) {
-      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.PUBLIC_BY_ID_1H);
-      return edge;
+    const edge = await fetchEdgeItemWithAvailability<DistilleryPublic>(`/api/public/distillery/${encodeURIComponent(safeId)}`);
+    if (edge.available) {
+      if (edge.item) {
+        writeCache(cacheKey, { found: true, item: edge.item }, CACHE_TTL.PUBLIC_BY_ID_1H);
+        return edge.item;
+      }
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
+      return null;
     }
     const snap = await getDoc(doc(db, "distilleries", safeId));
     meterDbRead("dataService:distillery_by_id", 1);
@@ -363,10 +367,14 @@ export async function fetchPublicProductById(id: string): Promise<ProductPublic 
     const cached = readCache<{ found: boolean; item: ProductPublic | null }>(cacheKey);
     if (cached) return cached.found ? cached.item : null;
 
-    const edge = await fetchEdgeItem<ProductPublic>(`/api/public/product/${encodeURIComponent(safeId)}`);
-    if (edge) {
-      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.PUBLIC_BY_ID_1H);
-      return edge;
+    const edge = await fetchEdgeItemWithAvailability<ProductPublic>(`/api/public/product/${encodeURIComponent(safeId)}`);
+    if (edge.available) {
+      if (edge.item) {
+        writeCache(cacheKey, { found: true, item: edge.item }, CACHE_TTL.PUBLIC_BY_ID_1H);
+        return edge.item;
+      }
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
+      return null;
     }
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:product_by_id", 1);
@@ -443,10 +451,14 @@ export async function fetchScannerProductById(id: string): Promise<ProductPublic
     const cached = readCache<{ found: boolean; item: ProductPublic | null }>(cacheKey);
     if (cached) return cached.found ? cached.item : null;
 
-    const edge = await fetchEdgeItem<ProductPublic>(`/api/public/product/${encodeURIComponent(safeId)}`);
-    if (edge) {
-      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.PUBLIC_BY_ID_1H);
-      return edge;
+    const edge = await fetchEdgeItemWithAvailability<ProductPublic>(`/api/public/product/${encodeURIComponent(safeId)}`);
+    if (edge.available) {
+      if (edge.item) {
+        writeCache(cacheKey, { found: true, item: edge.item }, CACHE_TTL.PUBLIC_BY_ID_1H);
+        return edge.item;
+      }
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
+      return null;
     }
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:scanner_product_by_id", 1);
@@ -468,12 +480,16 @@ export async function fetchPublicProductRatingSummary(productId: string): Promis
     const cached = readCache<{ found: boolean; item: ProductRatingSummaryPublic | null }>(cacheKey);
     if (cached) return cached.found ? cached.item : null;
 
-    const edge = await fetchEdgeItem<ProductRatingSummaryPublic>(
+    const edge = await fetchEdgeItemWithAvailability<ProductRatingSummaryPublic>(
       `/api/public/ratings-summary/${encodeURIComponent(safeId)}`,
     );
-    if (edge) {
-      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.PRODUCT_RATING_SUMMARY_10M);
-      return edge;
+    if (edge.available) {
+      if (edge.item) {
+        writeCache(cacheKey, { found: true, item: edge.item }, CACHE_TTL.PRODUCT_RATING_SUMMARY_10M);
+        return edge.item;
+      }
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PRODUCT_RATING_SUMMARY_NEGATIVE_2M);
+      return null;
     }
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:product_rating_summary_fallback", 1);
@@ -652,10 +668,14 @@ export async function fetchPublicLicenseByToken(token: string): Promise<LicenseP
     const cached = readCache<{ found: boolean; item: LicensePublic | null }>(cacheKey);
     if (cached) return cached.found ? cached.item : null;
 
-    const edge = await fetchEdgeItem<LicensePublic>(`/api/public/license/${encodeURIComponent(safeToken)}`);
-    if (edge) {
-      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.LICENSE_BY_TOKEN_10M);
-      return edge;
+    const edge = await fetchEdgeItemWithAvailability<LicensePublic>(`/api/public/license/${encodeURIComponent(safeToken)}`);
+    if (edge.available) {
+      if (edge.item) {
+        writeCache(cacheKey, { found: true, item: edge.item }, CACHE_TTL.LICENSE_BY_TOKEN_10M);
+        return edge.item;
+      }
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.LICENSE_BY_TOKEN_NEGATIVE_2M);
+      return null;
     }
 
     const snap = await getDocs(query(collection(db, "licenses"), where("token", "==", safeToken), limit(1)));
