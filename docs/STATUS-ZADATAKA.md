@@ -1,10 +1,10 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (jutro+) - dodat `/api/public/scan-clusters/:productId`; ProductAnalytics sada koristi `fetchPublicScanClustersByProductId` (edge-first + fallback). Deploy + smoke prosli (`master.rakivinum.pages.dev`).
+**Poslednji zapis:** 2026-04-26 (podne) - zavrsen end-to-end ciklus: read dedupe na `Home` i `ProductAnalytics`, ciscenje `.firebase` cache artefakta iz git-a, uspesan resilient deploy i smoke (`master.rakivinum.pages.dev`).
 
-Ovaj fajl sluzi da **sledeci put** odmah znas sta je uraÄ‘eno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
+Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
-**Å ta da napises Cursoru na pocetku sledeceg rada:**  
+**Sta da napises Cursoru na pocetku sledeceg rada:**  
 "Prvo procitaj `docs/STATUS-ZADATAKA.md` i nastavi od tamo."
 
 **Brza lokalna provera (bez eksternih testera):**  
@@ -77,7 +77,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uraÄ‘eno i sta ostaje, b
    - [ZAVRSENO] Prvi krug audita: Scanner (`fetchScannerProductById`), Menu (clanstva + destilerije + **community_links**), Collection/Home (proizvod preko `fetchPublicProductById`); detalj `docs/FIRESTORE-READ-AUDIT.md`.
 
 2. **Hosting (frontend) na Firebase (legacy fallback):** poslednji uspesan deploy samo hostinga:  
-   `firebase deploy --only hosting` â†’ URL u konzoli projekta (npr. `*.web.app`).  
+   `firebase deploy --only hosting` -> URL u konzoli projekta (npr. `*.web.app`).  
    Kompletan `firebase deploy --only firestore` ovde moze da padne sa **403 / billing** ako GCP projekat nema ukljuceno naplacivanje za Firestore API - indeksi i pravila onda deploy-uj na projekat gde Firestore vec radi, ili ukljuci billing za taj projekat.
 
 3. **Deploy Firestore indeksa** (dodat u `firestore.indexes.json`):
@@ -86,7 +86,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uraÄ‘eno i sta ostaje, b
      `firebase deploy --only firestore:indexes`  
    - Bez ovoga admin upiti sa `orderBy(documentId())` mogu da prijave *missing index* u konzoli.
 
-4. **Brzi smoke na telefonu** (kad budes na mrezi): Zajednica (tabovi + Pretraga) â†’ etiketa â†’ strelica nazad â†’ skener (1D ako imas primer) â†’ Meni.
+4. **Brzi smoke na telefonu** (kad budes na mrezi): Zajednica (tabovi + Pretraga) -> etiketa -> strelica nazad -> skener (1D ako imas primer) -> Meni.
 
 ---
 
@@ -116,22 +116,22 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uraÄ‘eno i sta ostaje, b
 
 ## Cursor - Plan & Usage (kada pise 100% Included)
 
-- **Pauza par dana** obicno **ne vraca** ukljucenu kvotu unazad - reset ide po datumu iz **Plan & Usage** ("resets on â€¦"), ne po "odmoru od alata".
+- **Pauza par dana** obicno **ne vraca** ukljucenu kvotu unazad - reset ide po datumu iz **Plan & Usage** ("resets on ..."), ne po "odmoru od alata".
 - **Manje / krace Agent sesije** = manje **daljeg** pritiska na kvotu dok god Cursor jos pusta rad; **ne nadoknaduje** ono sto je vec potroseno u tom ciklusu.
-- **Mali test da proveris granicu:** jedan **kratak Agent** zadatak (jedna jasna izmena u jednom ili malo fajlova), npr. jedna recenica u `README`, jedna TS greska iz Problems panela, jedno kratko preimenovanje + pozivi. Ako odmah trazi **upgrade / on-demand / limit** â†’ verovatno si na **tvrdoj** granici za Agent; ako proÄ‘e â†’ jos uvek radi neki rezim, ali stedljivo.
+- **Mali test da proveris granicu:** jedan **kratak Agent** zadatak (jedna jasna izmena u jednom ili malo fajlova), npr. jedna recenica u `README`, jedna TS greska iz Problems panela, jedno kratko preimenovanje + pozivi. Ako odmah trazi **upgrade / on-demand / limit** -> verovatno si na **tvrdoj** granici za Agent; ako prodje -> jos uvek radi neki rezim, ali stedljivo.
 - Za zvanicno stanje naloga i sporije: **Cursor support** + screenshot **Plan & Usage** (ne Firebase).
 
 ---
 
 ## Pre-sajam - spremnost za ~1000 ljudi (checklist)
 
-Cilj: **pikovi tokom dana** (sajam / guzva u kaficima) bez pada zbog **Spark kvote** i bez iznenaÄ‘enja na racunu. Kod je vec vucen ka manje "sumovskim" read-ovima; ovo je **operativa + plan**.
+Cilj: **pikovi tokom dana** (sajam / guzva u kaficima) bez pada zbog **Spark kvote** i bez iznenadjenja na racunu. Kod je vec vucen ka manje "sumovskim" read-ovima; ovo je **operativa + plan**.
 
-1. **Plan (Blaze):** pre ozbiljnog dogaÄ‘aja ukljuci **Blaze** na pravom GCP/Firebase projektu (onaj gde zivi baza i sajt koji ljudi koriste). Spark **50K read / dan** moze da zakuca servis pri piku, i to **nije** isto sto i "bice skuplo".
-2. **Zastita od iznenaÄ‘enja:** u **Google Cloud â†’ Billing â†’ Budgets & alerts** postavi budzet (npr. **10â€“20 â‚¬**) + email upozorenje. To ne sprecava naplatu, ali **ranije vidis** skok.
-3. **Grupni test pre sajma:** **5â€“10 telefona** istovremeno isti scenario kao posetioci: sken â†’ detalj proizvoda â†’ ocena / omiljeno â†’ nazad â†’ meni / zajednica. Trazi **pucanje**, beskonacno ucitavanje, ili konzolu punu gresaka.
-4. **Merenje u konzoli:** prati **Firestore â†’ Usage** (reads / writes / real-time) i po potrebi **Google Cloud â†’ Monitoring â†’ Metrics Explorer** za tacniji vremenski opseg. Uzmi u obzir da **usage grafikon** moze malo da odstupa od **Billing** linije - za evre gledaj **Billing report**.
-5. **Paralelno sa unosom / devom:** izbegavaj **localhost sa prod Firebase** dok traje javni dogaÄ‘aj (ili uopste kad hoces nizak sum) - to je istorijski pravilo **velikih dnevnih read-ova** na grafikonu.
+1. **Plan (Blaze):** pre ozbiljnog dogadjaja ukljuci **Blaze** na pravom GCP/Firebase projektu (onaj gde zivi baza i sajt koji ljudi koriste). Spark **50K read / dan** moze da zakuca servis pri piku, i to **nije** isto sto i "bice skuplo".
+2. **Zastita od iznenadjenja:** u **Google Cloud -> Billing -> Budgets & alerts** postavi budzet (npr. **10-20 EUR**) + email upozorenje. To ne sprecava naplatu, ali **ranije vidis** skok.
+3. **Grupni test pre sajma:** **5-10 telefona** istovremeno isti scenario kao posetioci: sken -> detalj proizvoda -> ocena / omiljeno -> nazad -> meni / zajednica. Trazi **pucanje**, beskonacno ucitavanje, ili konzolu punu gresaka.
+4. **Merenje u konzoli:** prati **Firestore -> Usage** (reads / writes / real-time) i po potrebi **Google Cloud -> Monitoring -> Metrics Explorer** za tacniji vremenski opseg. Uzmi u obzir da **usage grafikon** moze malo da odstupa od **Billing** linije - za evre gledaj **Billing report**.
+5. **Paralelno sa unosom / devom:** izbegavaj **localhost sa prod Firebase** dok traje javni dogadjaj (ili uopste kad hoces nizak sum) - to je istorijski pravilo **velikih dnevnih read-ova** na grafikonu.
 6. **Posle testa:** ako vidis anomaliju (jedan korisnik = hiljade read-ova u minuti), zabelezi vreme + ekran i to adresiraj u kodu (cesto: petlja refetch-a, presirok query, visak `onSnapshot`).
 
 ---

@@ -62,7 +62,10 @@ Faza 3 status (startovan):
 - Frontend `Distillery` je prebacen na worker-first read tok (uz Firebase fallback).
 - Deploy i verifikacija uradjeni (`rakivinum.pages.dev`).
 
-Deploy Pages koristi **`wrangler-pages.toml`** (`pages_build_output_dir = dist`) da se ne meša sa Worker `wrangler.toml` i da Wrangler ne tretira ceo repo kao samo-Pages projekat.
+Napomena za deploy:
+- `wrangler pages deploy` trenutno ne podrzava custom `--config` putanju za Pages.
+- Zbog toga script koristi `wrangler pages deploy dist --project-name rakivinum`.
+- Ako vidis upozorenje o `pages_build_output_dir` iz `wrangler.toml`, to je trenutno ocekivano i ne blokira deploy.
 
 Operativne komande:
 - Worker+Pages resilient deploy (retry za Cloudflare 10500/500):
