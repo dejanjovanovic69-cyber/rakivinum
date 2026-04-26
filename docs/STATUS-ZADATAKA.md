@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++) - `dataService` dobio 1h cache za `fetchPublicProductRatings` i `fetchPublicScanClustersByProductId`, pa `ProductAnalytics` pri ponovnim ulascima manje često radi iste read-ove.
+**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++++++) - `dataService` dobio 1h by-id cache za `fetchPublicDistilleryById`, `fetchPublicProductById` i `fetchScannerProductById`, pa navigacija između istih detalja manje često pali iste read-ove.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -23,7 +23,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Label tok:** uklonjen oslonac na nepostojeci `submitRatingSecure` cloud function po default-u; ostavljen fallback preko Firestore transaction.
 - **Label tok (saved check):** dodat lokalni cache stanja "sačuvano" (user/visitor + product) radi smanjenja ponovljenih read-ova pri povratku na etiketu.
 - **Label tok (rated-today check):** dodat session cache rezultata dnevne provere ocene (po user/visitor + datum) radi manjeg broja ponovljenih `ratings` read-ova u istoj sesiji.
-- **Read optimizacije:** cache-first prosiren na `Home`, `Distillery`, `AdminAudit`, `DistilleryDashboard`, `Collection`; dodat dev read-meter (`requestMeter`).
+- **Read optimizacije:** cache-first prosiren na `Home`, `Distillery`, `AdminAudit`, `DistilleryDashboard`, `Collection`; dodat 1h by-id cache u `dataService` (`distillery/product/scanner product`) + dev read-meter (`requestMeter`).
 - **Cloudflare Worker (Faza 2 priprema):**
   - Worker deployovan: `https://rakivinum-api.ldjs1969.workers.dev`
   - endpointi spremni: `/health`, `/api/public/distilleries`, `/api/public/products`, `/api/public/community-events`

@@ -47,7 +47,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 | Read | Napomena |
 |------|----------|
 | `savedItems` + `orderBy` + `limit(1)` | Korisnički podatak — ostaje Firestore. |
-| Poslednji sačuvan proizvod | **`fetchPublicProductById`**, pa **`getDoc(products/{id})`** ako javni API vrati `null` (npr. neodobren proizvod) — jedan dokument, bez `__name__` upita. |
+| Poslednji sačuvan proizvod | **`fetchPublicProductById`** (1h by-id cache), pa **`getDoc(products/{id})`** ako javni API vrati `null` (npr. neodobren proizvod) — jedan dokument, bez `__name__` upita. |
 | `ratings` gde `userId == uid` | Privatno / korisnički — ostaje Firestore; `Home` pokušava top-1 (`orderBy rating desc, limit 1`) uz fallback na ograničen upit (`limit(60)`) dok index nije dostupan. |
 | `getCountFromServer` | Brojanje — ostaje Firestore osim novog agregatnog API-ja. |
 
@@ -80,7 +80,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 |------|----------|
 | `guest_saved_items` / `users/.../savedItems` `getDoc` | Korisnički stanje — Firestore; dodat lokalni `saved` cache po korisniku/gostu+proizvodu da se pri povratku na etiketu često izbegne ponovni `getDoc`. |
 | `getDocs` na `ratings` (provera postojeće ocene) | Pravila ocene — ostaje Firestore ili privatni endpoint; dodat session cache za dnevni rezultat provere da se pri ponovnom otvaranju etikete u istoj sesiji izbegne isti read. |
-| Glavni proizvod / destilerija / reviews | Proizvod: **`fetchScannerProductById`** + iste javne provere (`isApproved`, arhiva, `publicLabelDisabled`); destilerija i ocene preko `dataService` Worker-first. |
+| Glavni proizvod / destilerija / reviews | Proizvod: **`fetchScannerProductById`** (1h by-id cache) + iste javne provere (`isApproved`, arhiva, `publicLabelDisabled`); destilerija i ocene preko `dataService` Worker-first. |
 
 ---
 
@@ -88,7 +88,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 
 | Read | Napomena |
 |------|----------|
-| Proizvod (zaglavlje KPI) | **`fetchScannerProductById`** (jedan edge/Firestore tok, bez duplog `getDoc` posle `fetchPublic`). |
+| Proizvod (zaglavlje KPI) | **`fetchScannerProductById`** (1h by-id cache; bez duplog `getDoc` posle `fetchPublic`). |
 | `product-ratings` / `scan clusters` | **[Urađeno]** `fetchPublicProductRatings` i `fetchPublicScanClustersByProductId` preko Worker endpointa, uz dodatni 1h client cache u `dataService` da ponovni ulasci ne povlače isti read odmah. |
 
 ---
