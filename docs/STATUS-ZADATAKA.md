@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++) - `fetchPublicClubMembershipCount` sada prihvata i numerički string count iz edge odgovora (npr. `"12"`), pa se izbegava nepotreban fallback read pri varijacijama tipa payload-a.
+**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++++++++++++++++++++++++++) - Faza 4 je aktivna (post-Faza-3 stabilizacija): ponovljen edge smoke prolaz je uspešan i fokus je na 24h trend monitoringu reads/latency/error metrika.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -75,6 +75,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
 - **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).
 - **Dokumentacija u repou:** ovaj fajl + komentar u `src/lib/refreshGate.ts` koji ovde vodi.
+- **Faza 4 (aktivna):** operativna stabilizacija posle Faze 3; menjamo kod samo ako metrika pokaže novo usko grlo.
 
 ---
 
@@ -134,6 +135,16 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
    - [ZAVRSENO U TRENUTNOM SCOPE-U] migracija glavnih read tokova na Worker kao default, uz fallback.
    - [ZAVRSENO] `Community` ratings feed prebacen na Worker-first read.
    - [SLEDECE NA REDU] uraditi merenje efekta (reads/writes trend pre/posle) i eventualno jos jedan analytics snapshot endpoint samo ako bude potrebe.
+
+---
+
+## Faza 4 - Operativni checklist (24h)
+
+1. Pokrenuti `npm run cf:smoke:edge` 2-3 puta u razmaku i uporediti median latenciju po ruti.
+2. Uporediti Firestore Usage trend (reads/writes) sa prethodnim danom u istom vremenskom prozoru.
+3. Pratiti edge greške i fallback signale (ako rastu, identifikovati rutu i payload).
+4. Ne uvoditi nove endpointe bez metrikom potvrđenog uskog grla.
+5. Posle 24h zaključiti: stabilno / potrebno ciljano podešavanje TTL-a ili jedna nova ruta.
 
 ---
 
