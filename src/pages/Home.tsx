@@ -385,20 +385,41 @@ export default function Home() {
       }
 
       try {
-        const ratingQuery = query(collection(db, 'ratings'), where('userId', '==', userId), limit(200));
-        const snap = await getDocs(ratingQuery);
-        meterDbRead("home:user_ratings", snap.size);
-        if (!snap.empty) {
-          const ratings = snap.docs.map(d => d.data().rating);
-          nextTopRating = Math.max(...ratings);
+        // Primary path: one-row query for top rating.
+        const topQuery = query(
+          collection(db, "ratings"),
+          where("userId", "==", userId),
+          orderBy("rating", "desc"),
+          limit(1),
+        );
+        const topSnap = await getDocs(topQuery);
+        meterDbRead("home:user_ratings_top1", topSnap.size);
+        if (!topSnap.empty) {
+          const best = Number(topSnap.docs[0].data()?.rating);
+          nextTopRating = Number.isFinite(best) ? best : null;
           setTopRating(nextTopRating);
         } else {
           nextTopRating = null;
           setTopRating(null);
         }
       } catch (error) {
-        console.error("Error fetching ratings:", error);
-        if (isQuotaError(error)) setQuotaExceeded(true);
+        // Fallback when composite index is not ready in a given environment.
+        try {
+          const ratingQuery = query(collection(db, "ratings"), where("userId", "==", userId), limit(200));
+          const snap = await getDocs(ratingQuery);
+          meterDbRead("home:user_ratings_fallback", snap.size);
+          if (!snap.empty) {
+            const ratings = snap.docs.map((d) => Number(d.data()?.rating) || 0);
+            nextTopRating = Math.max(...ratings);
+            setTopRating(nextTopRating);
+          } else {
+            nextTopRating = null;
+            setTopRating(null);
+          }
+        } catch (fallbackError) {
+          console.error("Error fetching ratings:", fallbackError);
+          if (isQuotaError(fallbackError)) setQuotaExceeded(true);
+        }
       }
 
       if (userStatsCacheKey) {

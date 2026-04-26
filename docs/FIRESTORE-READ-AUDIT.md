@@ -48,7 +48,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 |------|----------|
 | `savedItems` + `orderBy` + `limit(1)` | Korisnički podatak — ostaje Firestore. |
 | Poslednji sačuvan proizvod | **`fetchPublicProductById`**, pa **`getDoc(products/{id})`** ako javni API vrati `null` (npr. neodobren proizvod) — jedan dokument, bez `__name__` upita. |
-| `ratings` gde `userId == uid` | Privatno / korisnički — ostaje Firestore. |
+| `ratings` gde `userId == uid` | Privatno / korisnički — ostaje Firestore; `Home` pokušava top-1 (`orderBy rating desc, limit 1`) uz fallback na stari upit dok index nije dostupan. |
 | `getCountFromServer` | Brojanje — ostaje Firestore osim novog agregatnog API-ja. |
 
 ---

@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++) - `Distillery` membership optimizovan: čuva se `membershipDocId` iz već učitanih članstava, pa "napusti klub" ne radi dodatni membership read kada ID već postoji.
+**Poslednji zapis:** 2026-04-26 (popodne+++++++) - `Home` top-rating optimizovan: prvo pokušava `orderBy(rating desc)+limit(1)` (uz fallback), dodat index `ratings(userId, rating desc)`.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -44,7 +44,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Firestore / kvota:** `limit()` na upitima, kes/dedup (`dataService`, `resilience`), smanjeni `onSnapshot` gde nije neophodno, `refreshGate` za `focus` burst (`Home`, `Menu`, `Distillery`, itd.).
 - **Zajednica (`Community`):** ocene (feed) vise nisu teski `onSnapshot` - kontrolisan `getDocs` + periodicno/fokus osvezavanje + gate.
 - **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (kes/dedup), bez `getDocs` cele `products` kolekcije; za numerički barkod preskače se početni ID lookup i dupli raw barkod upit.
-- **Pocetna (`Home`):** sacuvano - `getCountFromServer` + poslednji artikal preko `orderBy(createdAt)+limit(1)`; fokus na korisnicke statistike sa gate-om.
+- **Pocetna (`Home`):** sacuvano - `getCountFromServer` + poslednji artikal preko `orderBy(createdAt)+limit(1)`; top-ocena ide preko `limit(1)` upita (fallback na legacy upit ako index nije spreman).
 - **Kolekcija (`Collection`):** ucitavanje sacuvanog sa `limit` (+ `orderBy` za ulogovanog); fallback za product detalje je batched (`documentId in`) umesto pojedinacnih `getDoc`.
 - **Admin / audit / dashboard:** manje real-time slusanje gde je bilo skupo; kontrolisani refresh; prisustvo (online broj) za superadmin; paginacija brisanja proizvoda pri brisanju destilerije.
 - **Admin arhiva / verifikacija proizvoda:** masovni update ide **stranicama** sa `orderBy(documentId())` + `startAfter` (ne beskonacna petlja po istom `where`).
@@ -84,6 +84,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 
 3. **Deploy Firestore indeksa** (dodat u `firestore.indexes.json`):
    - kolekcija `products`: polja `distilleryId` + `__name__` (za admin paginaciju arhive/verifikacije).
+   - kolekcija `ratings`: polja `userId` + `rating` (DESC) za jeftin `Home` top-rating upit.
    - Komanda (iz korena projekta):  
      `firebase deploy --only firestore:indexes`  
    - Bez ovoga admin upiti sa `orderBy(documentId())` mogu da prijave *missing index* u konzoli.
