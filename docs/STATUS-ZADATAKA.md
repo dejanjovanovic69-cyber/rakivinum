@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne) - dodat korenski `AGENTS.md` sa uputstvom da agent prvo cita ovaj fajl i radi cele pakete (lint/build/smoke) bez cekanja „nastavi“ u istoj sesiji.
+**Poslednji zapis:** 2026-04-26 (popodne+) - `Menu` joined-clubs fallback optimizovan: umesto `getDoc` po destileriji koristi batched `where(documentId(), "in", ...)` kada edge vrati `null`.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -50,6 +50,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Admin arhiva / verifikacija proizvoda:** masovni update ide **stranicama** sa `orderBy(documentId())` + `startAfter` (ne beskonacna petlja po istom `where`).
 - **Destilerija dashboard / analitika modal:** dodatni `limit` na upitima (vlasnik/email destilerije, proizvodi, ocene po chunk-u).
 - **Moji klubovi / stranica destilerije:** `limit` na clanstvima i akcijama; napredak u `MyClubs` vise ne radi 2 upita po klubu vec 2 agregatna upita po ekranu (`scans` + `ratings`) sa lokalnim grupisanjem po destileriji.
+- **Meni (joined klubovi):** fallback za destilerije je batch (`documentId in`) umesto pojedinacnih `getDoc` poziva kada edge podaci nisu dostupni.
 - **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
 - **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).
 - **Dokumentacija u repou:** ovaj fajl + komentar u `src/lib/refreshGate.ts` koji ovde vodi.
