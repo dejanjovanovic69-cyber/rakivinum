@@ -577,15 +577,24 @@ export async function fetchPublicClubMembershipsByVisitorId(visitorId: string, l
   const safeId = String(visitorId || "").trim();
   if (!safeId) return [];
   return dedupe(`clubMemberships:${safeId}:${limitCount}`, async () => {
+    const cacheKey = `rakivinum_cache_club_memberships_${safeId}_${limitCount}_v1`;
+    const cached = readCache<ClubMembershipPublic[]>(cacheKey);
+    if (cached) return cached;
+
     const edgeRows = await fetchEdgeItems<ClubMembershipPublic>(
       `/api/public/club-memberships/${encodeURIComponent(safeId)}`,
       limitCount,
     );
-    if (edgeRows && edgeRows.length > 0) return edgeRows;
+    if (edgeRows && edgeRows.length > 0) {
+      writeCache(cacheKey, edgeRows, CACHE_TTL.CLUB_MEMBERSHIPS_1H);
+      return edgeRows;
+    }
 
     const snap = await getDocs(query(collection(db, "club_memberships"), where("visitorId", "==", safeId), limit(limitCount)));
     meterDbRead("dataService:club_memberships_fallback", snap.size);
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ClubMembershipPublic));
+    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as ClubMembershipPublic));
+    writeCache(cacheKey, rows, CACHE_TTL.CLUB_MEMBERSHIPS_1H);
+    return rows;
   });
 }
 
@@ -593,13 +602,22 @@ export async function fetchPublicLicenseByToken(token: string): Promise<LicenseP
   const safeToken = String(token || "").trim();
   if (!safeToken) return null;
   return dedupe(`licenseByToken:${safeToken}`, async () => {
+    const cacheKey = `rakivinum_cache_license_by_token_${safeToken}_v1`;
+    const cached = readCache<LicensePublic>(cacheKey);
+    if (cached) return cached;
+
     const edge = await fetchEdgeItem<LicensePublic>(`/api/public/license/${encodeURIComponent(safeToken)}`);
-    if (edge) return edge;
+    if (edge) {
+      writeCache(cacheKey, edge, CACHE_TTL.LICENSE_BY_TOKEN_10M);
+      return edge;
+    }
 
     const snap = await getDocs(query(collection(db, "licenses"), where("token", "==", safeToken), limit(1)));
     meterDbRead("dataService:license_by_token_fallback", snap.size);
     if (snap.empty) return null;
-    return { id: snap.docs[0].id, ...snap.docs[0].data() } as LicensePublic;
+    const row = { id: snap.docs[0].id, ...snap.docs[0].data() } as LicensePublic;
+    writeCache(cacheKey, row, CACHE_TTL.LICENSE_BY_TOKEN_10M);
+    return row;
   });
 }
 

@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++++++++++) - `dataService` dobio 1h cache za `fetchPublicClubActions` i `fetchPublicClubActionsForDistillery`, pa community/club liste manje često ponavljaju read-ove pri povratku na iste ekrane.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++) - `dataService` dobio cache za `fetchPublicClubMembershipsByVisitorId` (1h) i `fetchPublicLicenseByToken` (10m), pa Home/Menu tokovi manje često ponavljaju read-ove pri brzom povratku.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -59,6 +59,8 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Meni / MyClubs (distillery read) cache:** dodat 1h cache za batch set ID-jeva u `fetchPublicDistilleriesByIds`.
 - **Distillery katalog cache:** dodat 1h cache za `fetchPublicProductsByDistilleryId` po distillery/limit kombinaciji.
 - **Community / club-actions cache:** dodat 1h cache u `fetchPublicClubActions` (po limitu) i `fetchPublicClubActionsForDistillery` (po distillery/limit kombinaciji).
+- **Home/Menu memberships cache:** dodat 1h cache u `fetchPublicClubMembershipsByVisitorId` (po visitor/limit kombinaciji).
+- **License token cache:** dodat bezbedniji 10m cache u `fetchPublicLicenseByToken` (po tokenu), da se smanje read-ovi bez dugog zadržavanja potencijalno zastarelog statusa.
 - **Destilerija (`Distillery`) članstvo:** pri "leave club" koristi se poznat `membershipDocId` (bez dodatnog membership read-a), a posle join/leave broj članova se lokalno koriguje (+/-) umesto trenutnog count read-a.
 - **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
 - **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).
