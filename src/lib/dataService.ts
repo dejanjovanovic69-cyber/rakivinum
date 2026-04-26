@@ -258,20 +258,26 @@ export async function fetchPublicDistilleryById(id: string): Promise<DistilleryP
   if (!safeId) return null;
   return dedupe(`distilleryById:${safeId}`, async () => {
     const cacheKey = `rakivinum_cache_distillery_by_id_${safeId}_v1`;
-    const cached = readCache<DistilleryPublic>(cacheKey);
-    if (cached) return cached;
+    const cached = readCache<{ found: boolean; item: DistilleryPublic | null }>(cacheKey);
+    if (cached) return cached.found ? cached.item : null;
 
     const edge = await fetchEdgeItem<DistilleryPublic>(`/api/public/distillery/${encodeURIComponent(safeId)}`);
     if (edge) {
-      writeCache(cacheKey, edge, CACHE_TTL.PUBLIC_BY_ID_1H);
+      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.PUBLIC_BY_ID_1H);
       return edge;
     }
     const snap = await getDoc(doc(db, "distilleries", safeId));
     meterDbRead("dataService:distillery_by_id", 1);
-    if (!snap.exists()) return null;
+    if (!snap.exists()) {
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
+      return null;
+    }
     const row = { id: snap.id, ...snap.data() } as DistilleryPublic;
-    if (row.isArchived || row.isVerified !== true) return null;
-    writeCache(cacheKey, row, CACHE_TTL.PUBLIC_BY_ID_1H);
+    if (row.isArchived || row.isVerified !== true) {
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
+      return null;
+    }
+    writeCache(cacheKey, { found: true, item: row }, CACHE_TTL.PUBLIC_BY_ID_1H);
     return row;
   });
 }
@@ -354,20 +360,26 @@ export async function fetchPublicProductById(id: string): Promise<ProductPublic 
   if (!safeId) return null;
   return dedupe(`productById:${safeId}`, async () => {
     const cacheKey = `rakivinum_cache_product_by_id_${safeId}_v1`;
-    const cached = readCache<ProductPublic>(cacheKey);
-    if (cached) return cached;
+    const cached = readCache<{ found: boolean; item: ProductPublic | null }>(cacheKey);
+    if (cached) return cached.found ? cached.item : null;
 
     const edge = await fetchEdgeItem<ProductPublic>(`/api/public/product/${encodeURIComponent(safeId)}`);
     if (edge) {
-      writeCache(cacheKey, edge, CACHE_TTL.PUBLIC_BY_ID_1H);
+      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.PUBLIC_BY_ID_1H);
       return edge;
     }
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:product_by_id", 1);
-    if (!snap.exists()) return null;
+    if (!snap.exists()) {
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
+      return null;
+    }
     const row = { id: snap.id, ...snap.data() } as ProductPublic;
-    if (row.isApproved === false || row.isArchivedByDistillery || row.publicLabelDisabled === true) return null;
-    writeCache(cacheKey, row, CACHE_TTL.PUBLIC_BY_ID_1H);
+    if (row.isApproved === false || row.isArchivedByDistillery || row.publicLabelDisabled === true) {
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
+      return null;
+    }
+    writeCache(cacheKey, { found: true, item: row }, CACHE_TTL.PUBLIC_BY_ID_1H);
     return row;
   });
 }
@@ -428,19 +440,22 @@ export async function fetchScannerProductById(id: string): Promise<ProductPublic
   if (!safeId) return null;
   return dedupe(`scannerProductById:${safeId}`, async () => {
     const cacheKey = `rakivinum_cache_scanner_product_by_id_${safeId}_v1`;
-    const cached = readCache<ProductPublic>(cacheKey);
-    if (cached) return cached;
+    const cached = readCache<{ found: boolean; item: ProductPublic | null }>(cacheKey);
+    if (cached) return cached.found ? cached.item : null;
 
     const edge = await fetchEdgeItem<ProductPublic>(`/api/public/product/${encodeURIComponent(safeId)}`);
     if (edge) {
-      writeCache(cacheKey, edge, CACHE_TTL.PUBLIC_BY_ID_1H);
+      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.PUBLIC_BY_ID_1H);
       return edge;
     }
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:scanner_product_by_id", 1);
-    if (!snap.exists()) return null;
+    if (!snap.exists()) {
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
+      return null;
+    }
     const row = { id: snap.id, ...snap.data() } as ProductPublic;
-    writeCache(cacheKey, row, CACHE_TTL.PUBLIC_BY_ID_1H);
+    writeCache(cacheKey, { found: true, item: row }, CACHE_TTL.PUBLIC_BY_ID_1H);
     return row;
   });
 }

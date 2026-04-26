@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++) - `dataService` list helper-i tretiraju prazan edge odgovor (`[]`) kao konačan rezultat (ne pali se Firestore fallback), pa se uklanjaju nepotrebni read-ovi kada zaista nema podataka.
+**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++++++++++++++++++++) - `fetchPublicDistilleryById`, `fetchPublicProductById` i `fetchScannerProductById` dobili su kratki negativni cache (2m) za nepostojeći/ne-javni ID, pa isti invalidni ID ne pali odmah ponovljeni fallback read.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -67,6 +67,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Scanner barcode negative cache:** dodat 2m negativni cache u `fetchPublicProductByBarcodeLookup` za payload bez rezultata, da ponovljeno skeniranje istog nevalidnog barkoda ne pokreće odmah isti read tok.
 - **Edge smoke stabilizacija:** `npm run cf:smoke:edge` prošao (health, distilleries, products, ratings-feed, ratings-summary, product-ratings, club-actions, community-links, products-by-distillery, club-actions-by-distillery, club-membership-count, product-lookup, scan-clusters).
 - **Edge empty-list authoritative:** za javne list helper-e (`distilleries/products/events/links/ratings`, `products-by-distillery`, `product-ratings`, `scan-clusters`, `club-actions`, `club-actions-by-distillery`, `club-memberships`) prazan edge odgovor (`[]`) je sada konačan i ne aktivira fallback read ka Firestore-u.
+- **By-id negative cache:** `fetchPublicDistilleryById`, `fetchPublicProductById` i `fetchScannerProductById` sada koriste kratki 2m negativni cache za miss/nejavni rezultat, da isti invalidni ID ne ponavlja odmah fallback read.
 - **Destilerija (`Distillery`) članstvo:** pri "leave club" koristi se poznat `membershipDocId` (bez dodatnog membership read-a), a posle join/leave broj članova se lokalno koriguje (+/-) umesto trenutnog count read-a.
 - **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
 - **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).
