@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - Faza 4 checkpoint (još 2 smoke prolaza) potvrđuje stabilan obrazac: svi endpointi su i dalje 200/OK, uz očekivan spike obrazac na `distilleries`/`ratings-feed` (jedan viši, jedan niži run).
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - pokrenuta je paralelna Faza 5 priprema kroz operativni governance dokument (`docs/CLOUDFLARE-PHASE5-OPS-GOVERNANCE.md`), bez rizičnih runtime izmena.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -76,6 +76,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).
 - **Dokumentacija u repou:** ovaj fajl + komentar u `src/lib/refreshGate.ts` koji ovde vodi.
 - **Faza 4 (aktivna):** operativna stabilizacija posle Faze 3; menjamo kod samo ako metrika pokaže novo usko grlo.
+- **Faza 5 (priprema paralelno):** definisani su SLO/cost/incident/rollback/deploy-gate okviri u `docs/CLOUDFLARE-PHASE5-OPS-GOVERNANCE.md`.
 
 ---
 
