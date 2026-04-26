@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++++++++++++++++++++) - `fetchPublicDistilleryById`, `fetchPublicProductById` i `fetchScannerProductById` dobili su kratki negativni cache (2m) za nepostojeći/ne-javni ID, pa isti invalidni ID ne pali odmah ponovljeni fallback read.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++) - `fetchPublicProductRatingSummary` dobio je i kratki negativni cache (2m) za promašaj, pa isti nevalidni `productId` ne pali odmah novi fallback read.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -63,7 +63,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **License token cache:** dodat bezbedniji 10m cache u `fetchPublicLicenseByToken` (po tokenu), da se smanje read-ovi bez dugog zadržavanja potencijalno zastarelog statusa.
 - **License negative cache:** dodat 2m negativni cache za `fetchPublicLicenseByToken` kada token ne postoji, da se smanje ponovljeni lookup read-ovi za isti invalidni token.
 - **Distillery member-count cache:** dodat 2m cache u `fetchPublicClubMembershipCount` (po distilleryId), uz zadržan lokalni +/- update posle join/leave.
-- **Product summary cache:** dodat 10m cache u `fetchPublicProductRatingSummary` (po productId), da se pri povratku na isti analytics ekran ne ponavlja odmah isti summary read.
+- **Product summary cache:** dodat 10m cache u `fetchPublicProductRatingSummary` (po productId) + kratki 2m negativni cache za miss, da se pri povratku na isti analytics ekran ne ponavlja odmah isti summary read niti isti invalidni `productId` lookup.
 - **Scanner barcode negative cache:** dodat 2m negativni cache u `fetchPublicProductByBarcodeLookup` za payload bez rezultata, da ponovljeno skeniranje istog nevalidnog barkoda ne pokreće odmah isti read tok.
 - **Edge smoke stabilizacija:** `npm run cf:smoke:edge` prošao (health, distilleries, products, ratings-feed, ratings-summary, product-ratings, club-actions, community-links, products-by-distillery, club-actions-by-distillery, club-membership-count, product-lookup, scan-clusters).
 - **Edge empty-list authoritative:** za javne list helper-e (`distilleries/products/events/links/ratings`, `products-by-distillery`, `product-ratings`, `scan-clusters`, `club-actions`, `club-actions-by-distillery`, `club-memberships`) prazan edge odgovor (`[]`) je sada konačan i ne aktivira fallback read ka Firestore-u.

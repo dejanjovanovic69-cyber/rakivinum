@@ -465,19 +465,22 @@ export async function fetchPublicProductRatingSummary(productId: string): Promis
   if (!safeId) return null;
   return dedupe(`ratingSummary:${safeId}`, async () => {
     const cacheKey = `rakivinum_cache_product_rating_summary_${safeId}_v1`;
-    const cached = readCache<ProductRatingSummaryPublic>(cacheKey);
-    if (cached) return cached;
+    const cached = readCache<{ found: boolean; item: ProductRatingSummaryPublic | null }>(cacheKey);
+    if (cached) return cached.found ? cached.item : null;
 
     const edge = await fetchEdgeItem<ProductRatingSummaryPublic>(
       `/api/public/ratings-summary/${encodeURIComponent(safeId)}`,
     );
     if (edge) {
-      writeCache(cacheKey, edge, CACHE_TTL.PRODUCT_RATING_SUMMARY_10M);
+      writeCache(cacheKey, { found: true, item: edge }, CACHE_TTL.PRODUCT_RATING_SUMMARY_10M);
       return edge;
     }
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:product_rating_summary_fallback", 1);
-    if (!snap.exists()) return null;
+    if (!snap.exists()) {
+      writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PRODUCT_RATING_SUMMARY_NEGATIVE_2M);
+      return null;
+    }
     const row = snap.data() as Record<string, unknown>;
     const scanCount = Number(row.scanCount) || 0;
     const ratingCount = Number(row.ratingCount) || 0;
@@ -489,7 +492,7 @@ export async function fetchPublicProductRatingSummary(productId: string): Promis
       scanCount,
       conversionRate: scanCount > 0 ? Math.round((ratingCount / scanCount) * 10000) / 100 : 0,
     };
-    writeCache(cacheKey, summary, CACHE_TTL.PRODUCT_RATING_SUMMARY_10M);
+    writeCache(cacheKey, { found: true, item: summary }, CACHE_TTL.PRODUCT_RATING_SUMMARY_10M);
     return summary;
   });
 }

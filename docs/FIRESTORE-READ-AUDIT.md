@@ -90,7 +90,7 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 | Read | Napomena |
 |------|----------|
 | Proizvod (zaglavlje KPI) | **`fetchScannerProductById`** (1h by-id cache + 2m negativni cache; bez duplog `getDoc` posle `fetchPublic`). |
-| KPI summary (`ratings-summary`) | **`fetchPublicProductRatingSummary`** worker-first + 10m cache po proizvodu. |
+| KPI summary (`ratings-summary`) | **`fetchPublicProductRatingSummary`** worker-first + 10m cache po proizvodu, uz 2m negativni cache za miss. |
 | `product-ratings` / `scan clusters` | **[Urađeno]** `fetchPublicProductRatings` i `fetchPublicScanClustersByProductId` preko Worker endpointa, uz dodatni 1h client cache u `dataService` da ponovni ulasci ne povlače isti read odmah. |
 
 ---
