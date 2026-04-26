@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++++++++++++++++++++++++++) - Faza 4 je aktivna (post-Faza-3 stabilizacija): ponovljen edge smoke prolaz je uspešan i fokus je na 24h trend monitoringu reads/latency/error metrika.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - Faza 4 baseline merenje (3 uzastopna smoke prolaza) je završeno: sve rute su 200/OK; median latencije su stabilne (`distilleries` ~1383ms, `ratings-feed` ~997ms, `product-lookup` ~712ms).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -145,6 +145,11 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 3. Pratiti edge greške i fallback signale (ako rastu, identifikovati rutu i payload).
 4. Ne uvoditi nove endpointe bez metrikom potvrđenog uskog grla.
 5. Posle 24h zaključiti: stabilno / potrebno ciljano podešavanje TTL-a ili jedna nova ruta.
+
+**Prvi baseline (start Faze 4):**
+- 3x uzastopni `npm run cf:smoke:edge` prošli bez greške.
+- Svi endpointi `Status=200`, bez regresije payload size.
+- Trenutni fokus za praćenje: `distilleries` i `ratings-feed` latency trend (zbog povremenih viših spike-ova).
 
 ---
 
