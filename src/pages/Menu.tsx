@@ -2,7 +2,7 @@ import { Settings, Moon, Bell, Shield, Wallet, Book, LogOut, Database, BarChart3
 import React, { useEffect, useState } from "react";
 import { app, auth, db } from "../lib/firebase";
 import { getFirebaseRedirectResultOnce } from "../lib/firebaseRedirectResult";
-import { collection, query, where, getDocs, limit, updateDoc, doc, serverTimestamp, documentId } from "firebase/firestore";
+import { collection, query, where, getDocs, limit, updateDoc, doc, serverTimestamp } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import {
   GoogleAuthProvider,
@@ -19,7 +19,7 @@ import { isSuperuserEmail } from "../lib/authz";
 import { normalizeLicenseToken } from "../lib/extractActivateToken";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
-import { fetchCommunityLinks, fetchPublicClubMembershipsByVisitorId, fetchPublicDistilleryById } from "../lib/dataService";
+import { fetchCommunityLinks, fetchPublicClubMembershipsByVisitorId, fetchPublicDistilleriesByIds } from "../lib/dataService";
 import {
   ACHIEVEMENT_EVENT_NAME,
   BADGE_DEFS,
@@ -332,35 +332,14 @@ export default function Menu() {
     };
 
     const resolveClubRows = async (ids: string[]) => {
-      const byId = new Map<string, DistilleryOwnershipRow & { name?: string }>();
-      const missingIds: string[] = [];
-
-      await Promise.all(
-        ids.map(async (id) => {
-          try {
-            const data = (await fetchPublicDistilleryById(id)) as (DistilleryOwnershipRow & { name?: string }) | null;
-            if (data) byId.set(id, data);
-            else missingIds.push(id);
-          } catch {
-            missingIds.push(id);
-          }
-        }),
+      const distilleryRows = await fetchPublicDistilleriesByIds(ids);
+      const byId = new Map<string, DistilleryOwnershipRow & { name?: string }>(
+        distilleryRows.map((row) => [String(row.id), row as DistilleryOwnershipRow & { name?: string }]),
       );
-
-      if (missingIds.length > 0) {
-        const uniqueMissing = Array.from(new Set(missingIds));
-        for (let i = 0; i < uniqueMissing.length; i += 10) {
-          const chunk = uniqueMissing.slice(i, i + 10);
-          const snap = await getDocs(query(collection(db, "distilleries"), where(documentId(), "in", chunk)));
-          snap.forEach((d) => {
-            byId.set(d.id, d.data() as DistilleryOwnershipRow & { name?: string });
-          });
-        }
-      }
 
       const rows = ids
         .map((id) => {
-          const data = byId.get(id);
+          const data = byId.get(String(id));
           if (!data || data.isArchived) return null;
           const name = String(data.name || "").trim() || "Klub";
           return { id, name };

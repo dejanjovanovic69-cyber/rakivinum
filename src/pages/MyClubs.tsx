@@ -1,13 +1,13 @@
 import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { db } from "../lib/firebase";
-import { collection, query, where, getDocs, doc, deleteDoc, limit, documentId } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, deleteDoc, limit } from "firebase/firestore";
 import { ArrowLeft, Gift, ShieldX, Loader2, Star, CheckCircle2, ChevronRight, Users } from "lucide-react";
 import { cn } from "../lib/utils";
 import {
   fetchPublicClubActionsForDistillery,
   fetchPublicClubMembershipsByVisitorId,
-  fetchPublicDistilleryById,
+  fetchPublicDistilleriesByIds,
 } from "../lib/dataService";
 
 type ClubTarget = { label: string; current: number; target: number };
@@ -130,29 +130,10 @@ export default function MyClubs() {
 
         const clubsData: ClubRow[] = [];
 
-        const distilleryById = new Map<string, Record<string, unknown>>();
-        const missingIds: string[] = [];
-        await Promise.all(
-          allIds.map(async (distilleryId) => {
-            try {
-              const distillery = (await fetchPublicDistilleryById(distilleryId)) as Record<string, unknown> | null;
-              if (distillery) distilleryById.set(distilleryId, distillery);
-              else missingIds.push(distilleryId);
-            } catch {
-              missingIds.push(distilleryId);
-            }
-          }),
+        const distilleryRows = await fetchPublicDistilleriesByIds(allIds);
+        const distilleryById = new Map<string, Record<string, unknown>>(
+          distilleryRows.map((row) => [String(row.id), row as Record<string, unknown>]),
         );
-        if (missingIds.length > 0) {
-          const uniqueMissing = Array.from(new Set(missingIds));
-          for (let i = 0; i < uniqueMissing.length; i += 10) {
-            const chunk = uniqueMissing.slice(i, i + 10);
-            const snap = await getDocs(query(collection(db, "distilleries"), where(documentId(), "in", chunk)));
-            snap.forEach((d) => {
-              distilleryById.set(d.id, { id: d.id, ...d.data() });
-            });
-          }
-        }
 
         for (const id of allIds) {
           const distillery = distilleryById.get(id);

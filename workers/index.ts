@@ -561,6 +561,25 @@ export default {
         });
       }
 
+      if (url.pathname === "/api/public/distilleries-by-ids") {
+        return servePublicCached(request, async () => {
+          const raw = String(url.searchParams.get("ids") || "");
+          const ids = Array.from(
+            new Set(
+              raw
+                .split(",")
+                .map((x) => String(x || "").trim())
+                .filter((x) => x.length > 0),
+            ),
+          ).slice(0, 40);
+          if (ids.length === 0) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
+
+          const rows = await Promise.all(ids.map((id) => fetchDocumentById(env, "distilleries", id)));
+          const filtered = rows.filter((d) => d && d.isArchived !== true && d.isVerified === true);
+          return new Response(JSON.stringify({ items: filtered }), { headers: jsonHeaders });
+        });
+      }
+
       if (url.pathname === "/api/public/products") {
         return servePublicCached(request, async () => {
           const limitCount = parseLimit(url, 350, 1000);

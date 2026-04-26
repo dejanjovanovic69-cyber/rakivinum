@@ -1,4 +1,4 @@
-﻿import { collection, doc, getCountFromServer, getDoc, getDocs, limit, query, where } from "firebase/firestore";
+﻿import { collection, doc, documentId, getCountFromServer, getDoc, getDocs, limit, query, where } from "firebase/firestore";
 import { db } from "./firebase";
 import { isQuotaError, readCache, writeCache } from "./resilience";
 import { CACHE_TTL } from "./cachePolicy";
@@ -265,6 +265,41 @@ export async function fetchPublicDistilleryById(id: string): Promise<DistilleryP
     const row = { id: snap.id, ...snap.data() } as DistilleryPublic;
     if (row.isArchived || row.isVerified !== true) return null;
     return row;
+  });
+}
+
+export async function fetchPublicDistilleriesByIds(ids: string[]): Promise<DistilleryPublic[]> {
+  const safeIds = Array.from(
+    new Set(
+      (Array.isArray(ids) ? ids : [])
+        .map((id) => String(id || "").trim())
+        .filter((id) => id.length > 0),
+    ),
+  ).slice(0, 40);
+  if (safeIds.length === 0) return [];
+  return dedupe(`distilleryByIds:${safeIds.join(",")}`, async () => {
+    const qs = new URLSearchParams();
+    qs.set("ids", safeIds.join(","));
+    const json = await fetchEdgeRawJson(`/api/public/distilleries-by-ids?${qs.toString()}`);
+    const edgeItemsRaw = json?.items;
+    if (Array.isArray(edgeItemsRaw) && edgeItemsRaw.length > 0) {
+      return edgeItemsRaw
+        .filter((row): row is DistilleryPublic => !!row && typeof row === "object")
+        .filter((row) => row.isArchived !== true && row.isVerified === true);
+    }
+
+    const byId = new Map<string, DistilleryPublic>();
+    for (let i = 0; i < safeIds.length; i += 10) {
+      const chunk = safeIds.slice(i, i + 10);
+      const snap = await getDocs(query(collection(db, "distilleries"), where(documentId(), "in", chunk)));
+      meterDbRead("dataService:distillery_by_ids", snap.size);
+      snap.forEach((d) => {
+        const row = { id: d.id, ...d.data() } as DistilleryPublic;
+        if (row.isArchived !== true && row.isVerified === true) byId.set(d.id, row);
+      });
+    }
+
+    return safeIds.map((id) => byId.get(id)).filter((row): row is DistilleryPublic => Boolean(row));
   });
 }
 

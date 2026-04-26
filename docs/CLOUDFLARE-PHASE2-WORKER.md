@@ -5,6 +5,7 @@ Sta je uradjeno u kodu:
 - Worker endpointi:
   - `/health`
   - `/api/public/distilleries?limit=...`
+  - `/api/public/distilleries-by-ids?ids=a,b,c`
   - `/api/public/products?limit=...`
   - `/api/public/community-events?limit=...`
 - Frontend `dataService` prvo pokusava Worker API kada postoji `VITE_EDGE_API_BASE`,
@@ -57,6 +58,7 @@ Faza 3 status (startovan):
   - `/api/public/products-by-distillery/:distilleryId?limit=...`
   - `/api/public/club-actions-by-distillery/:distilleryId?limit=...`
   - `/api/public/club-membership-count/:distilleryId` (tacan broj clanova kluba (agregacija))
+  - `/api/public/distilleries-by-ids?ids=...` (batch read profila destilerija po ID listi)
   - `/api/public/product-lookup?n=...&r=...` (barkod: `barcodeNormalized` pa `barcode`)
   - `/api/public/scan-clusters/:productId?limit=...` (agregovani top regioni skenova)
 - Frontend `Distillery` je prebacen na worker-first read tok (uz Firebase fallback).

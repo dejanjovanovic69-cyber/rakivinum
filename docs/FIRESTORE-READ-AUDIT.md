@@ -59,7 +59,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 |------|----------|
 | `community_links` `limit(80)` | **[Implementirano]** Worker `/api/public/community-links` + `fetchCommunityLinks`. |
 | `club_memberships` po `visitorId` | **[Implementirano]** `fetchPublicClubMembershipsByVisitorId`. |
-| Distillery fallback za joined klubove | Ako `fetchPublicDistilleryById` vrati `null`, radi se **batched** Firestore fallback (`where(documentId(), "in", chunk)`) umesto `getDoc` po ID-u. |
+| Joined klubovi (distillery podaci) | Koristi se batch helper `fetchPublicDistilleriesByIds` (Worker `/api/public/distilleries-by-ids`), uz batched Firestore fallback (`documentId in`) kada edge nije dostupan. |
 | Distillery lookup po `ownerId` / `email` | Vlasnički tok — ostaje Firestore. |
 | Licence u admin delu menija | Osetljivo pisanje + pun dokument — Firestore. |
 
@@ -97,7 +97,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 
 | Read | Napomena |
 |------|----------|
-| `club_memberships`, `distilleries`, `club_actions` | **[Delom urađeno]** `fetchPublicClubMembershipsByVisitorId`, `fetchPublicDistilleryById` (+ batched Firestore fallback `documentId in`), `fetchPublicClubActionsForDistillery`. |
+| `club_memberships`, `distilleries`, `club_actions` | **[Delom urađeno]** `fetchPublicClubMembershipsByVisitorId`, `fetchPublicDistilleriesByIds` (+ batched Firestore fallback `documentId in`), `fetchPublicClubActionsForDistillery`. |
 | `scans`, `ratings` (napredak po visitoru) | Ostaje Firestore (nema javnog Worker-a), ali je optimizovano na **2 upita ukupno po ekranu** (jedan za `scans`, jedan za `ratings`) umesto 2 upita po klubu/akciji. |
 
 ---
