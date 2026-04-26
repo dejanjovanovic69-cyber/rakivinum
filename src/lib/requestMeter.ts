@@ -9,6 +9,23 @@ function isDevEnv(): boolean {
   }
 }
 
+/** Dev-only: estimated client-side Firestore document reads (fallback paths + direct queries). */
+export function getDbReadSnapshot(): { total: number; byLabel: Record<string, number> } | null {
+  if (!isDevEnv()) return null;
+  const byLabel = Object.fromEntries(
+    Array.from(counters.entries()).sort((a, b) => a[0].localeCompare(b[0])),
+  );
+  const total = Array.from(counters.values()).reduce((a, b) => a + b, 0);
+  return { total, byLabel };
+}
+
+/** Dev-only: clear counters before a manual navigation test. */
+export function resetDbReadMeter(): void {
+  if (!isDevEnv()) return;
+  counters.clear();
+  lastFlushAt = Date.now();
+}
+
 export function meterDbRead(label: string, amount = 1): void {
   if (!isDevEnv()) return;
   const safeLabel = String(label || "unknown");
@@ -25,5 +42,22 @@ export function meterDbRead(label: string, amount = 1): void {
     .map(([k, v]) => `${k}:${v}`)
     .join(" | ");
   if (rows) console.info(`[dev-db-reads] ${rows}`);
+}
+
+if (typeof window !== "undefined" && isDevEnv()) {
+  const w = window as unknown as {
+    __rakivinumDbReads?: () => void;
+    __rakivinumDbReadsReset?: () => void;
+  };
+  w.__rakivinumDbReads = () => {
+    const snap = getDbReadSnapshot();
+    if (!snap) return;
+    console.info("[dev-db-reads] total (client-estimated)", snap.total);
+    console.table(snap.byLabel);
+  };
+  w.__rakivinumDbReadsReset = () => {
+    resetDbReadMeter();
+    console.info("[dev-db-reads] meter cleared");
+  };
 }
 

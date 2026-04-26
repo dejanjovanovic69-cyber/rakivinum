@@ -229,8 +229,9 @@ export default function Home() {
     return () => unsubscribe();
   }, []);
 
+  // Public catalog slices for the home hero — not tied to userId so we do not re-fetch when
+  // auth resolves from null → uid (that transition used to duplicate heavy Worker/Firestore work).
   useEffect(() => {
-    // Daily recommendation: one rakija + one wine, avoid repeats
     const fetchDailyRecommendation = async () => {
       setIsLoadingRec(true);
       try {
@@ -308,7 +309,6 @@ export default function Home() {
       }
     };
 
-    // Fetch Distilleries
     const fetchDistilleries = async () => {
       try {
         const allDistilleries = await fetchPublicDistilleries({
@@ -327,9 +327,11 @@ export default function Home() {
       }
     };
 
-    fetchDailyRecommendation();
-    fetchDistilleries();
+    void fetchDailyRecommendation();
+    void fetchDistilleries();
+  }, []);
 
+  useEffect(() => {
     const userStatsCacheKey = userId ? `rakivinum_cache_home_user_stats_${userId}_v1` : null;
 
     if (!userId) {
