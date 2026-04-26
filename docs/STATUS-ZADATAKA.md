@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - dodat je `docs/PHASE5-ENABLE-CHECKLIST.md`, pa Faza 5 sada ima i formalni go/no-go checklist sa owner/date/evidence poljima.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - objavljen je prvi Faza 5 nedeljni ops izveštaj (`docs/PHASE5-WEEKLY-OPS-REPORT-2026-04-26.md`) i checklist je delimično zatvoren (weekly report + baseline evidence).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -79,6 +79,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Faza 5 (priprema paralelno):** definisani su SLO/cost/incident/rollback/deploy-gate okviri u `docs/CLOUDFLARE-PHASE5-OPS-GOVERNANCE.md`.
 - **Faza 5 templates:** dodati `docs/PHASE5-INCIDENT-REPORT-TEMPLATE.md` i `docs/PHASE5-WEEKLY-OPS-REPORT-TEMPLATE.md` za standardizovan incident i nedeljni operativni reporting.
 - **Faza 5 enable checklist:** dodat `docs/PHASE5-ENABLE-CHECKLIST.md` za formalno uključivanje Faze 5 (go/no-go odluka + 14-dnevni follow-up).
+- **Faza 5 weekly report #1:** dodat `docs/PHASE5-WEEKLY-OPS-REPORT-2026-04-26.md` kao prvi realan baseline izveštaj.
 
 ---
 

@@ -25,10 +25,10 @@ Status legend:
    - Date:
    - Evidence (`docs/PHASE5-INCIDENT-REPORT-TEMPLATE.md` instance):
 
-4. `[ ]` Weekly ops report published at least once
-   - Owner:
-   - Date:
-   - Evidence (`docs/PHASE5-WEEKLY-OPS-REPORT-TEMPLATE.md` instance):
+4. `[x]` Weekly ops report published at least once
+   - Owner: `AI agent (initial draft), owner review pending`
+   - Date: `2026-04-26`
+   - Evidence (`docs/PHASE5-WEEKLY-OPS-REPORT-TEMPLATE.md` instance): `docs/PHASE5-WEEKLY-OPS-REPORT-2026-04-26.md`
 
 5. `[ ]` Deploy quality gates applied on latest production deployment
    - Owner:
@@ -40,10 +40,10 @@ Status legend:
    - Date:
    - Evidence:
 
-7. `[ ]` Phase 4 baseline attached to weekly report
-   - Owner:
-   - Date:
-   - Evidence:
+7. `[x]` Phase 4 baseline attached to weekly report
+   - Owner: `AI agent`
+   - Date: `2026-04-26`
+   - Evidence: `docs/PHASE5-WEEKLY-OPS-REPORT-2026-04-26.md` (`Performance Trends` + `Executive Summary`)
 
 ## Go/No-Go Decision
 
