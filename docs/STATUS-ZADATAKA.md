@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++++++++++++) - dodat je owner how-to za preostala Faza 5 gate-a (`docs/PHASE5-OWNER-GATES-HOWTO.md`), pa je put do formalnog GO sada potpuno operativno opisan.
+**Poslednji zapis:** 2026-04-26 (veče++++++++++++++++++++++++++++++++++++++++) - urađen dodatni Faza 4 smoke checkpoint: svi endpointi su 200/OK; obrazac ostaje isti (povremeni spike na `distilleries`, bez funkcionalne regresije).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -164,6 +164,12 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - `distilleries`: 2306ms -> 1332ms (spike pa povratak).
 - `ratings-feed`: 1473ms -> 1043ms (spike pa povratak).
 - Zaključak: za sada nema regresije, nastaviti 24h trend praćenje pre bilo kakvog novog endpoint/tuning zahvata.
+
+**Checkpoint #3 (isti dan):**
+- Još 1x `npm run cf:smoke:edge` prošao bez greške (svi endpointi 200).
+- `distilleries`: 2459ms (povremeni spike, u skladu sa ranijim obrascem).
+- `product-lookup`: 1284ms (jednokratni viši skok, bez greške i bez promene payload-a).
+- Zaključak: i dalje nema funkcionalne regresije; fokus ostaje na trend praćenju, ne na hitnom tuningu.
 
 ---
 
