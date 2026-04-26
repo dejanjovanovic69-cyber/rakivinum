@@ -378,12 +378,21 @@ export async function fetchPublicProductByBarcodeLookup(normalized: string, rawS
   const r = String(rawScan || "").trim();
   if (!n && !r) return null;
   return dedupe(`barcodeLookup:${n}:${r}`, async () => {
+    const cacheKey = `rakivinum_cache_barcode_lookup_${encodeURIComponent(n)}_${encodeURIComponent(r)}_v1`;
+    const cached = readCache<{ found: boolean; item: ProductPublic | null }>(cacheKey);
+    if (cached) return cached.found ? cached.item : null;
+
     const qs = new URLSearchParams();
     if (n) qs.set("n", n);
     if (r) qs.set("r", r);
     const json = await fetchEdgeRawJson(`/api/public/product-lookup?${qs.toString()}`);
     const item = json?.item;
-    if (item && typeof item === "object") return item as ProductPublic;
+    if (item && typeof item === "object") {
+      const row = item as ProductPublic;
+      writeCache(cacheKey, { found: true, item: row }, CACHE_TTL.PUBLIC_BY_ID_1H);
+      return row;
+    }
+    writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.BARCODE_LOOKUP_NEGATIVE_2M);
     return null;
   });
 }

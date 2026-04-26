@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++++++++++++++++++) - `dataService` dobio kratki cache za `fetchPublicClubMembershipCount` (2m) i `fetchPublicProductRatingSummary` (10m), pa Distillery/ProductAnalytics manje često ponavljaju iste read-ove pri brzom povratku.
+**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++++++++++++++++++++) - `fetchPublicProductByBarcodeLookup` dobio kratki negativni cache (2m) za nepostojeći rezultat, pa isti invalidni scan payload ne pali odmah ponovljene read-ove.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -64,6 +64,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **License negative cache:** dodat 2m negativni cache za `fetchPublicLicenseByToken` kada token ne postoji, da se smanje ponovljeni lookup read-ovi za isti invalidni token.
 - **Distillery member-count cache:** dodat 2m cache u `fetchPublicClubMembershipCount` (po distilleryId), uz zadržan lokalni +/- update posle join/leave.
 - **Product summary cache:** dodat 10m cache u `fetchPublicProductRatingSummary` (po productId), da se pri povratku na isti analytics ekran ne ponavlja odmah isti summary read.
+- **Scanner barcode negative cache:** dodat 2m negativni cache u `fetchPublicProductByBarcodeLookup` za payload bez rezultata, da ponovljeno skeniranje istog nevalidnog barkoda ne pokreće odmah isti read tok.
 - **Destilerija (`Distillery`) članstvo:** pri "leave club" koristi se poznat `membershipDocId` (bez dodatnog membership read-a), a posle join/leave broj članova se lokalno koriguje (+/-) umesto trenutnog count read-a.
 - **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
 - **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).
