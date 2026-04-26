@@ -59,7 +59,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 |------|----------|
 | `community_links` `limit(80)` | **[Implementirano]** Worker `/api/public/community-links` + `fetchCommunityLinks`. |
 | `club_memberships` po `visitorId` | **[Implementirano]** `fetchPublicClubMembershipsByVisitorId`. |
-| Joined klubovi (distillery podaci) | Koristi se batch helper `fetchPublicDistilleriesByIds` (Worker `/api/public/distilleries-by-ids`), uz batched Firestore fallback (`documentId in`) samo kada edge nije dostupan (prazan edge odgovor je konačan i ne pali fallback readove). |
+| Joined klubovi (distillery podaci) | Koristi se batch helper `fetchPublicDistilleriesByIds` (Worker `/api/public/distilleries-by-ids`), uz batched Firestore fallback (`documentId in`) samo kada edge nije dostupan (prazan edge odgovor je konačan i ne pali fallback readove); ID lista se kanonizuje (sort) radi boljeg dedupe/cache hita. |
 | Distillery lookup po `ownerId` / `email` | Vlasnički tok — ostaje Firestore. |
 | Licence u admin delu menija | Osetljivo pisanje + pun dokument — Firestore. |
 

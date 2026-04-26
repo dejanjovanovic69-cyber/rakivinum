@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 (popodne+++++++++++++) - `fetchPublicDistilleriesByIds` popravljen: kada edge vrati `items: []`, to je konačan odgovor i ne radi se nepotreban Firestore fallback.
+**Poslednji zapis:** 2026-04-26 (popodne++++++++++++++) - `fetchPublicDistilleriesByIds` dodatno kanonizovan (sort ID liste), pa isti skup ID-jeva deli isti dedupe/cache put bez obzira na redosled.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -54,6 +54,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Meni (joined klubovi):** fallback za destilerije je batch (`documentId in`) umesto pojedinacnih `getDoc` poziva kada edge podaci nisu dostupni.
 - **Meni / MyClubs (distillery read):** uveden batch helper `fetchPublicDistilleriesByIds` (Worker-first + batched Firestore fallback), manje N pojedinačnih poziva.
 - **Meni / MyClubs (distillery read) fix:** prazan edge rezultat (`items: []`) više ne aktivira fallback read ka Firestore-u.
+- **Meni / MyClubs (distillery read) dedupe:** ID lista se sortira pre batch zahteva, pa se smanjuju dupli pozivi za isti set destilerija u različitom redosledu.
 - **Destilerija (`Distillery`) članstvo:** pri "leave club" koristi se poznat `membershipDocId` (bez dodatnog membership read-a), a posle join/leave broj članova se lokalno koriguje (+/-) umesto trenutnog count read-a.
 - **Build / Vite:** `manualChunks` (pdf, charts, firebase, icons), lazy PDF (`jspdf` / `html2canvas` / `qrcode`) na export, route-level `lazy` u `App`.
 - **TypeScript:** sirok prolaz smanjenja `any` na kriticnim stranicama (raniji krugovi).

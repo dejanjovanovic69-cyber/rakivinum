@@ -269,13 +269,14 @@ export async function fetchPublicDistilleryById(id: string): Promise<DistilleryP
 }
 
 export async function fetchPublicDistilleriesByIds(ids: string[]): Promise<DistilleryPublic[]> {
-  const safeIds = Array.from(
+  const uniqueIds = Array.from(
     new Set(
       (Array.isArray(ids) ? ids : [])
         .map((id) => String(id || "").trim())
         .filter((id) => id.length > 0),
     ),
   ).slice(0, 40);
+  const safeIds = [...uniqueIds].sort((a, b) => a.localeCompare(b));
   if (safeIds.length === 0) return [];
   return dedupe(`distilleryByIds:${safeIds.join(",")}`, async () => {
     const qs = new URLSearchParams();
