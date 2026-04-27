@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` ciljane invalidacije:** uvedene su specifične invalidacije (`invalidateAdminCoreBundle`, `invalidateAdminModerationBundle`, `invalidateAdminLicensingBundle`) i većina mutacija više ne osvežava ceo admin paket; moderation akcije osvežavaju samo moderation, licensing akcije samo licensing, community/distillery promene samo core (+ products gde treba). Time se smanjuju nepotrebni refetch-evi i read overhead.
+**Poslednji zapis:** 2026-04-27 — **`Admin` keš nakon mutacija:** nakon uspešnih upisa (approve rating, brisanje ocene, block/unblock, odobrenje proizvoda) UI se ažurira preko `queryClient.setQueryData` na `coreBundle` / `moderationBundle` umesto odmah invalidacije celog bundle-a; `invalidateAdminProducts()` ostaje gde se menja proizvod (npr. batch brisanje ocene sa `productId`, odobrenje proizvoda).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

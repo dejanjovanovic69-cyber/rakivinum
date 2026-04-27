@@ -914,7 +914,10 @@ export default function Admin() {
         approvedBy: auth.currentUser?.email,
         approvedAt: new Date().toISOString()
       });
-      invalidateAdminModerationBundle();
+      queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
+        if (!prev) return prev;
+        return { ...prev, flaggedRatings: prev.flaggedRatings.filter((r) => r.id !== id) };
+      });
     } catch (err) {
       console.error(err);
     }
@@ -929,7 +932,14 @@ export default function Admin() {
 
       if (!productId) {
         await deleteDoc(ratingRef);
-        invalidateAdminModerationBundle();
+        queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            flaggedRatings: prev.flaggedRatings.filter((r) => r.id !== id),
+            allRatings: prev.allRatings.filter((r) => r.id !== id),
+          };
+        });
         return;
       }
 
@@ -952,7 +962,14 @@ export default function Admin() {
       });
       await batch.commit();
 
-      invalidateAdminModerationBundle();
+      queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          flaggedRatings: prev.flaggedRatings.filter((r) => r.id !== id),
+          allRatings: prev.allRatings.filter((r) => r.id !== id),
+        };
+      });
       invalidateAdminProducts();
     } catch (err) {
       console.error(err);
@@ -1025,7 +1042,11 @@ export default function Admin() {
       } catch (e) {
         console.warn("User doc update failed (might not exist)", e);
       }
-      invalidateAdminModerationBundle();
+      queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
+        if (!prev) return prev;
+        if (prev.blockedUsers.includes(userId)) return prev;
+        return { ...prev, blockedUsers: [...prev.blockedUsers, userId] };
+      });
       alert("Korisnik uspešno blokiran.");
     } catch (err) {
       console.error(err);
@@ -1042,7 +1063,10 @@ export default function Admin() {
       try {
         await updateDoc(doc(db, 'users', userId), { isBlocked: false });
       } catch (e) {}
-      invalidateAdminModerationBundle();
+      queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
+        if (!prev) return prev;
+        return { ...prev, blockedUsers: prev.blockedUsers.filter((uid) => uid !== userId) };
+      });
     } catch (err) {
       console.error(err);
     }
@@ -1055,8 +1079,14 @@ export default function Admin() {
         approvedAt: serverTimestamp(),
         approvedBy: auth.currentUser?.email || "admin",
       });
+      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          pendingProductApprovals: prev.pendingProductApprovals.filter((p) => p.id !== productId),
+        };
+      });
       invalidateAdminProducts();
-      invalidateAdminCoreBundle();
       alert("Proizvod odobren!");
     } catch (err) {
       console.error(err);
