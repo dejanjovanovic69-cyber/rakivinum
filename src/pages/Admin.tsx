@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Save, Loader2, CheckCircle, Database, Upload, ImageIcon, Trash2, Edit2, Search, ChevronDown, BookOpen, MapPin, Eye, Flag, ShieldAlert, AlertTriangle, Star, Mail, FileText, BarChart2, Building2, ClipboardCopy } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "../lib/firebase";
@@ -30,6 +31,8 @@ import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
+import { queryKeys } from "../lib/queryKeys";
+import { stableQueryOptions } from "../lib/queryDefaults";
 
 // Helper function to resize and compress image to base64
 const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality: number = 0.8): Promise<string> => {
@@ -156,6 +159,19 @@ type RatingRow = {
   createdAt?: { toDate?: () => Date; toMillis?: () => number; seconds?: number };
   [key: string]: unknown;
 };
+
+type AdminInitialBundle = {
+  distilleries: DistilleryListItem[];
+  eventProposals: EventProposalItem[];
+  communityLinks: CommunityLinkItem[];
+  communityEvents: CommunityEventItem[];
+  flaggedRatings: RatingRow[];
+  allRatings: RatingRow[];
+  blockedUsers: string[];
+  licenses: LicenseItem[];
+  pendingProductApprovals: ProductListItem[];
+};
+
 type ClipNavigator = Navigator & { clipboard?: { read?: () => Promise<Array<{ types: string[]; getType: (t: string) => Promise<Blob> }>> } };
 type PdfLike = { internal?: { getNumberOfPages?: () => number } };
 type WithToDate = { toDate?: () => Date };
@@ -240,6 +256,192 @@ export default function Admin() {
   const [lastGeneratedBatchTokens, setLastGeneratedBatchTokens] = useState<string[]>([]);
   const [confirmDeleteLicenseId, setConfirmDeleteLicenseId] = useState<string | null>(null);
   const [licenseLogSearch, setLicenseLogSearch] = useState("");
+
+  const queryClient = useQueryClient();
+
+  const invalidateAdminInitialBundle = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.initialBundle() });
+  }, [queryClient]);
+
+  const adminInitialQuery = useQuery({
+    queryKey: queryKeys.admin.initialBundle(),
+    queryFn: async (): Promise<AdminInitialBundle> => {
+      const loadDistilleries = async (): Promise<DistilleryListItem[]> => {
+        try {
+          const snap = await getDocs(
+            query(collection(db, "distilleries"), limit(Math.min(20, ADMIN_DISTILLERIES_LIMIT))),
+          );
+          meterDbRead("admin:distilleries", snap.size);
+          const list: DistilleryListItem[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as DistilleryListItem) }));
+          list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
+          return list;
+        } catch (err) {
+          console.error("Greška pri učitavanju destilerija", err);
+          return [];
+        }
+      };
+
+      const loadPending = async (): Promise<ProductListItem[]> => {
+        try {
+          const q = query(
+            collection(db, "products"),
+            where("isApproved", "==", false),
+            limit(Math.min(20, ADMIN_PENDING_APPROVALS_LIMIT)),
+          );
+          const snap = await getDocs(q);
+          meterDbRead("admin:products_pending_approvals", snap.size);
+          const list: ProductListItem[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as ProductListItem) }));
+          list.sort((a, b) => {
+            const aTs = a.updatedAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0;
+            const bTs = b.updatedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0;
+            return bTs - aTs;
+          });
+          return list;
+        } catch (err) {
+          console.error("Greška pri učitavanju promena za odobrenje", err);
+          return [];
+        }
+      };
+
+      const loadEventProposals = async (): Promise<EventProposalItem[]> => {
+        try {
+          const snap = await getDocs(query(collection(db, "eventProposals"), limit(Math.min(20, ADMIN_EVENT_PROPOSALS_LIMIT))));
+          return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        } catch (err) {
+          console.error("Error fetching event proposals:", err);
+          return [];
+        }
+      };
+
+      const loadCommunityLinks = async (): Promise<CommunityLinkItem[]> => {
+        try {
+          const snap = await getDocs(query(collection(db, "community_links"), limit(Math.min(20, ADMIN_LINKS_LIMIT))));
+          const list: CommunityLinkItem[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as CommunityLinkItem) }));
+          list.sort((a, b) => (a.label || "").localeCompare(b.label || "", "sr"));
+          return list;
+        } catch (err) {
+          console.error("Greška pri učitavanju korisnih linkova:", err);
+          return [];
+        }
+      };
+
+      const loadCommunityEvents = async (): Promise<CommunityEventItem[]> => {
+        try {
+          const snap = await getDocs(query(collection(db, "community_events"), limit(Math.min(20, ADMIN_EVENTS_LIMIT))));
+          const list: CommunityEventItem[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as CommunityEventItem) }));
+          list.sort((a, b) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
+          return list;
+        } catch (err) {
+          console.error("Greška pri učitavanju događaja:", err);
+          return [];
+        }
+      };
+
+      const loadFlaggedRatings = async (): Promise<RatingRow[]> => {
+        try {
+          const q = query(
+            collection(db, "ratings"),
+            where("isFlagged", "==", true),
+            limit(Math.min(20, ADMIN_FLAGGED_RATINGS_LIMIT)),
+          );
+          const snap = await getDocs(q);
+          return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        } catch (err) {
+          console.error("Error fetching flagged ratings:", err);
+          return [];
+        }
+      };
+
+      const loadRecentRatings = async (): Promise<RatingRow[]> => {
+        try {
+          const q = query(collection(db, "ratings"), limit(20));
+          const snap = await getDocs(q);
+          meterDbRead("admin:ratings_recent", snap.size);
+          return snap.docs
+            .map((d) => ({ id: d.id, ...d.data() } as RatingRow))
+            .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))
+            .slice(0, 100);
+        } catch (err) {
+          console.error("Error fetching ratings:", err);
+          return [];
+        }
+      };
+
+      const loadBlockedUsers = async (): Promise<string[]> => {
+        try {
+          const snap = await getDocs(query(collection(db, "blocked_users"), limit(Math.min(20, ADMIN_BLOCKED_USERS_LIMIT))));
+          return snap.docs.map((d) => d.id);
+        } catch (err) {
+          console.error("Error fetching blocked users:", err);
+          return [];
+        }
+      };
+
+      const loadLicenses = async (): Promise<LicenseItem[]> => {
+        try {
+          const snap = await getDocs(query(collection(db, "licenses"), limit(Math.min(20, ADMIN_LICENSES_LIMIT))));
+          return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        } catch (err) {
+          console.error("Error fetching licenses:", err);
+          return [];
+        }
+      };
+
+      const [
+        distilleries,
+        eventProposals,
+        communityLinks,
+        communityEvents,
+        flaggedRatings,
+        allRatings,
+        blockedUsers,
+        licenses,
+        pendingProductApprovals,
+      ] = await Promise.all([
+        loadDistilleries(),
+        loadEventProposals(),
+        loadCommunityLinks(),
+        loadCommunityEvents(),
+        loadFlaggedRatings(),
+        loadRecentRatings(),
+        loadBlockedUsers(),
+        loadLicenses(),
+        loadPending(),
+      ]);
+
+      return {
+        distilleries,
+        eventProposals,
+        communityLinks,
+        communityEvents,
+        flaggedRatings,
+        allRatings,
+        blockedUsers,
+        licenses,
+        pendingProductApprovals,
+      };
+    },
+    ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
+  });
+
+  useEffect(() => {
+    const d = adminInitialQuery.data;
+    if (!d) return;
+    setDistilleries(d.distilleries);
+    setSelectedDistilleryId((current) => {
+      if (current === "all") return current;
+      if (current && d.distilleries.some((x) => x.id === current)) return current;
+      return d.distilleries[0]?.id || "";
+    });
+    setEventProposals(d.eventProposals);
+    setCommunityLinks(d.communityLinks);
+    setCommunityEvents(d.communityEvents);
+    setFlaggedRatings(d.flaggedRatings);
+    setAllRatings(d.allRatings);
+    setBlockedUsers(d.blockedUsers);
+    setLicenses(d.licenses);
+    setPendingProductApprovals(d.pendingProductApprovals);
+  }, [adminInitialQuery.data]);
 
   useEffect(() => {
     if (!isSuperAdminUser) {
@@ -680,7 +882,7 @@ export default function Admin() {
         approvedBy: auth.currentUser?.email,
         approvedAt: new Date().toISOString()
       });
-      fetchFlaggedRatings();
+      invalidateAdminInitialBundle();
     } catch (err) {
       console.error(err);
     }
@@ -695,8 +897,7 @@ export default function Admin() {
 
       if (!productId) {
         await deleteDoc(ratingRef);
-        fetchFlaggedRatings();
-        fetchRecentRatings();
+        invalidateAdminInitialBundle();
         return;
       }
 
@@ -719,9 +920,8 @@ export default function Admin() {
       });
       await batch.commit();
 
-      fetchFlaggedRatings();
-      fetchRecentRatings();
-      fetchAdminProducts();
+      invalidateAdminInitialBundle();
+      void fetchAdminProducts();
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju ocene ili ažuriranju proseka proizvoda.");
@@ -743,23 +943,6 @@ export default function Admin() {
     const el = document.getElementById(sectionId);
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
-  const fetchDistilleries = async () => {
-    try {
-      const snap = await getDocs(query(collection(db, 'distilleries'), limit(Math.min(20, ADMIN_DISTILLERIES_LIMIT))));
-      meterDbRead("admin:distilleries", snap.size);
-      const list: DistilleryListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as DistilleryListItem) }));
-      list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
-      setDistilleries(list);
-      setSelectedDistilleryId((current) => {
-        if (current === "all") return current;
-        if (current && list.some((d) => d.id === current)) return current;
-        return list[0]?.id || "";
-      });
-    } catch (err) {
-      console.error("Greška pri učitavanju destilerija", err);
-    }
   };
 
   const fetchAdminProducts = useCallback(async () => {
@@ -788,87 +971,6 @@ export default function Admin() {
     }
   }, [selectedDistilleryId, isSuperAdminUser]);
 
-  const fetchPendingProductApprovals = async () => {
-    try {
-      const q = query(collection(db, "products"), where("isApproved", "==", false), limit(Math.min(20, ADMIN_PENDING_APPROVALS_LIMIT)));
-      const snap = await getDocs(q);
-      meterDbRead("admin:products_pending_approvals", snap.size);
-      const list: ProductListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) }));
-      list.sort((a, b) => {
-        const aTs = a.updatedAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0;
-        const bTs = b.updatedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0;
-        return bTs - aTs;
-      });
-      setPendingProductApprovals(list);
-    } catch (err) {
-      console.error("Greška pri učitavanju promena za odobrenje", err);
-    }
-  };
-
-  const fetchEventProposals = async () => {
-    try {
-      const snap = await getDocs(query(collection(db, 'eventProposals'), limit(Math.min(20, ADMIN_EVENT_PROPOSALS_LIMIT))));
-      setEventProposals(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch (err) {
-      console.error("Error fetching event proposals:", err);
-    }
-  };
-
-  const fetchCommunityLinks = async () => {
-    try {
-      const snap = await getDocs(query(collection(db, 'community_links'), limit(Math.min(20, ADMIN_LINKS_LIMIT))));
-      const list: CommunityLinkItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityLinkItem) }));
-      list.sort((a, b) => (a.label || "").localeCompare(b.label || "", 'sr'));
-      setCommunityLinks(list);
-    } catch (err) {
-      console.error("Greška pri učitavanju korisnih linkova:", err);
-    }
-  };
-
-  const fetchCommunityEvents = async () => {
-    try {
-      const snap = await getDocs(query(collection(db, 'community_events'), limit(Math.min(20, ADMIN_EVENTS_LIMIT))));
-      const list: CommunityEventItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityEventItem) }));
-      list.sort((a, b) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
-      setCommunityEvents(list);
-    } catch (err) {
-      console.error("Greška pri učitavanju događaja:", err);
-    }
-  };
-
-  const fetchFlaggedRatings = async () => {
-    try {
-      // Query for ratings where isFlagged is true OR it was auto-flagged
-      const q = query(collection(db, "ratings"), where("isFlagged", "==", true), limit(Math.min(20, ADMIN_FLAGGED_RATINGS_LIMIT)));
-      const snap = await getDocs(q);
-      setFlaggedRatings(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch (err) {
-      console.error("Error fetching flagged ratings:", err);
-    }
-  };
-
-  const fetchRecentRatings = async () => {
-    try {
-      const q = query(collection(db, 'ratings'), limit(20));
-      const snap = await getDocs(q);
-      meterDbRead("admin:ratings_recent", snap.size);
-      setAllRatings(snap.docs.map(d => ({ id: d.id, ...d.data() } as RatingRow)).sort((a, b) => 
-        (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0)
-      ).slice(0, 100));
-    } catch (err) {
-      console.error("Error fetching ratings:", err);
-    }
-  };
-
-  const fetchBlockedUsers = async () => {
-    try {
-      const snap = await getDocs(query(collection(db, 'blocked_users'), limit(Math.min(20, ADMIN_BLOCKED_USERS_LIMIT))));
-      setBlockedUsers(snap.docs.map(d => d.id));
-    } catch (err) {
-      console.error("Error fetching blocked users:", err);
-    }
-  };
-
   const handleBlockUser = async (userId: string) => {
     if (!userId || userId === 'anonymous') {
       alert("Nije moguće blokirati anonimnog korisnika na ovaj način.");
@@ -889,7 +991,7 @@ export default function Admin() {
       } catch (e) {
         console.warn("User doc update failed (might not exist)", e);
       }
-      fetchBlockedUsers();
+      invalidateAdminInitialBundle();
       alert("Korisnik uspešno blokiran.");
     } catch (err) {
       console.error(err);
@@ -906,18 +1008,9 @@ export default function Admin() {
       try {
         await updateDoc(doc(db, 'users', userId), { isBlocked: false });
       } catch (e) {}
-      fetchBlockedUsers();
+      invalidateAdminInitialBundle();
     } catch (err) {
       console.error(err);
-    }
-  };
-
-  const fetchLicenses = async () => {
-    try {
-      const snap = await getDocs(query(collection(db, 'licenses'), limit(Math.min(20, ADMIN_LICENSES_LIMIT))));
-      setLicenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch (err) {
-      console.error("Error fetching licenses:", err);
     }
   };
 
@@ -929,7 +1022,7 @@ export default function Admin() {
         approvedBy: auth.currentUser?.email || "admin",
       });
       await fetchAdminProducts();
-      await fetchPendingProductApprovals();
+      invalidateAdminInitialBundle();
       alert("Proizvod odobren!");
     } catch (err) {
       console.error(err);
@@ -1162,7 +1255,7 @@ export default function Admin() {
       // We will clear the count to 1 just in case
       setBatchCount(1);
       setBatchEmail("");
-      fetchLicenses();
+      invalidateAdminInitialBundle();
     } catch (err: unknown) {
       console.error(err);
       alert("Greška pri generisanju licenci: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
@@ -1179,24 +1272,12 @@ export default function Admin() {
           maxDevices: Number(newLimit),
           comment: `Limit povećan na ${newLimit} (${new Date().toLocaleDateString()})`
         });
-        fetchLicenses();
+        invalidateAdminInitialBundle();
       } catch (err) {
         console.error(err);
       }
     }
   };
-
-  useEffect(() => {
-    fetchDistilleries();
-    fetchEventProposals();
-    fetchCommunityLinks();
-    fetchCommunityEvents();
-    fetchFlaggedRatings();
-    fetchRecentRatings();
-    fetchBlockedUsers();
-    fetchLicenses();
-    fetchPendingProductApprovals();
-  }, []);
 
   useEffect(() => {
     void fetchAdminProducts();
@@ -1227,7 +1308,7 @@ export default function Admin() {
       }
       setLinkForm({ label: "", url: "" });
       setEditingLinkId(null);
-      fetchCommunityLinks();
+      invalidateAdminInitialBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju linka.");
@@ -1242,7 +1323,7 @@ export default function Admin() {
         setEditingLinkId(null);
         setLinkForm({ label: "", url: "" });
       }
-      fetchCommunityLinks();
+      invalidateAdminInitialBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju linka.");
@@ -1277,7 +1358,7 @@ export default function Admin() {
       }
       setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       setEditingEventId(null);
-      fetchCommunityEvents();
+      invalidateAdminInitialBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju događaja.");
@@ -1292,7 +1373,7 @@ export default function Admin() {
         setEditingEventId(null);
         setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       }
-      fetchCommunityEvents();
+      invalidateAdminInitialBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju događaja.");
@@ -1337,8 +1418,8 @@ export default function Admin() {
           cursor = last;
         }
       }
-      fetchDistilleries();
-      fetchAdminProducts();
+      invalidateAdminInitialBundle();
+      void fetchAdminProducts();
     } catch (err) {
       console.error("Greška pri promeni statusa:", err);
       alert("Niste ovlašćeni za ovu akciju.");
@@ -1422,7 +1503,7 @@ export default function Admin() {
       setDistilleryData({ id: "", name: "", region: "Beograd i okolina", website: "", email: "", description: "", logoUrl: "", pib: "", address: "", city: "", mapsUrl: "", trialEndsAt: "" });
        clearGallerySlots();
        try {
-         await fetchDistilleries();
+         await queryClient.refetchQueries({ queryKey: queryKeys.admin.initialBundle() });
        } catch (e) {
          console.warn("Refresh list failed", e);
        }
@@ -1489,8 +1570,8 @@ export default function Admin() {
       await deleteDoc(doc(db, 'distilleries', id));
       
       setDistilleryToDelete(null);
-      fetchDistilleries();
-      fetchAdminProducts();
+      invalidateAdminInitialBundle();
+      void fetchAdminProducts();
       setManualResult("Destilerija i sve njene rakije su uspešno obrisane.");
     } catch (err: unknown) {
       console.error(err);
@@ -1551,8 +1632,8 @@ export default function Admin() {
       }
 
       setManualResult(nextArchived ? "Destilerija je arhivirana." : "Destilerija je vraćena iz arhive.");
-      fetchDistilleries();
-      fetchAdminProducts();
+      invalidateAdminInitialBundle();
+      void fetchAdminProducts();
     } catch (err: unknown) {
       console.error(err);
       setManualResult("Greška pri arhiviranju: " + ((err as { message?: string } | null)?.message || "Nepoznata greška."));
@@ -2121,7 +2202,7 @@ export default function Admin() {
               </p>
             </div>
             <button
-              onClick={() => fetchPendingProductApprovals()}
+              onClick={() => invalidateAdminInitialBundle()}
               className="px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase"
             >
               Osveži
@@ -2805,7 +2886,7 @@ export default function Admin() {
                       onClick={async () => {
                         if (window.confirm("Obriši ovaj predlog?")) {
                           await deleteDoc(doc(db, 'eventProposals', ev.id));
-                          fetchEventProposals();
+                          invalidateAdminInitialBundle();
                         }
                       }}
                       className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors shrink-0"
@@ -3240,7 +3321,7 @@ export default function Admin() {
                            try {
                              await deleteDoc(doc(db, 'licenses', lic.id));
                              setConfirmDeleteLicenseId(null);
-                             fetchLicenses();
+                             invalidateAdminInitialBundle();
                           } catch (e: unknown) {
                             alert("Greška pri brisanju: " + ((e as { message?: string } | null)?.message || "Nepoznata greška"));
                            }

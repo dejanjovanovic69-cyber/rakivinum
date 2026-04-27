@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`react-hooks/exhaustive-deps`:** ispravljeni build-gate lint upozori na više ekrana (`DistilleryAnalyticsModal` `fetchData` + `useCallback`; `Admin` `fetchAdminProducts` + `useCallback`; `DistilleryDashboard` kompletan `distillery` u deps; `Label` modul-nivo `EMPTY_LABEL_PAYLOAD` + keš helperi, `logProductScan` efekat sa `productData`; `Menu` ref za `showDomainError` u mount auth efektu; `ProductAnalytics` stabilni prazni nizovi; `Scanner` ref za `handleScanSuccess`). `npm run lint` ponovo prolazi.
+**Poslednji zapis:** 2026-04-27 — **`Admin` početni read paket:** jedan `useQuery` (`queryKeys.admin.initialBundle()`) paralelno vuče destilerije, event predloge, community linkove/događaje, flagged + recent ocene, blokirane korisnike, licence i pending odobrenja; `stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M)`; sinhronizacija u postojeći lokalni state; ručni `fetch*` za taj paket zamenjeni sa `invalidateAdminInitialBundle` / `refetchQueries` posle mutacija; `fetchAdminProducts` ostaje odvojeno po `selectedDistilleryId`.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

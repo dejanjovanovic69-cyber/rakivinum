@@ -52,4 +52,7 @@ export const queryKeys = {
   adminAudit: {
     bundle: () => ["admin-audit", "bundle"] as const,
   },
+  admin: {
+    initialBundle: () => ["admin", "initial-bundle"] as const,
+  },
 };
