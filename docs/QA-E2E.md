@@ -35,7 +35,7 @@ npm run test:e2e:ui
 
 ## Šta dodavati dalje
 
-U `e2e/smoke.spec.ts` (ili novi fajl) dodaj kratke testove: **jedan assert po ponašanju** (npr. „nema beskonačnog loadera“, „naslov taba vidljiv“). Teške Firebase brojke ne testiramo ovde — za to ostaje `npm run cf:smoke:edge` i Firebase konzola.
+U `e2e/smoke.spec.ts` (ili novi fajl) dodaj kratke testove: **jedan assert po ponašanju** (npr. „nema beskonačnog loadera“, „naslov taba vidljiv“). Teške Firebase brojke ne testiramo ovde — za to ostaje `npm run cf:smoke:edge` (dupli GET po ruti gde ima KV keš; kolona `Cache`: `miss` / `kv-hit`) i Firebase konzola.
 
 Trenutno smoke pokriva: početnu, Community (default + tab deep linkovi), `/distilleries`, `/collection` (gost prazan ili „Arhiva“), `/menu` (Gost/Korisnik), `/scan`, `/radionica`, `/my-clubs`, `/activate` (bez tokena — forma), `/label/…` i `/distillery/…` (nepostojeći id — poruka o nedostupnosti).
 

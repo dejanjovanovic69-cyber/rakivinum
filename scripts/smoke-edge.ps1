@@ -58,6 +58,10 @@ $distilleriesSmokeUrl = "$BaseUrl/api/public/distilleries?limit=5&_cb=$cb"
 $productsSmokeUrl = "$BaseUrl/api/public/products?limit=5&_cb=$cb"
 $ratingsFeedSmokeUrl = "$BaseUrl/api/public/ratings-feed?limit=5&_cb=$cb"
 $communityLinksSmokeUrl = "$BaseUrl/api/public/community-links?limit=10&_cb=$cb"
+$communityEventsSmokeUrl = "$BaseUrl/api/public/community-events?limit=10&_cb=$cb"
+$distilleriesByIdsSmokeUrl = "$BaseUrl/api/public/distilleries-by-ids?ids=smoke-test&_cb=$cb"
+$distilleryDetailSmokeUrl = "$BaseUrl/api/public/distillery/e2e-missing-distillery-00000?_cb=$cb"
+$productDetailSmokeUrl = "$BaseUrl/api/public/product/$SampleProductId?_cb=$cb"
 $clubActionsSmokeUrl = "$BaseUrl/api/public/club-actions?limit=5&_cb=$cb"
 $ratingsSummarySmokeUrl = "$BaseUrl/api/public/ratings-summary/$SampleProductId?_cb=$cb"
 $productRatingsSmokeUrl = "$BaseUrl/api/public/product-ratings/$SampleProductId?limit=5&_cb=$cb"
@@ -82,6 +86,14 @@ $targets = @(
   @{ Name = "club-actions-repeat"; Url = $clubActionsSmokeUrl },
   @{ Name = "community-links"; Url = $communityLinksSmokeUrl },
   @{ Name = "community-links-repeat"; Url = $communityLinksSmokeUrl },
+  @{ Name = "community-events"; Url = $communityEventsSmokeUrl },
+  @{ Name = "community-events-repeat"; Url = $communityEventsSmokeUrl },
+  @{ Name = "distilleries-by-ids"; Url = $distilleriesByIdsSmokeUrl },
+  @{ Name = "distilleries-by-ids-repeat"; Url = $distilleriesByIdsSmokeUrl },
+  @{ Name = "distillery-detail"; Url = $distilleryDetailSmokeUrl },
+  @{ Name = "distillery-detail-repeat"; Url = $distilleryDetailSmokeUrl },
+  @{ Name = "product-detail"; Url = $productDetailSmokeUrl },
+  @{ Name = "product-detail-repeat"; Url = $productDetailSmokeUrl },
   @{ Name = "products-by-distillery"; Url = $productsByDistillerySmokeUrl },
   @{ Name = "products-by-distillery-repeat"; Url = $productsByDistillerySmokeUrl },
   @{ Name = "club-actions-by-distillery"; Url = $clubActionsByDistillerySmokeUrl },
