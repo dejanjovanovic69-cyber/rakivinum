@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **Playwright smoke:** proširen na `/collection`, `/menu`, `/scan`, `/radionica` (pored Community tabova i `/distilleries`). Ranije: `dataService` edge circuit breaker; Community TanStack; Worker KV + `x-cache-status`; `VITE_COMMUNITY_READ_EMERGENCY`.
+**Poslednji zapis:** 2026-04-27 — **Playwright smoke:** `/my-clubs`; **smoke-edge:** drugi GET na `products` (keš). Ranije: `/collection`, `/menu`, `/scan`, `/radionica`, Community tabovi; `dataService` edge circuit breaker; Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

@@ -89,4 +89,9 @@ test.describe("public routes", () => {
     await page.goto("/radionica");
     await expect(page.getByRole("heading", { name: /Radionica/i })).toBeVisible({ timeout: 25_000 });
   });
+
+  test("my clubs shell heading", async ({ page }) => {
+    await page.goto("/my-clubs");
+    await expect(page.getByRole("heading", { name: /Moji klubovi/i })).toBeVisible({ timeout: 25_000 });
+  });
 });
