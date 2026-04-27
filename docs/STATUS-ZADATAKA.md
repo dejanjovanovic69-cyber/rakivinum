@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` ručno osvežavanje:** dugme „Osveži“ (tab odobrenja) sada invalidira prefiks `["admin"]` pa se paralelno refetch-uju core, moderation, licensing i svi `products` keševi. I dalje važi `patchAllAdminProductCaches` posle mutacija umesto `invalidateAdminProducts`.
+**Poslednji zapis:** 2026-04-27 — **`Admin` + `queryKeys`:** `queryKeys.admin.scope()` i `productsPrefix()` za invalidaciju / `setQueriesData`; ispod tabova jedno dugme „Osveži podatke“ za sve admin upite. I dalje važi `patchAllAdminProductCaches` posle mutacija.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

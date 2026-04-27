@@ -53,6 +53,10 @@ export const queryKeys = {
     bundle: () => ["admin-audit", "bundle"] as const,
   },
   admin: {
+    /** Invalidira sve admin TanStack upite (core, moderation, licensing, products). */
+    scope: () => ["admin"] as const,
+    /** Prefiks za `setQueriesData` nad svim keširanim listama proizvoda u adminu. */
+    productsPrefix: () => ["admin", "products"] as const,
     coreBundle: () => ["admin", "core-bundle"] as const,
     moderationBundle: () => ["admin", "moderation-bundle"] as const,
     licensingBundle: () => ["admin", "licensing-bundle"] as const,

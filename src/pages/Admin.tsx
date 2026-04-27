@@ -267,13 +267,13 @@ export default function Admin() {
 
   /** Refetch sve TanStack admin upite (core, moderation, licensing, products). */
   const refreshAllAdminQueries = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["admin"] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.scope() });
   }, [queryClient]);
 
   /** Patch every cached admin product list (all distillery / super “all” keys). */
   const patchAllAdminProductCaches = useCallback(
     (updater: (prev: ProductListItem[] | undefined) => ProductListItem[] | undefined) => {
-      queryClient.setQueriesData<ProductListItem[]>({ queryKey: ["admin", "products"] }, updater);
+      queryClient.setQueriesData<ProductListItem[]>({ queryKey: queryKeys.admin.productsPrefix() }, updater);
     },
     [queryClient],
   );
@@ -2087,6 +2087,16 @@ export default function Admin() {
         ))}
       </div>
 
+      <div className="relative z-10 mb-4 flex justify-end">
+        <button
+          type="button"
+          onClick={() => void refreshAllAdminQueries()}
+          className="px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase"
+        >
+          Osveži podatke
+        </button>
+      </div>
+
       {(activeTab === 'approvals' || activeTab === 'distilleries' || activeTab === 'licensing') && (
       <div className="bg-bg-card border border-gold-500/20 rounded-[24px] p-6 shadow-xl relative z-[40] mb-4 space-y-4 animate-in fade-in duration-200">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2482,22 +2492,14 @@ export default function Admin() {
       {activeTab === 'approvals' && (
       <div className="relative z-10 space-y-4 animate-in fade-in duration-200">
         <div className="bg-bg-card border border-border-subtle rounded-[24px] p-6 shadow-xl space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="font-bold text-lg text-white flex items-center gap-2">
-                <CheckCircle className="w-5 h-5 text-gold-500" />
-                Promene za odobrenje ({selectedPendingApprovals.length})
-              </h2>
-              <p className="text-sm text-text-secondary">
-                Ovde su novi ili izmenjeni artikli koji čekaju odobrenje za trenutno aktivnu destileriju.
-              </p>
-            </div>
-            <button
-              onClick={() => refreshAllAdminQueries()}
-              className="px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase"
-            >
-              Osveži
-            </button>
+          <div>
+            <h2 className="font-bold text-lg text-white flex items-center gap-2">
+              <CheckCircle className="w-5 h-5 text-gold-500" />
+              Promene za odobrenje ({selectedPendingApprovals.length})
+            </h2>
+            <p className="text-sm text-text-secondary">
+              Ovde su novi ili izmenjeni artikli koji čekaju odobrenje za trenutno aktivnu destileriju.
+            </p>
           </div>
 
           <div className="space-y-3">
