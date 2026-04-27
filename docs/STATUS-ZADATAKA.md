@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` products read:** i lista proizvoda je prebačena na `useQuery` (`queryKeys.admin.products(selectedDistilleryId, isSuperAdminUser)`) sa `stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M)`; uklonjen lokalni `fetchAdminProducts` efekat; mutacije sada rade `invalidateAdminProducts()` (+ `invalidateAdminInitialBundle()` gde treba) umesto ručnog re-fetch poziva.
+**Poslednji zapis:** 2026-04-27 — **`Admin` bundle granularizacija:** početni admin read je podeljen na tri `useQuery` ključa — `queryKeys.admin.coreBundle()`, `queryKeys.admin.moderationBundle()`, `queryKeys.admin.licensingBundle()`; `invalidateAdminInitialBundle()` sada invalidira sva tri ključa, a `refetchQueries` posle čuvanja destilerije gađa `coreBundle`; lista proizvoda ostaje odvojena na `queryKeys.admin.products(...)`.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

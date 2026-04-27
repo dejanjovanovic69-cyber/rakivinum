@@ -53,7 +53,9 @@ export const queryKeys = {
     bundle: () => ["admin-audit", "bundle"] as const,
   },
   admin: {
-    initialBundle: () => ["admin", "initial-bundle"] as const,
+    coreBundle: () => ["admin", "core-bundle"] as const,
+    moderationBundle: () => ["admin", "moderation-bundle"] as const,
+    licensingBundle: () => ["admin", "licensing-bundle"] as const,
     products: (selectedDistilleryId: string, isSuperAdminUser: boolean) =>
       ["admin", "products", selectedDistilleryId, isSuperAdminUser ? "super" : "regular"] as const,
   },

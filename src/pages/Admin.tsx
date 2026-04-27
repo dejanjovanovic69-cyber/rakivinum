@@ -160,16 +160,22 @@ type RatingRow = {
   [key: string]: unknown;
 };
 
-type AdminInitialBundle = {
+type AdminCoreBundle = {
   distilleries: DistilleryListItem[];
   eventProposals: EventProposalItem[];
   communityLinks: CommunityLinkItem[];
   communityEvents: CommunityEventItem[];
+  pendingProductApprovals: ProductListItem[];
+};
+
+type AdminModerationBundle = {
   flaggedRatings: RatingRow[];
   allRatings: RatingRow[];
   blockedUsers: string[];
+};
+
+type AdminLicensingBundle = {
   licenses: LicenseItem[];
-  pendingProductApprovals: ProductListItem[];
 };
 
 type ClipNavigator = Navigator & { clipboard?: { read?: () => Promise<Array<{ types: string[]; getType: (t: string) => Promise<Blob> }>> } };
@@ -260,16 +266,18 @@ export default function Admin() {
   const queryClient = useQueryClient();
 
   const invalidateAdminInitialBundle = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.initialBundle() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.coreBundle() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.moderationBundle() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.licensingBundle() });
   }, [queryClient]);
 
   const invalidateAdminProducts = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["admin", "products"] });
   }, [queryClient]);
 
-  const adminInitialQuery = useQuery({
-    queryKey: queryKeys.admin.initialBundle(),
-    queryFn: async (): Promise<AdminInitialBundle> => {
+  const adminCoreQuery = useQuery({
+    queryKey: queryKeys.admin.coreBundle(),
+    queryFn: async (): Promise<AdminCoreBundle> => {
       const loadDistilleries = async (): Promise<DistilleryListItem[]> => {
         try {
           const snap = await getDocs(
@@ -341,6 +349,28 @@ export default function Admin() {
         }
       };
 
+      const [distilleries, eventProposals, communityLinks, communityEvents, pendingProductApprovals] = await Promise.all([
+        loadDistilleries(),
+        loadEventProposals(),
+        loadCommunityLinks(),
+        loadCommunityEvents(),
+        loadPending(),
+      ]);
+
+      return {
+        distilleries,
+        eventProposals,
+        communityLinks,
+        communityEvents,
+        pendingProductApprovals,
+      };
+    },
+    ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
+  });
+
+  const adminModerationQuery = useQuery({
+    queryKey: queryKeys.admin.moderationBundle(),
+    queryFn: async (): Promise<AdminModerationBundle> => {
       const loadFlaggedRatings = async (): Promise<RatingRow[]> => {
         try {
           const q = query(
@@ -381,55 +411,37 @@ export default function Admin() {
         }
       };
 
-      const loadLicenses = async (): Promise<LicenseItem[]> => {
-        try {
-          const snap = await getDocs(query(collection(db, "licenses"), limit(Math.min(20, ADMIN_LICENSES_LIMIT))));
-          return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        } catch (err) {
-          console.error("Error fetching licenses:", err);
-          return [];
-        }
-      };
-
-      const [
-        distilleries,
-        eventProposals,
-        communityLinks,
-        communityEvents,
-        flaggedRatings,
-        allRatings,
-        blockedUsers,
-        licenses,
-        pendingProductApprovals,
-      ] = await Promise.all([
-        loadDistilleries(),
-        loadEventProposals(),
-        loadCommunityLinks(),
-        loadCommunityEvents(),
+      const [flaggedRatings, allRatings, blockedUsers] = await Promise.all([
         loadFlaggedRatings(),
         loadRecentRatings(),
         loadBlockedUsers(),
-        loadLicenses(),
-        loadPending(),
       ]);
 
       return {
-        distilleries,
-        eventProposals,
-        communityLinks,
-        communityEvents,
         flaggedRatings,
         allRatings,
         blockedUsers,
-        licenses,
-        pendingProductApprovals,
       };
     },
     ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
   });
 
+  const adminLicensingQuery = useQuery({
+    queryKey: queryKeys.admin.licensingBundle(),
+    queryFn: async (): Promise<AdminLicensingBundle> => {
+      try {
+        const snap = await getDocs(query(collection(db, "licenses"), limit(Math.min(20, ADMIN_LICENSES_LIMIT))));
+        return { licenses: snap.docs.map((d) => ({ id: d.id, ...d.data() })) };
+      } catch (err) {
+        console.error("Error fetching licenses:", err);
+        return { licenses: [] };
+      }
+    },
+    ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
+  });
+
   useEffect(() => {
-    const d = adminInitialQuery.data;
+    const d = adminCoreQuery.data;
     if (!d) return;
     setDistilleries(d.distilleries);
     setSelectedDistilleryId((current) => {
@@ -440,12 +452,22 @@ export default function Admin() {
     setEventProposals(d.eventProposals);
     setCommunityLinks(d.communityLinks);
     setCommunityEvents(d.communityEvents);
+    setPendingProductApprovals(d.pendingProductApprovals);
+  }, [adminCoreQuery.data]);
+
+  useEffect(() => {
+    const d = adminModerationQuery.data;
+    if (!d) return;
     setFlaggedRatings(d.flaggedRatings);
     setAllRatings(d.allRatings);
     setBlockedUsers(d.blockedUsers);
+  }, [adminModerationQuery.data]);
+
+  useEffect(() => {
+    const d = adminLicensingQuery.data;
+    if (!d) return;
     setLicenses(d.licenses);
-    setPendingProductApprovals(d.pendingProductApprovals);
-  }, [adminInitialQuery.data]);
+  }, [adminLicensingQuery.data]);
 
   useEffect(() => {
     if (!isSuperAdminUser) {
@@ -1509,7 +1531,7 @@ export default function Admin() {
       setDistilleryData({ id: "", name: "", region: "Beograd i okolina", website: "", email: "", description: "", logoUrl: "", pib: "", address: "", city: "", mapsUrl: "", trialEndsAt: "" });
        clearGallerySlots();
        try {
-         await queryClient.refetchQueries({ queryKey: queryKeys.admin.initialBundle() });
+         await queryClient.refetchQueries({ queryKey: queryKeys.admin.coreBundle() });
        } catch (e) {
          console.warn("Refresh list failed", e);
        }
