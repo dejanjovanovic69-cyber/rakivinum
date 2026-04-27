@@ -50,6 +50,7 @@ export const queryKeys = {
     clubMembersCount: (distilleryId: string) => ["distillery-dashboard", "club-members-count", distilleryId] as const,
   },
   adminAudit: {
+    scope: () => ["admin-audit"] as const,
     bundle: () => ["admin-audit", "bundle"] as const,
   },
   admin: {

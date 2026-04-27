@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` UX osvežavanja:** dugme „Osveži podatke“ koristi `useIsFetching({ queryKey: queryKeys.admin.scope() })` — spinner + „Učitavanje…“ i `disabled` dok bilo koji admin query refetch-uje (uključujući prvi ulazak na stranicu).
+**Poslednji zapis:** 2026-04-27 — **`AdminAudit`:** `queryKeys.adminAudit.scope()`, dugme „Osveži podatke“ + `useIsFetching`, `setQueryData` posle blok/izvor mutacija. **`Admin`:** i dalje `useIsFetching` + `queryKeys.admin.scope()` za globalno osvežavanje.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

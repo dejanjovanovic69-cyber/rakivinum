@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useIsFetching } from "@tanstack/react-query";
 import {
   ShieldAlert,
   Users,
@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
+  Loader2,
   ExternalLink,
   Filter,
   ArrowLeft,
@@ -134,6 +135,11 @@ export default function AdminAudit() {
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
+  const auditQueriesFetching = useIsFetching({ queryKey: queryKeys.adminAudit.scope() });
+
+  const refreshAuditBundle = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.adminAudit.bundle() });
+  }, [queryClient]);
 
   const goBackSafe = () => {
     const navState = location.state as { returnTo?: string } | null;
@@ -162,17 +168,19 @@ export default function AdminAudit() {
 
   const [activeTab, setActiveTab] = useState<"matrix" | "logs" | "users" | "sources">("logs");
 
-  const invalidateAuditBundle = () => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.adminAudit.bundle() });
-  };
-
   const toggleBlockUser = async (userId: string, currentStatus: boolean) => {
     try {
       await updateDoc(doc(db, "users", userId), {
         isBlocked: !currentStatus,
         updatedAt: new Date().toISOString(),
       });
-      invalidateAuditBundle();
+      queryClient.setQueryData<AdminAuditBundle>(queryKeys.adminAudit.bundle(), (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          users: prev.users.map((u) => (u.id === userId ? { ...u, isBlocked: !currentStatus } : u)),
+        };
+      });
       alert(`Korisnik je ${!currentStatus ? "BLOKIRAN" : "ODBLOKIRAN"}`);
     } catch (err) {
       console.error(err);
@@ -207,7 +215,19 @@ export default function AdminAudit() {
         },
         { merge: true }
       );
-      invalidateAuditBundle();
+      queryClient.setQueryData<AdminAuditBundle>(queryKeys.adminAudit.bundle(), (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          abuseBlocks: {
+            ...prev.abuseBlocks,
+            [meta.docId]: {
+              ...(prev.abuseBlocks[meta.docId] || {}),
+              isBlocked: shouldBlock,
+            },
+          },
+        };
+      });
       alert(shouldBlock ? "Izvor je blokiran." : "Izvor je odobren i odblokiran.");
     } catch (err) {
       console.error(err);
@@ -292,6 +312,24 @@ export default function AdminAudit() {
             {tab.label}
           </button>
         ))}
+      </div>
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          disabled={auditQueriesFetching > 0}
+          onClick={() => void refreshAuditBundle()}
+          className="inline-flex items-center justify-center gap-2 min-w-[10.5rem] px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {auditQueriesFetching > 0 ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
+              Učitavanje…
+            </>
+          ) : (
+            "Osveži podatke"
+          )}
+        </button>
       </div>
 
       {/* Content Areas */}
