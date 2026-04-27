@@ -1784,16 +1784,31 @@ export default function Admin() {
   const handleDeleteDistillery = async (id: string) => {
     setIsSavingManual(true);
     try {
-      // 1. Delete associated products in bounded pages (avoids unbounded reads).
+      // 1. Delete associated products in bounded pages (orderBy + cursor — same pattern as archive toggle).
       const pageSize = 450;
-      let more = true;
-      while (more) {
+      let cursor: QueryDocumentSnapshot | null = null;
+      for (;;) {
         const snap = await getDocs(
-          query(collection(db, "products"), where("distilleryId", "==", id), limit(pageSize)),
+          cursor
+            ? query(
+                collection(db, "products"),
+                where("distilleryId", "==", id),
+                orderBy(documentId()),
+                startAfter(cursor),
+                limit(pageSize),
+              )
+            : query(
+                collection(db, "products"),
+                where("distilleryId", "==", id),
+                orderBy(documentId()),
+                limit(pageSize),
+              ),
         );
         if (snap.empty) break;
         await Promise.all(snap.docs.map((d) => deleteDoc(doc(db, "products", d.id))));
-        more = snap.docs.length >= pageSize;
+        const last = snap.docs[snap.docs.length - 1];
+        if (!last || snap.docs.length < pageSize) break;
+        cursor = last;
       }
 
       // 2. Delete Distillery

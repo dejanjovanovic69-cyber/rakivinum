@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-28 — **PWA / Workbox (`vite.config.ts`):** `navigateFallbackDenylist` i `NetworkFirst` navigacija prošireni na ceo pathname prefiks `/community` (uključujući buduće podrute), da SW ne servira zaleđeni SPA shell umesto svežeg HTML-a. Ranije istog dana: Playwright `tab=reviews`; Faza 4 checkpoint smoke. **Sledeće:** Firestore usage trend + `cf:smoke:edge` / `cf:monitor:edge`; bez novih Worker endpointa dok metrika ne traži.
+**Poslednji zapis:** 2026-04-28 — **Admin (`Admin.tsx`):** brisanje proizvoda pri brisanju destilerije sada koristi **`orderBy(documentId())` + `startAfter` kurzor** (isti obrazac kao arhiva destilerije), umesto `while` + `limit` bez kurzora koji može ponavljati isti „prvi“ set ili propustiti dokumente. **Operativa:** Firebase deploy trenutno **blokiran** — agent radi **samo lokalno** (`lint`, `build`, `test:e2e`, po želji `cf:smoke:edge` ka već podignutom Workeru); bez `firebase deploy` i bez `cf:deploy:*` dok korisnik ne odblokira. Ranije: PWA Workbox `/community` prefiks; Playwright `tab=reviews`. **Sledeće:** kad deploy ponovo prođe, proveriti Firestore indeks za `products` (`distilleryId` + `documentId()`) ako konzola zatraži; inače trend read-ova + edge smoke/monitor.
 
 **Ranije (2026-04-27):** Playwright `/community?tab=compare&cf=sljivovica`; search `pf`/`q`, compare `lq`/`rq`, AGENTS/QA-E2E smoke, visitor/token repeat, Worker KV.
 
