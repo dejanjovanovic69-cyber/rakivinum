@@ -10,6 +10,7 @@ import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { readCache, writeCache } from "../lib/resilience";
 import { stableQueryOptions } from "../lib/queryDefaults";
 import { queryKeys } from "../lib/queryKeys";
+import { invalidateVisitorClubCaches } from "../lib/invalidateClubCaches";
 import {
   fetchPublicClubMembershipCount,
   fetchPublicClubMembershipsByVisitorId,
@@ -312,9 +313,7 @@ export default function Distillery() {
         void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.membership(id, visitorId) });
         void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.memberCount(id) });
       }
-      void queryClient.invalidateQueries({ queryKey: queryKeys.myClubs.scope() });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.menu.joinedClubs(visitorId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.home.clubs(visitorId) });
+      invalidateVisitorClubCaches(queryClient, visitorId);
     } catch (e) {
       console.error("Error toggling membership", e);
       alert("Došlo je do greške. Molimo pokušajte ponovo.");

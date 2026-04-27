@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Distillery` javni profil:** podaci idu kroz `useQuery` (profil, proizvodi, članstvo, broj članova) umesto jednog velikog `useEffect` fetch-a. Posle join/leave kluba invalidira se keš članstva, broja članova, **Moji klubovi**, **Menu** joined clubs i **Home** clubs.
+**Poslednji zapis:** 2026-04-27 — **`invalidateVisitorClubCaches`:** zajednički helper (`src/lib/invalidateClubCaches.ts`) za `myClubs` + `menu.joinedClubs` + `home.clubs`; koriste **Distillery** i **Moji klubovi** posle promene članstva.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

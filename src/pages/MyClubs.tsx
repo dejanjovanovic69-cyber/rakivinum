@@ -13,6 +13,7 @@ import {
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { stableQueryOptions } from "../lib/queryDefaults";
 import { queryKeys } from "../lib/queryKeys";
+import { invalidateVisitorClubCaches } from "../lib/invalidateClubCaches";
 
 type ClubTarget = { label: string; current: number; target: number };
 type ClubAction = {
@@ -189,11 +190,7 @@ export default function MyClubs() {
 
       // Update State
       setClubs(prev => prev.filter(c => c.id !== distilleryId));
-      void queryClient.invalidateQueries({ queryKey: queryKeys.myClubs.scope() });
-      if (visitorId) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.menu.joinedClubs(visitorId) });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.home.clubs(visitorId) });
-      }
+      invalidateVisitorClubCaches(queryClient, visitorId);
       alert("Uspešno ste napustili klub.");
     } catch (e) {
       console.error("Error leaving club", e);
