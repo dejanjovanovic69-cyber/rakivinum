@@ -21,12 +21,22 @@ function Invoke-EdgeCheck {
     $status = [int]$response.StatusCode
     $body = [string]$response.Content
     $sizeBytes = [Text.Encoding]::UTF8.GetByteCount($body)
+    $cacheStatus = "-"
+    try {
+      $xh = $response.Headers["x-cache-status"]
+      if ($null -ne $xh -and "$xh".Trim().Length -gt 0) {
+        $cacheStatus = "$xh".Trim()
+      }
+    } catch {
+      $cacheStatus = "-"
+    }
     [pscustomobject]@{
       Name = $Name
       Ok = ($status -ge 200 -and $status -lt 300)
       Status = $status
       Ms = [int]$sw.ElapsedMilliseconds
       SizeKB = [math]::Round($sizeBytes / 1024, 2)
+      Cache = $cacheStatus
       Url = $Url
     }
   } catch {
@@ -37,6 +47,7 @@ function Invoke-EdgeCheck {
       Status = 0
       Ms = [int]$sw.ElapsedMilliseconds
       SizeKB = 0
+      Cache = "-"
       Url = $Url
     }
   }
@@ -71,7 +82,7 @@ $results = foreach ($t in $targets) {
   Invoke-EdgeCheck -Name $t.Name -Url $t.Url
 }
 
-$results | Format-Table Name, Ok, Status, Ms, SizeKB -AutoSize
+$results | Format-Table Name, Ok, Status, Ms, SizeKB, Cache -AutoSize
 
 $failed = $results | Where-Object { -not $_.Ok }
 if ($failed.Count -gt 0) {
