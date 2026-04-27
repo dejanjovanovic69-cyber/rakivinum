@@ -29,6 +29,12 @@ test.describe("public routes", () => {
     await expect(page.getByText("Osluškujemo tajne buradi")).toBeHidden({ timeout: 25_000 });
   });
 
+  test("community reviews tab deep link", async ({ page }) => {
+    await page.goto("/community?tab=reviews");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole("heading", { name: /Utisci zajednice/i })).toBeVisible({ timeout: 25_000 });
+  });
+
   test("distilleries catalog heading", async ({ page }) => {
     await page.goto("/distilleries");
     await expect(page.getByRole("heading", { name: /Destilerije/i })).toBeVisible({

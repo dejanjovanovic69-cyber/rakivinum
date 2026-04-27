@@ -1,6 +1,8 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **Playwright:** `/community?tab=compare&cf=sljivovica` (aktivni compare-filter iz URL-a). Ranije: search `pf`/`q`, compare `lq`/`rq`, AGENTS/QA-E2E smoke, visitor/token repeat, Worker KV.
+**Poslednji zapis:** 2026-04-28 — **Playwright:** `/community?tab=reviews` (eksplicitni deep link na Utiske). Potvrđeno: `react-hooks/exhaustive-deps` već **error** u `eslint.config.js`; compare persist u `useCommunityData` već na **500ms** debounce pre `sessionStorage`. Radna kopija: uklonjen lažni `M` na `dataService.ts` (sadržaj identičan HEAD-u, tipično CRLF/keš). **Sledeće:** Faza 4 — trend Firestore usage + povremeni `cf:smoke:edge` / `cf:monitor:edge` bez novih endpointa dok metrika ne pokaže usko grlo.
+
+**Ranije (2026-04-27):** Playwright `/community?tab=compare&cf=sljivovica`; search `pf`/`q`, compare `lq`/`rq`, AGENTS/QA-E2E smoke, visitor/token repeat, Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -274,6 +276,10 @@ Status: **deploy pauza** dok je nalog blokiran; radi se samo stabilizacija koda 
 - `distilleries`: 2459ms (povremeni spike, u skladu sa ranijim obrascem).
 - `product-lookup`: 1284ms (jednokratni viši skok, bez greške i bez promene payload-a).
 - Zaključak: i dalje nema funkcionalne regresije; fokus ostaje na trend praćenju, ne na hitnom tuningu.
+
+**Checkpoint #4 (2026-04-28):**
+- `npm run cf:smoke:edge` prošao (svi endpointi 200; `distilleries` prvi hit ~2432ms, repeat KV ~84ms).
+- Nema izmene Worker ruta u ovom paketu; regresioni signal nije očekivan.
 
 ---
 
