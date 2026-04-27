@@ -54,5 +54,7 @@ export const queryKeys = {
   },
   admin: {
     initialBundle: () => ["admin", "initial-bundle"] as const,
+    products: (selectedDistilleryId: string, isSuperAdminUser: boolean) =>
+      ["admin", "products", selectedDistilleryId, isSuperAdminUser ? "super" : "regular"] as const,
   },
 };

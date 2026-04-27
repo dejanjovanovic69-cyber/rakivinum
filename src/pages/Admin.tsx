@@ -263,6 +263,10 @@ export default function Admin() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.admin.initialBundle() });
   }, [queryClient]);
 
+  const invalidateAdminProducts = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["admin", "products"] });
+  }, [queryClient]);
+
   const adminInitialQuery = useQuery({
     queryKey: queryKeys.admin.initialBundle(),
     queryFn: async (): Promise<AdminInitialBundle> => {
@@ -921,7 +925,7 @@ export default function Admin() {
       await batch.commit();
 
       invalidateAdminInitialBundle();
-      void fetchAdminProducts();
+      invalidateAdminProducts();
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju ocene ili ažuriranju proseka proizvoda.");
@@ -945,18 +949,18 @@ export default function Admin() {
     el.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const fetchAdminProducts = useCallback(async () => {
-    try {
-      if (!selectedDistilleryId) {
-        setAdminProducts([]);
-        return;
-      }
-      // Super admin vidi sve ako želi, ili filtrira po izabranoj destileriji
-      if (selectedDistilleryId === "all" && isSuperAdminUser) {
-        const snap = await getDocs(query(collection(db, "products"), limit(Math.min(20, ADMIN_PRODUCTS_ALL_LIMIT))));
-        meterDbRead("admin:products_all", snap.size);
-        setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) })));
-      } else {
+  const adminProductsQuery = useQuery({
+    queryKey: queryKeys.admin.products(selectedDistilleryId, isSuperAdminUser),
+    enabled: Boolean(selectedDistilleryId),
+    queryFn: async (): Promise<ProductListItem[]> => {
+      try {
+        if (!selectedDistilleryId) return [];
+        // Super admin vidi sve ako želi, ili filtrira po izabranoj destileriji
+        if (selectedDistilleryId === "all" && isSuperAdminUser) {
+          const snap = await getDocs(query(collection(db, "products"), limit(Math.min(20, ADMIN_PRODUCTS_ALL_LIMIT))));
+          meterDbRead("admin:products_all", snap.size);
+          return snap.docs.map((d) => ({ id: d.id, ...(d.data() as ProductListItem) }));
+        }
         const q = query(
           collection(db, "products"),
           where("distilleryId", "==", selectedDistilleryId),
@@ -964,12 +968,14 @@ export default function Admin() {
         );
         const snap = await getDocs(q);
         meterDbRead("admin:products_by_distillery", snap.size);
-        setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) })));
+        return snap.docs.map((d) => ({ id: d.id, ...(d.data() as ProductListItem) }));
+      } catch (err) {
+        console.error("Greška pri učitavanju proizvoda", err);
+        return [];
       }
-    } catch (err) {
-      console.error("Greška pri učitavanju proizvoda", err);
-    }
-  }, [selectedDistilleryId, isSuperAdminUser]);
+    },
+    ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
+  });
 
   const handleBlockUser = async (userId: string) => {
     if (!userId || userId === 'anonymous') {
@@ -1021,7 +1027,7 @@ export default function Admin() {
         approvedAt: serverTimestamp(),
         approvedBy: auth.currentUser?.email || "admin",
       });
-      await fetchAdminProducts();
+      invalidateAdminProducts();
       invalidateAdminInitialBundle();
       alert("Proizvod odobren!");
     } catch (err) {
@@ -1280,8 +1286,8 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    void fetchAdminProducts();
-  }, [fetchAdminProducts]);
+    setAdminProducts(adminProductsQuery.data ?? []);
+  }, [adminProductsQuery.data]);
 
   const handleSaveCommunityLink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1419,7 +1425,7 @@ export default function Admin() {
         }
       }
       invalidateAdminInitialBundle();
-      void fetchAdminProducts();
+      invalidateAdminProducts();
     } catch (err) {
       console.error("Greška pri promeni statusa:", err);
       alert("Niste ovlašćeni za ovu akciju.");
@@ -1571,7 +1577,7 @@ export default function Admin() {
       
       setDistilleryToDelete(null);
       invalidateAdminInitialBundle();
-      void fetchAdminProducts();
+      invalidateAdminProducts();
       setManualResult("Destilerija i sve njene rakije su uspešno obrisane.");
     } catch (err: unknown) {
       console.error(err);
@@ -1633,7 +1639,7 @@ export default function Admin() {
 
       setManualResult(nextArchived ? "Destilerija je arhivirana." : "Destilerija je vraćena iz arhive.");
       invalidateAdminInitialBundle();
-      void fetchAdminProducts();
+      invalidateAdminProducts();
     } catch (err: unknown) {
       console.error(err);
       setManualResult("Greška pri arhiviranju: " + ((err as { message?: string } | null)?.message || "Nepoznata greška."));
@@ -1704,7 +1710,7 @@ export default function Admin() {
         setManualResult("Nova rakija uspešno dodata u bazu!");
       }
       setFormData({ name: "", type: "", description: "", alcoholPercentage: 40, bottleImageUrl: "", barcode: "" });
-      fetchAdminProducts();
+      invalidateAdminProducts();
     } catch (error: unknown) {
       setManualResult("Greška pri unosu: " + ((error as { message?: string } | null)?.message || "Nepoznata greška."));
     } finally {
@@ -1716,7 +1722,7 @@ export default function Admin() {
     try {
       await deleteDoc(doc(db, 'products', id));
       setProductToDelete(null);
-      fetchAdminProducts();
+      invalidateAdminProducts();
     } catch(err) {
       console.error(err);
       setManualResult("Greška pri brisanju: Nemate dozvolu.");
