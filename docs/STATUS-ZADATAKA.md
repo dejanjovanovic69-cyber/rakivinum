@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` bundle granularizacija:** početni admin read je podeljen na tri `useQuery` ključa — `queryKeys.admin.coreBundle()`, `queryKeys.admin.moderationBundle()`, `queryKeys.admin.licensingBundle()`; `invalidateAdminInitialBundle()` sada invalidira sva tri ključa, a `refetchQueries` posle čuvanja destilerije gađa `coreBundle`; lista proizvoda ostaje odvojena na `queryKeys.admin.products(...)`.
+**Poslednji zapis:** 2026-04-27 — **`Admin` ciljane invalidacije:** uvedene su specifične invalidacije (`invalidateAdminCoreBundle`, `invalidateAdminModerationBundle`, `invalidateAdminLicensingBundle`) i većina mutacija više ne osvežava ceo admin paket; moderation akcije osvežavaju samo moderation, licensing akcije samo licensing, community/distillery promene samo core (+ products gde treba). Time se smanjuju nepotrebni refetch-evi i read overhead.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

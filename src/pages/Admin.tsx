@@ -265,9 +265,15 @@ export default function Admin() {
 
   const queryClient = useQueryClient();
 
-  const invalidateAdminInitialBundle = useCallback(() => {
+  const invalidateAdminCoreBundle = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.admin.coreBundle() });
+  }, [queryClient]);
+
+  const invalidateAdminModerationBundle = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.admin.moderationBundle() });
+  }, [queryClient]);
+
+  const invalidateAdminLicensingBundle = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.admin.licensingBundle() });
   }, [queryClient]);
 
@@ -908,7 +914,7 @@ export default function Admin() {
         approvedBy: auth.currentUser?.email,
         approvedAt: new Date().toISOString()
       });
-      invalidateAdminInitialBundle();
+      invalidateAdminModerationBundle();
     } catch (err) {
       console.error(err);
     }
@@ -923,7 +929,7 @@ export default function Admin() {
 
       if (!productId) {
         await deleteDoc(ratingRef);
-        invalidateAdminInitialBundle();
+        invalidateAdminModerationBundle();
         return;
       }
 
@@ -946,7 +952,7 @@ export default function Admin() {
       });
       await batch.commit();
 
-      invalidateAdminInitialBundle();
+      invalidateAdminModerationBundle();
       invalidateAdminProducts();
     } catch (err) {
       console.error(err);
@@ -1019,7 +1025,7 @@ export default function Admin() {
       } catch (e) {
         console.warn("User doc update failed (might not exist)", e);
       }
-      invalidateAdminInitialBundle();
+      invalidateAdminModerationBundle();
       alert("Korisnik uspešno blokiran.");
     } catch (err) {
       console.error(err);
@@ -1036,7 +1042,7 @@ export default function Admin() {
       try {
         await updateDoc(doc(db, 'users', userId), { isBlocked: false });
       } catch (e) {}
-      invalidateAdminInitialBundle();
+      invalidateAdminModerationBundle();
     } catch (err) {
       console.error(err);
     }
@@ -1050,7 +1056,7 @@ export default function Admin() {
         approvedBy: auth.currentUser?.email || "admin",
       });
       invalidateAdminProducts();
-      invalidateAdminInitialBundle();
+      invalidateAdminCoreBundle();
       alert("Proizvod odobren!");
     } catch (err) {
       console.error(err);
@@ -1283,7 +1289,7 @@ export default function Admin() {
       // We will clear the count to 1 just in case
       setBatchCount(1);
       setBatchEmail("");
-      invalidateAdminInitialBundle();
+      invalidateAdminLicensingBundle();
     } catch (err: unknown) {
       console.error(err);
       alert("Greška pri generisanju licenci: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
@@ -1300,7 +1306,7 @@ export default function Admin() {
           maxDevices: Number(newLimit),
           comment: `Limit povećan na ${newLimit} (${new Date().toLocaleDateString()})`
         });
-        invalidateAdminInitialBundle();
+        invalidateAdminLicensingBundle();
       } catch (err) {
         console.error(err);
       }
@@ -1336,7 +1342,7 @@ export default function Admin() {
       }
       setLinkForm({ label: "", url: "" });
       setEditingLinkId(null);
-      invalidateAdminInitialBundle();
+      invalidateAdminCoreBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju linka.");
@@ -1351,7 +1357,7 @@ export default function Admin() {
         setEditingLinkId(null);
         setLinkForm({ label: "", url: "" });
       }
-      invalidateAdminInitialBundle();
+      invalidateAdminCoreBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju linka.");
@@ -1386,7 +1392,7 @@ export default function Admin() {
       }
       setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       setEditingEventId(null);
-      invalidateAdminInitialBundle();
+      invalidateAdminCoreBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju događaja.");
@@ -1401,7 +1407,7 @@ export default function Admin() {
         setEditingEventId(null);
         setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       }
-      invalidateAdminInitialBundle();
+      invalidateAdminCoreBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju događaja.");
@@ -1446,7 +1452,7 @@ export default function Admin() {
           cursor = last;
         }
       }
-      invalidateAdminInitialBundle();
+      invalidateAdminCoreBundle();
       invalidateAdminProducts();
     } catch (err) {
       console.error("Greška pri promeni statusa:", err);
@@ -1598,7 +1604,7 @@ export default function Admin() {
       await deleteDoc(doc(db, 'distilleries', id));
       
       setDistilleryToDelete(null);
-      invalidateAdminInitialBundle();
+      invalidateAdminCoreBundle();
       invalidateAdminProducts();
       setManualResult("Destilerija i sve njene rakije su uspešno obrisane.");
     } catch (err: unknown) {
@@ -1660,7 +1666,7 @@ export default function Admin() {
       }
 
       setManualResult(nextArchived ? "Destilerija je arhivirana." : "Destilerija je vraćena iz arhive.");
-      invalidateAdminInitialBundle();
+      invalidateAdminCoreBundle();
       invalidateAdminProducts();
     } catch (err: unknown) {
       console.error(err);
@@ -2230,7 +2236,7 @@ export default function Admin() {
               </p>
             </div>
             <button
-              onClick={() => invalidateAdminInitialBundle()}
+              onClick={() => invalidateAdminCoreBundle()}
               className="px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase"
             >
               Osveži
@@ -2914,7 +2920,7 @@ export default function Admin() {
                       onClick={async () => {
                         if (window.confirm("Obriši ovaj predlog?")) {
                           await deleteDoc(doc(db, 'eventProposals', ev.id));
-                          invalidateAdminInitialBundle();
+                          invalidateAdminCoreBundle();
                         }
                       }}
                       className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors shrink-0"
@@ -3349,7 +3355,7 @@ export default function Admin() {
                            try {
                              await deleteDoc(doc(db, 'licenses', lic.id));
                              setConfirmDeleteLicenseId(null);
-                             invalidateAdminInitialBundle();
+                             invalidateAdminLicensingBundle();
                           } catch (e: unknown) {
                             alert("Greška pri brisanju: " + ((e as { message?: string } | null)?.message || "Nepoznata greška"));
                            }
