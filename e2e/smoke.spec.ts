@@ -108,4 +108,9 @@ test.describe("public routes", () => {
     const qrOff = page.getByRole("heading", { name: /Javni pristup je isključen/i });
     await expect(notInDb.or(quota).or(archived).or(qrOff)).toBeVisible({ timeout: 35_000 });
   });
+
+  test("distillery page shows unavailable for bogus id", async ({ page }) => {
+    await page.goto("/distillery/e2e-missing-distillery-00000");
+    await expect(page.getByText(/Proizvođač nije dostupan/i)).toBeVisible({ timeout: 35_000 });
+  });
 });

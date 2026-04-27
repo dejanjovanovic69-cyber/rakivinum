@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **Playwright:** `/label` nepostojeći proizvod; **smoke-edge:** `community-links-repeat`. Ranije: `/activate`, `ratings-feed-repeat`, `/my-clubs`, `dataService` circuit breaker, Worker KV.
+**Poslednji zapis:** 2026-04-27 — **Playwright:** `/distillery` nepostojeći id; **smoke-edge:** `club-actions-repeat`. Ranije: `/label` smoke, `community-links-repeat`, `/activate`, Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
