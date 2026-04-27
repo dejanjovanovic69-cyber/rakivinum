@@ -44,6 +44,8 @@ export const queryKeys = {
     barcodeCatalog: (limit: number) => ["scanner", "barcode-catalog", limit] as const,
   },
   distilleries: {
+    /** Javni listing (/distilleries); invalidira sve `list(limit)` keševe. */
+    scope: () => ["distilleries"] as const,
     list: (limit: number) => ["distilleries", "list", limit] as const,
   },
   productAnalytics: {

@@ -287,7 +287,7 @@ export default function DistilleryDashboard() {
   const loading = !authReady || (!!authUser && dashboardCoreQuery.isPending);
 
   const queryClient = useQueryClient();
-  const invalidateDashboardReads = useCallback(() => {
+  const invalidateDashboardReads = useCallback((opts?: { productId?: string | null }) => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.distilleryDashboard.scope() });
     const did = distillery?.id;
     if (did) {
@@ -295,6 +295,11 @@ export default function DistilleryDashboard() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.products(did) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.memberCount(did) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.membershipPrefix(did) });
+    }
+    void queryClient.invalidateQueries({ queryKey: queryKeys.distilleries.scope() });
+    const pid = opts?.productId;
+    if (pid) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.label.page(pid) });
     }
   }, [queryClient, distillery?.id]);
 
@@ -1819,7 +1824,7 @@ export default function DistilleryDashboard() {
         onClose={() => setIsAddProductModalOpen(false)} 
         distilleryId={distillery?.id || ''}
         locked={postTrialFrozen}
-        onSuccess={invalidateDashboardReads}
+        onSuccess={(productId) => invalidateDashboardReads(productId ? { productId } : undefined)}
       />
 
       {/* Detailed Analytics Modal */}
@@ -1837,7 +1842,7 @@ export default function DistilleryDashboard() {
         product={editingProduct}
         minimalEdit={postTrialFrozen}
         onSave={() => {
-           invalidateDashboardReads();
+           invalidateDashboardReads({ productId: editingProduct?.id });
            alert("Izmene su sačuvane i poslate na ponovno odobrenje!");
         }}
       />
@@ -2262,7 +2267,7 @@ function AddProductModal({
   onClose: () => void;
   distilleryId: string;
   locked?: boolean;
-  onSuccess?: () => void;
+  onSuccess?: (productId: string) => void;
 }) {
   const normalizeBarcode = (value: unknown) => String(value || "").replace(/\D/g, "");
   const [formData, setFormData] = useState({
@@ -2314,9 +2319,9 @@ function AddProductModal({
         averageRating: 0
       };
 
-      await addDoc(collection(db, 'products'), docData);
+      const ref = await addDoc(collection(db, "products"), docData);
       alert("Piće je uspešno uneto i poslato administratoru na odobrenje!");
-      onSuccess?.();
+      onSuccess?.(ref.id);
       onClose();
     } catch (err: unknown) {
       console.error(err);
