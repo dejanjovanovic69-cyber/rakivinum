@@ -269,14 +269,6 @@ export default function Admin() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.admin.coreBundle() });
   }, [queryClient]);
 
-  const invalidateAdminModerationBundle = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.moderationBundle() });
-  }, [queryClient]);
-
-  const invalidateAdminLicensingBundle = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.licensingBundle() });
-  }, [queryClient]);
-
   const invalidateAdminProducts = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["admin", "products"] });
   }, [queryClient]);
@@ -1281,6 +1273,8 @@ export default function Admin() {
       const expiry = batchEndDate ? Timestamp.fromDate(new Date(batchEndDate)) : Timestamp.fromMillis(Date.now() + 365 * 24 * 60 * 60 * 1000);
       
       const count = batchCount || 1;
+      const newLicenseRows: LicenseItem[] = [];
+      const startTsForCache = batchStartDate ? Timestamp.fromDate(new Date(batchStartDate)) : Timestamp.now();
 
       for (let i = 0; i < count; i++) {
         const token = 'lic_' + Math.random().toString(36).substr(2, 9).toUpperCase() + Date.now().toString().slice(-4);
@@ -1298,6 +1292,19 @@ export default function Admin() {
         };
         await setDoc(doc(db, 'licenses', token), payload);
         generatedTokens.push(token);
+        newLicenseRows.push({
+          id: token,
+          token,
+          type: "limited",
+          maxDevices: 3,
+          activatedDevices: [],
+          isUsed: false,
+          clientName: batchDistillery,
+          createdAt: startTsForCache,
+          startDate: startTsForCache,
+          expiresAt: expiry,
+          comment: `Paket za ${batchDistillery} (${i + 1}/${count})`,
+        });
       }
       
       const { copied, openedMail } = await sendLicenseEmailDraft(batchDistillery, batchEmail, generatedTokens);
@@ -1319,7 +1326,10 @@ export default function Admin() {
       // We will clear the count to 1 just in case
       setBatchCount(1);
       setBatchEmail("");
-      invalidateAdminLicensingBundle();
+      queryClient.setQueryData<AdminLicensingBundle>(queryKeys.admin.licensingBundle(), (prev) => {
+        if (!prev) return prev;
+        return { licenses: [...newLicenseRows, ...prev.licenses] };
+      });
     } catch (err: unknown) {
       console.error(err);
       alert("Greška pri generisanju licenci: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
@@ -1332,11 +1342,21 @@ export default function Admin() {
     const newLimit = prompt("Unesite novi limit uređaja:", String(currentLimit + 2));
     if (newLimit && !isNaN(Number(newLimit))) {
       try {
+        const comment = `Limit povećan na ${newLimit} (${new Date().toLocaleDateString()})`;
         await updateDoc(doc(db, 'licenses', licId), {
           maxDevices: Number(newLimit),
-          comment: `Limit povećan na ${newLimit} (${new Date().toLocaleDateString()})`
+          comment,
         });
-        invalidateAdminLicensingBundle();
+        queryClient.setQueryData<AdminLicensingBundle>(queryKeys.admin.licensingBundle(), (prev) => {
+          if (!prev) return prev;
+          return {
+            licenses: prev.licenses.map((l) =>
+              l.id === licId || l.token === licId
+                ? { ...l, maxDevices: Number(newLimit), comment }
+                : l,
+            ),
+          };
+        });
       } catch (err) {
         console.error(err);
       }
@@ -1362,17 +1382,32 @@ export default function Admin() {
           url,
           updatedAt: serverTimestamp()
         });
+        queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            communityLinks: prev.communityLinks.map((l) =>
+              l.id === editingLinkId ? { ...l, label, url } : l,
+            ),
+          };
+        });
       } else {
-        await addDoc(collection(db, 'community_links'), {
+        const ref = await addDoc(collection(db, 'community_links'), {
           label,
           url,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
+        queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            communityLinks: [{ id: ref.id, label, url }, ...prev.communityLinks],
+          };
+        });
       }
       setLinkForm({ label: "", url: "" });
       setEditingLinkId(null);
-      invalidateAdminCoreBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju linka.");
@@ -1387,7 +1422,10 @@ export default function Admin() {
         setEditingLinkId(null);
         setLinkForm({ label: "", url: "" });
       }
-      invalidateAdminCoreBundle();
+      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+        if (!prev) return prev;
+        return { ...prev, communityLinks: prev.communityLinks.filter((l) => l.id !== id) };
+      });
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju linka.");
@@ -1414,15 +1452,48 @@ export default function Admin() {
       };
       if (editingEventId) {
         await updateDoc(doc(db, 'community_events', editingEventId), payload);
+        queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            communityEvents: prev.communityEvents.map((ev) =>
+              ev.id === editingEventId
+                ? {
+                    ...ev,
+                    title,
+                    eventDate,
+                    location: eventForm.location.trim(),
+                    description: eventForm.description.trim(),
+                    websiteUrl: eventForm.websiteUrl.trim(),
+                    mapsUrl: eventForm.mapsUrl.trim(),
+                    link: eventForm.websiteUrl.trim() || ev.link,
+                  }
+                : ev,
+            ),
+          };
+        });
       } else {
-        await addDoc(collection(db, 'community_events'), {
+        const ref = await addDoc(collection(db, 'community_events'), {
           ...payload,
           createdAt: serverTimestamp()
+        });
+        queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+          if (!prev) return prev;
+          const row: CommunityEventItem = {
+            id: ref.id,
+            title,
+            eventDate,
+            location: eventForm.location.trim(),
+            description: eventForm.description.trim(),
+            websiteUrl: eventForm.websiteUrl.trim(),
+            mapsUrl: eventForm.mapsUrl.trim(),
+            link: eventForm.websiteUrl.trim() || undefined,
+          };
+          return { ...prev, communityEvents: [row, ...prev.communityEvents] };
         });
       }
       setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       setEditingEventId(null);
-      invalidateAdminCoreBundle();
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju događaja.");
@@ -1437,7 +1508,10 @@ export default function Admin() {
         setEditingEventId(null);
         setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       }
-      invalidateAdminCoreBundle();
+      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+        if (!prev) return prev;
+        return { ...prev, communityEvents: prev.communityEvents.filter((ev) => ev.id !== id) };
+      });
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju događaja.");
@@ -1482,7 +1556,18 @@ export default function Admin() {
           cursor = last;
         }
       }
-      invalidateAdminCoreBundle();
+      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+        if (!prev) return prev;
+        let pending = prev.pendingProductApprovals;
+        if (nextVerified) {
+          pending = pending.filter((p) => p.distilleryId !== id);
+        }
+        return {
+          ...prev,
+          distilleries: prev.distilleries.map((d) => (d.id === id ? { ...d, isVerified: nextVerified } : d)),
+          pendingProductApprovals: pending,
+        };
+      });
       invalidateAdminProducts();
     } catch (err) {
       console.error("Greška pri promeni statusa:", err);
@@ -1634,7 +1719,14 @@ export default function Admin() {
       await deleteDoc(doc(db, 'distilleries', id));
       
       setDistilleryToDelete(null);
-      invalidateAdminCoreBundle();
+      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          distilleries: prev.distilleries.filter((d) => d.id !== id),
+          pendingProductApprovals: prev.pendingProductApprovals.filter((p) => p.distilleryId !== id),
+        };
+      });
       invalidateAdminProducts();
       setManualResult("Destilerija i sve njene rakije su uspešno obrisane.");
     } catch (err: unknown) {
@@ -1696,7 +1788,23 @@ export default function Admin() {
       }
 
       setManualResult(nextArchived ? "Destilerija je arhivirana." : "Destilerija je vraćena iz arhive.");
-      invalidateAdminCoreBundle();
+      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          distilleries: prev.distilleries.map((d) =>
+            d.id === dist.id
+              ? {
+                  ...d,
+                  isArchived: nextArchived,
+                  archivedAt: nextArchived ? Timestamp.now() : null,
+                  archivedBy: nextArchived ? (auth.currentUser?.email || "admin") : null,
+                  restoredAt: !nextArchived ? Timestamp.now() : null,
+                }
+              : d,
+          ),
+        };
+      });
       invalidateAdminProducts();
     } catch (err: unknown) {
       console.error(err);
@@ -1737,6 +1845,15 @@ export default function Admin() {
         await updateDoc(doc(db, 'products', editingProductId), updateData);
         setManualResult("Rakija uspešno izmenjena!");
         setEditingProductId(null);
+        queryClient.setQueryData<ProductListItem[]>(
+          queryKeys.admin.products(selectedDistilleryId, isSuperAdminUser),
+          (prev) => {
+            if (!prev) return prev;
+            return prev.map((p) =>
+              p.id === editingProductId ? ({ ...p, ...updateData, id: editingProductId } as ProductListItem) : p,
+            );
+          },
+        );
       } else {
         if (!selectedDistilleryId || selectedDistilleryId === 'all') {
           setManualResult("Greška: Morate izabrati konkretnu destileriju za dodavanje rakije.");
@@ -1764,11 +1881,33 @@ export default function Admin() {
           addData.barcodeNormalized = normalizeBarcode(rawBarcode);
         }
 
-        await addDoc(collection(db, 'products'), addData);
+        const ref = await addDoc(collection(db, 'products'), addData);
         setManualResult("Nova rakija uspešno dodata u bazu!");
+        const added: ProductListItem = {
+          id: ref.id,
+          distilleryId: selectedDistilleryId,
+          name: formData.name.trim(),
+          type: formData.type.trim(),
+          alcoholPercentage: Number(formData.alcoholPercentage),
+          bottleImageUrl: formData.bottleImageUrl.trim() || "https://picsum.photos/seed/rakija/800/1000",
+          isApproved: true,
+          publicLabelDisabled: false,
+          isArchivedByDistillery: false,
+          averageRating: 0,
+          scanCount: 0,
+        };
+        if (formData.description.trim()) added.description = formData.description.trim();
+        if (formData.barcode.trim()) {
+          const rb = formData.barcode.trim();
+          added.barcode = rb;
+          added.barcodeNormalized = normalizeBarcode(rb);
+        }
+        queryClient.setQueryData<ProductListItem[]>(
+          queryKeys.admin.products(selectedDistilleryId, isSuperAdminUser),
+          (prev) => (prev ? [added, ...prev] : [added]),
+        );
       }
       setFormData({ name: "", type: "", description: "", alcoholPercentage: 40, bottleImageUrl: "", barcode: "" });
-      invalidateAdminProducts();
     } catch (error: unknown) {
       setManualResult("Greška pri unosu: " + ((error as { message?: string } | null)?.message || "Nepoznata greška."));
     } finally {
@@ -1780,7 +1919,10 @@ export default function Admin() {
     try {
       await deleteDoc(doc(db, 'products', id));
       setProductToDelete(null);
-      invalidateAdminProducts();
+      queryClient.setQueryData<ProductListItem[]>(
+        queryKeys.admin.products(selectedDistilleryId, isSuperAdminUser),
+        (prev) => (prev ? prev.filter((p) => p.id !== id) : prev),
+      );
     } catch(err) {
       console.error(err);
       setManualResult("Greška pri brisanju: Nemate dozvolu.");
@@ -2950,7 +3092,13 @@ export default function Admin() {
                       onClick={async () => {
                         if (window.confirm("Obriši ovaj predlog?")) {
                           await deleteDoc(doc(db, 'eventProposals', ev.id));
-                          invalidateAdminCoreBundle();
+                          queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+                            if (!prev) return prev;
+                            return {
+                              ...prev,
+                              eventProposals: prev.eventProposals.filter((p) => p.id !== ev.id),
+                            };
+                          });
                         }
                       }}
                       className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors shrink-0"
@@ -3385,7 +3533,13 @@ export default function Admin() {
                            try {
                              await deleteDoc(doc(db, 'licenses', lic.id));
                              setConfirmDeleteLicenseId(null);
-                             invalidateAdminLicensingBundle();
+                             queryClient.setQueryData<AdminLicensingBundle>(queryKeys.admin.licensingBundle(), (prev) => {
+                               if (!prev) return prev;
+                               const lid = lic.id;
+                               return {
+                                 licenses: prev.licenses.filter((l) => l.id !== lid && l.token !== lid),
+                               };
+                             });
                           } catch (e: unknown) {
                             alert("Greška pri brisanju: " + ((e as { message?: string } | null)?.message || "Nepoznata greška"));
                            }

@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` keš nakon mutacija:** nakon uspešnih upisa (approve rating, brisanje ocene, block/unblock, odobrenje proizvoda) UI se ažurira preko `queryClient.setQueryData` na `coreBundle` / `moderationBundle` umesto odmah invalidacije celog bundle-a; `invalidateAdminProducts()` ostaje gde se menja proizvod (npr. batch brisanje ocene sa `productId`, odobrenje proizvoda).
+**Poslednji zapis:** 2026-04-27 — **`Admin` širi `setQueryData`:** community linkovi/događaji/predlozi, licence (batch + limit + brisanje), verifikacija destilerije, brisanje/arhiva destilerije, CRUD liste proizvoda za trenutni `products` query — sve to patch-uje keš umesto `invalidateAdminCoreBundle` / `invalidateAdminLicensingBundle`. Ostaje ručno „Osveži“ (`invalidateAdminCoreBundle`), `invalidateAdminProducts()` gde su agregati ili masovni upisi proizvoda, i `handleAddDistillery` koji i dalje radi `refetchQueries` na core (sledeći mali korak: patch core umesto refetch).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
