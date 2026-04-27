@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`MyClubs` / keš:** posle napuštanja kluba invalidira se `myClubs` scope, plus `menu.joinedClubs` i `home.clubs` za isti `visitorId` da Menu/Home ne ostanu zastareli. **`queryKeys.myClubs.scope()`**; **`AdminAudit`** ručno osvežavanje koristi `adminAudit.scope()` umesto samo `bundle()`.
+**Poslednji zapis:** 2026-04-27 — **`Distillery` javni profil:** podaci idu kroz `useQuery` (profil, proizvodi, članstvo, broj članova) umesto jednog velikog `useEffect` fetch-a. Posle join/leave kluba invalidira se keš članstva, broja članova, **Moji klubovi**, **Menu** joined clubs i **Home** clubs.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
