@@ -107,11 +107,15 @@ $targets = @(
 )
 
 if ($SampleVisitorId -and $SampleVisitorId.Trim()) {
-  $targets += @{ Name = "club-memberships"; Url = "$BaseUrl/api/public/club-memberships/$([uri]::EscapeDataString($SampleVisitorId))?limit=5&_cb=$cb" }
+  $clubMembershipsSmokeUrl = "$BaseUrl/api/public/club-memberships/$([uri]::EscapeDataString($SampleVisitorId))?limit=5&_cb=$cb"
+  $targets += @{ Name = "club-memberships"; Url = $clubMembershipsSmokeUrl }
+  $targets += @{ Name = "club-memberships-repeat"; Url = $clubMembershipsSmokeUrl }
 }
 
 if ($SampleLicenseToken -and $SampleLicenseToken.Trim()) {
-  $targets += @{ Name = "license"; Url = "$BaseUrl/api/public/license/$([uri]::EscapeDataString($SampleLicenseToken))?_cb=$cb" }
+  $licenseSmokeUrl = "$BaseUrl/api/public/license/$([uri]::EscapeDataString($SampleLicenseToken))?_cb=$cb"
+  $targets += @{ Name = "license"; Url = $licenseSmokeUrl }
+  $targets += @{ Name = "license-repeat"; Url = $licenseSmokeUrl }
 }
 
 $results = foreach ($t in $targets) {

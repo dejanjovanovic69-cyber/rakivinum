@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **smoke-edge:** još `community-events`, `distilleries-by-ids`, `distillery-detail` (bogus id), `product-detail` (sample id) + repeat. Ranije: ostale javne rute sa repeat, Playwright `/distillery`/`/label`, Worker KV.
+**Poslednji zapis:** 2026-04-27 — **smoke-edge:** opcioni `-SampleVisitorId` / `-SampleLicenseToken` sada i `*-repeat` (KV). Ranije: `community-events`, by-ids, distillery/product detail, ostale javne rute, Playwright, Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
