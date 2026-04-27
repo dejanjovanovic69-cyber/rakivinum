@@ -1,14 +1,17 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Bookmark, Trash2, ChevronRight, Info, Star } from "lucide-react";
 import { auth, db } from "../lib/firebase";
-import { collection, query, getDocs, doc, deleteDoc, where, orderBy, limit, documentId } from "firebase/firestore";
+import { collection, query, getDocs, doc, deleteDoc, where, orderBy, limit } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { getOrCreateVisitorId } from "../lib/visitorIdentity";
 import { readCache, writeCache } from "../lib/resilience";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
-import { fetchPublicProductById } from "../lib/dataService";
+import { useCachedFetch } from "../hooks/useCachedFetch";
+import { stableQueryOptions } from "../lib/queryDefaults";
+import { queryKeys } from "../lib/queryKeys";
 
 type PendingQueueItem = { id: string };
 type AuthUserLite = { uid: string } | null;
@@ -28,11 +31,31 @@ type CollectionProduct = {
   alcoholPercentage?: number;
 };
 type CollectionItem = SavedListItem & { product: CollectionProduct };
+type ProductsResponse = { items: CollectionProduct[] };
 
 export default function Collection() {
+  const queryClient = useQueryClient();
   const [items, setItems] = useState<CollectionItem[]>([]);
-  const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<AuthUserLite>(null);
+  const edgeBase = String(import.meta.env.VITE_EDGE_API_BASE || "").trim().replace(/\/$/, "");
+  const productsEndpoint = `${edgeBase}/api/public/products?limit=500`;
+  const { data: productsData, loading: productsLoading } = useCachedFetch<ProductsResponse>(
+    productsEndpoint,
+    {
+      parser: (raw) => {
+        const payload = (raw || {}) as { items?: CollectionProduct[] };
+        return { items: Array.isArray(payload.items) ? payload.items : [] };
+      },
+    },
+  );
+  const productsById = useMemo(() => {
+    const map = new Map<string, CollectionProduct>();
+    (productsData?.items || []).forEach((p) => {
+      const id = String(p?.id || "").trim();
+      if (id) map.set(id, p);
+    });
+    return map;
+  }, [productsData]);
   const navigate = useNavigate();
   const location = useLocation();
   const goBackSafe = () => {
@@ -83,36 +106,32 @@ export default function Collection() {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      if (!u) {
-        setLoading(false);
-      }
     });
     return unsub;
   }, []);
 
-  useEffect(() => {
-    const fetchCollection = async () => {
-      setLoading(true);
+  const collectionQuery = useQuery<CollectionItem[]>({
+    queryKey: queryKeys.collection.items(user?.uid ?? "guest", productsById.size),
+    enabled: !productsLoading,
+    queryFn: async () => {
       const identityKey = user?.uid || `guest:${getOrCreateVisitorId()}`;
       const cacheKey = `rakivinum_cache_collection_items_${identityKey}_v1`;
       const cachedItems = readCache<CollectionItem[]>(cacheKey);
       if (cachedItems) {
-        setItems(cachedItems);
-        setLoading(false);
-        return;
+        return cachedItems;
       }
-      
+
       let savedList: SavedListItem[] = [];
-      
+
       if (user) {
         const colRef = collection(db, "users", user.uid, "savedItems");
-        const snapshot = await getDocs(query(colRef, orderBy("createdAt", "desc"), limit(300)));
+        const snapshot = await getDocs(query(colRef, orderBy("createdAt", "desc"), limit(20)));
         meterDbRead("collection:user_saved_items", snapshot.size);
-        savedList = snapshot.docs.map(d => ({ id: d.id, productId: d.data().productId, createdAt: d.data().createdAt }));
+        savedList = snapshot.docs.map((d) => ({ id: d.id, productId: d.data().productId, createdAt: d.data().createdAt }));
       } else {
         const visitorId = getOrCreateVisitorId();
         const guestSnap = await getDocs(
-          query(collection(db, "guest_saved_items"), where("visitorId", "==", visitorId), limit(300)),
+          query(collection(db, "guest_saved_items"), where("visitorId", "==", visitorId), limit(20)),
         );
         meterDbRead("collection:guest_saved_items", guestSnap.size);
         const remoteGuestList = guestSnap.docs.map((d) => ({
@@ -121,7 +140,7 @@ export default function Collection() {
           isGuest: true,
           createdAt: d.data().createdAt,
         }));
-        const historyStr = localStorage.getItem('rakivinum_guest_collection') || '[]';
+        const historyStr = localStorage.getItem("rakivinum_guest_collection") || "[]";
         let localGuestList: SavedListItem[] = [];
         try {
           const guestIds = JSON.parse(historyStr);
@@ -144,52 +163,40 @@ export default function Collection() {
       }
 
       if (savedList.length === 0) {
-        setItems([]);
         writeCache(cacheKey, [], REFRESH_INTERVAL.USER_LIGHT_1H);
-        setLoading(false);
-        return;
-      }
-      
-      // Resolve public rows first; fallback Firestore fetch is batched for misses.
-      const withPublic = await Promise.all(
-        savedList.map(async (saved) => {
-          const pub = await fetchPublicProductById(saved.productId);
-          return { saved, pub };
-        }),
-      );
-      const fallbackIds = Array.from(
-        new Set(
-          withPublic
-            .filter((x) => !x.pub)
-            .map((x) => String(x.saved.productId || "").trim())
-            .filter(Boolean),
-        ),
-      );
-      const fallbackById = new Map<string, CollectionProduct>();
-      for (let i = 0; i < fallbackIds.length; i += 10) {
-        const chunk = fallbackIds.slice(i, i + 10);
-        const snap = await getDocs(query(collection(db, "products"), where(documentId(), "in", chunk)));
-        meterDbRead("collection:product_docs_batch", snap.size);
-        snap.forEach((d) => {
-          fallbackById.set(d.id, { id: d.id, ...d.data() } as CollectionProduct);
-        });
+        return [];
       }
 
-      const nextItems = withPublic
-        .map(({ saved, pub }) => {
-          if (pub) return { ...saved, product: { id: pub.id, ...pub } as CollectionProduct };
-          const fallback = fallbackById.get(saved.productId);
-          if (fallback) return { ...saved, product: fallback };
+      const nextItems = savedList
+        .map((saved) => {
+          const product = productsById.get(saved.productId);
+          if (product) return { ...saved, product };
           return null;
         })
         .filter((i): i is CollectionItem => i !== null);
-      setItems(nextItems);
       writeCache(cacheKey, nextItems, REFRESH_INTERVAL.USER_LIGHT_1H);
-      setLoading(false);
-    };
+      return nextItems;
+    },
+    initialData: [],
+    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
+  });
 
-    fetchCollection();
-  }, [user]);
+  useEffect(() => {
+    if (collectionQuery.data) setItems(collectionQuery.data);
+  }, [collectionQuery.data]);
+
+  const loading = productsLoading || collectionQuery.isFetching;
+
+  const patchCollectionCacheAfterRemove = (removedItemId: string) => {
+    const uidKey = user?.uid ?? "guest";
+    const qk = queryKeys.collection.items(uidKey, productsById.size);
+    queryClient.setQueryData<CollectionItem[]>(qk, (prev) => {
+      const next = (prev ?? []).filter((i) => i.id !== removedItemId);
+      const identityKey = user?.uid || `guest:${getOrCreateVisitorId()}`;
+      writeCache(`rakivinum_cache_collection_items_${identityKey}_v1`, next, REFRESH_INTERVAL.USER_LIGHT_1H);
+      return next;
+    });
+  };
 
   const removeItem = async (e: React.MouseEvent, item: CollectionItem) => {
     e.stopPropagation();
@@ -203,7 +210,7 @@ export default function Collection() {
         localStorage.setItem('rakivinum_guest_collection', JSON.stringify(collection));
         await deleteDoc(doc(db, "guest_saved_items", `${visitorId}_${item.productId}`));
         removePendingRatingEntry(item.productId);
-        setItems(prev => prev.filter(i => i.id !== item.id));
+        patchCollectionCacheAfterRemove(item.id);
       } catch (e) {}
       return;
     }
@@ -212,7 +219,7 @@ export default function Collection() {
     try {
       await deleteDoc(doc(db, 'users', user.uid, 'savedItems', item.id));
       removePendingRatingEntry(item.productId);
-      setItems(prev => prev.filter(i => i.id !== item.id));
+      patchCollectionCacheAfterRemove(item.id);
     } catch (err) {
       console.error("Error removing item:", err);
     }

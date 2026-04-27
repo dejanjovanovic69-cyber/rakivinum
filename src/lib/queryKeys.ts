@@ -19,6 +19,7 @@ export const queryKeys = {
     userStats: (userId: string | null) => ["home", "user-stats", userId ?? "guest"] as const,
   },
   collection: {
+    scope: () => ["collection"] as const,
     items: (identity: string, productsMapSize: number) =>
       ["collection", identity, productsMapSize] as const,
   },

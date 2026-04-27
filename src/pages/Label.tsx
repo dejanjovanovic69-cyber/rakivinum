@@ -1,7 +1,7 @@
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { ArrowLeft, Star, MapPin, Share2, BookmarkPlus, Hexagon, X, Loader2, CheckCircle, Dna, ShieldCheck, FileText, Download, Gift } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { app, auth, db } from "../lib/firebase";
 import { doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, getDocs, Timestamp, limit } from "firebase/firestore";
 import { analyzeReviewText } from "../lib/reviewTextPolicy";
@@ -164,6 +164,7 @@ function writeSavedStateCache(productId: string, uid: string | null, visitorId: 
 
 export default function Label() {
   const { id } = useParams();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
   const normalizeReturnPath = (raw: string | null | undefined): string | null => {
@@ -676,6 +677,7 @@ export default function Label() {
             createdAt: serverTimestamp(),
           }, { merge: true });
         }
+        void queryClient.invalidateQueries({ queryKey: queryKeys.collection.scope() });
         alert(saved ? "Uklonjeno iz lokalne arhive." : "Sačuvano u lokalnu arhivu na ovom uređaju!");
       } catch (e) {
         console.error("Error updating guest collection", e);
@@ -696,6 +698,8 @@ export default function Label() {
         });
         writeSavedStateCache(productData.id, auth.currentUser.uid, null, true);
       }
+      setSaved(!saved);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.collection.scope() });
     } catch (error) {
        console.error("Error saving/removing bottle", error);
     } finally {
@@ -731,6 +735,7 @@ export default function Label() {
         }
         setSaved(true);
         writeSavedStateCache(productData.id, null, visitorId, true);
+        void queryClient.invalidateQueries({ queryKey: queryKeys.collection.scope() });
       } catch (e) {
         console.error("Error ensuring guest collection", e);
       }
@@ -745,6 +750,7 @@ export default function Label() {
       }, { merge: true });
       setSaved(true);
       writeSavedStateCache(productData.id, auth.currentUser.uid, null, true);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.collection.scope() });
     } catch (error) {
       console.error("Error ensuring saved item", error);
     }
