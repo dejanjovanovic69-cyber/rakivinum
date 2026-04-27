@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-28 — **`Community.tsx` (P1 memo):** `visibleEvents`, compare izvedene liste (`compareLeft`/`Right`, `findCompareMatches`, `buildCompareCandidateList`), `hasSearchQuery` u `useMemo`; `resetCompareSelection` u `useCallback` (radi `exhaustive-deps`). Manje ponovnog računanja pri renderu van compare/events taba. **Ranije istog dana:** Admin kurzor pri brisanju destilerije; PWA `/community`; Playwright `tab=reviews`. **Operativa:** Firebase deploy **blokiran** — rad **lokalno** bez `firebase deploy` / `cf:deploy:*`. **Sledeće:** trend read-ova + edge smoke; eventualno još `useCallback` na handlerima ako merenje pokaže vrednost.
+**Poslednji zapis:** 2026-04-28 — **`Community.tsx` (nastavak P1):** `useCallback` za `handleReport`, `openLabelWithReturn`, `navigateToReviews`, `handleTabSelect`, `openDistillery`, `resetSearchFilters`, `tabCls`; `useMemo` za `searchReturnTo`; modul konstante `COMMUNITY_RETURN_REVIEWS` / `COMMUNITY_RETURN_TOPS`; uklonjen nekorišćen import. **Ranije istog dana:** compare/events `useMemo` + `resetCompareSelection`; Admin kurzor; PWA `/community`. **Operativa:** bez deploy-a. **Sledeće:** trend read-ova + `cf:smoke:edge`; po meri TanStack/React.memo na child tabovima ako treba.
 
 **Ranije (2026-04-27):** Playwright `/community?tab=compare&cf=sljivovica`; search `pf`/`q`, compare `lq`/`rq`, AGENTS/QA-E2E smoke, visitor/token repeat, Worker KV.
 

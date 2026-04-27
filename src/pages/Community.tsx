@@ -3,7 +3,6 @@ import React, { useCallback, useMemo } from "react";
 import { db } from "../lib/firebase";
 import { doc, updateDoc } from "firebase/firestore";
 import { cn } from "../lib/utils";
-import { isQuotaError } from "../lib/resilience";
 import ReviewsTab from "../components/community/ReviewsTab";
 import EventsTab from "../components/community/EventsTab";
 import CompareTab from "../components/community/CompareTab";
@@ -15,7 +14,7 @@ import {
   COMMUNITY_COMPARE_FILTER_OPTIONS,
   COMMUNITY_FILTER_OPTIONS,
 } from "../components/community/constants";
-import type { DistilleryItem, ProductItem, RatingItem } from "../components/community/types";
+import type { CommunitySection, ProductItem } from "../components/community/types";
 import { useCommunityData } from "../hooks/useCommunityData";
 import {
   buildCompareCandidateList,
@@ -28,6 +27,9 @@ import {
   normalizeText,
   safeStr,
 } from "../components/community/utils";
+
+const COMMUNITY_RETURN_REVIEWS = "/community?tab=reviews";
+const COMMUNITY_RETURN_TOPS = "/community?tab=tops";
 
 export default function Community() {
   const navigate = useNavigate();
@@ -157,7 +159,7 @@ export default function Community() {
     [activeProductIds, ratings],
   );
 
-  const handleReport = async (e: React.MouseEvent, ratingId: string) => {
+  const handleReport = useCallback(async (e: React.MouseEvent, ratingId: string) => {
     e.stopPropagation();
     if (!window.confirm("Da li želite da prijavite ovaj komentar kao neprimeren?")) return;
     try {
@@ -166,14 +168,17 @@ export default function Community() {
     } catch (err) {
       console.error("Greška pri prijavi:", err);
     }
-  };
+  }, []);
 
   /* ── shared helpers ── */
-  const tabCls = (active: boolean) =>
-    cn(
-      "flex-1 py-2.5 text-[11px] font-black uppercase tracking-wide rounded-xl transition-all duration-200 active:scale-[0.98]",
-      active ? "bg-gold-500 text-black shadow-[0_4px_12px_rgba(212,175,55,0.22)]" : "text-text-secondary hover:text-white",
-    );
+  const tabCls = useCallback(
+    (active: boolean) =>
+      cn(
+        "flex-1 py-2.5 text-[11px] font-black uppercase tracking-wide rounded-xl transition-all duration-200 active:scale-[0.98]",
+        active ? "bg-gold-500 text-black shadow-[0_4px_12px_rgba(212,175,55,0.22)]" : "text-text-secondary hover:text-white",
+      ),
+    [],
+  );
 
   const topRakija = useMemo(
     () =>
@@ -244,22 +249,53 @@ export default function Community() {
     setCompareLeftQuery("");
     setCompareRightQuery("");
   }, [setCompareLeftId, setCompareRightId, setCompareLeftQuery, setCompareRightQuery]);
-  const searchReturnTo = `/community?tab=search&q=${encodeURIComponent(searchQuery)}&pf=${encodeURIComponent(activeProductFilter)}`;
-  const reviewsReturnTo = `/community?tab=reviews`;
-  const topsReturnTo = `/community?tab=tops`;
-  const labelHref = (productId: string, returnTo: string) =>
-    `/label/${productId}?rt=${encodeURIComponent(returnTo)}`;
-  const openLabelWithReturn = (productId: string, returnTo: string) => {
-    try {
-      sessionStorage.setItem("rakivinum_last_label_return_v1", returnTo);
-      sessionStorage.setItem("rakivinum_last_community_return_v1", returnTo);
-      const tab = returnTo.includes("tab=") ? returnTo.split("tab=")[1]?.split("&")[0] : activeSection;
-      if (tab) sessionStorage.setItem("rakivinum_last_community_tab_v1", tab);
-    } catch {
-      // best effort
-    }
-    navigate(labelHref(productId, returnTo), { state: { returnTo } });
-  };
+
+  const searchReturnTo = useMemo(
+    () =>
+      `/community?tab=search&q=${encodeURIComponent(searchQuery)}&pf=${encodeURIComponent(activeProductFilter)}`,
+    [searchQuery, activeProductFilter],
+  );
+
+  const openLabelWithReturn = useCallback(
+    (productId: string, returnTo: string) => {
+      const href = `/label/${productId}?rt=${encodeURIComponent(returnTo)}`;
+      try {
+        sessionStorage.setItem("rakivinum_last_label_return_v1", returnTo);
+        sessionStorage.setItem("rakivinum_last_community_return_v1", returnTo);
+        const tab = returnTo.includes("tab=") ? returnTo.split("tab=")[1]?.split("&")[0] : activeSection;
+        if (tab) sessionStorage.setItem("rakivinum_last_community_tab_v1", tab);
+      } catch {
+        // best effort
+      }
+      navigate(href, { state: { returnTo } });
+    },
+    [navigate, activeSection],
+  );
+
+  const navigateToReviews = useCallback(() => {
+    navigate("/community?tab=reviews", { replace: true });
+  }, [navigate]);
+
+  const handleTabSelect = useCallback(
+    (section: CommunitySection) => {
+      navigate(`/community?tab=${section}`, { replace: true });
+    },
+    [navigate],
+  );
+
+  const openDistillery = useCallback(
+    (distilleryId: string) => {
+      navigate(`/distillery/${distilleryId}`);
+    },
+    [navigate],
+  );
+
+  const resetSearchFilters = useCallback(() => {
+    setActiveProductFilter("all");
+    setSearchQuery("");
+    setSelectedRegion("");
+    setProducerView("regions");
+  }, [setActiveProductFilter, setSearchQuery, setSelectedRegion, setProducerView]);
 
   return (
       <div className="p-4 space-y-5 animate-in fade-in duration-300 pb-24">
@@ -282,17 +318,12 @@ export default function Community() {
           filteredProducts={filteredProducts}
           filteredDistilleries={filteredDistilleries}
           hasSearchQuery={hasSearchQuery}
-          navigateToReviews={() => navigate("/community?tab=reviews", { replace: true })}
+          navigateToReviews={navigateToReviews}
           openLabelWithReturn={openLabelWithReturn}
           searchReturnTo={searchReturnTo}
-          openDistillery={(distilleryId) => navigate(`/distillery/${distilleryId}`)}
+          openDistillery={openDistillery}
           distLocation={distLocation}
-          onResetFilters={() => {
-            setActiveProductFilter("all");
-            setSearchQuery("");
-            setSelectedRegion("");
-            setProducerView("regions");
-          }}
+          onResetFilters={resetSearchFilters}
         />
 
       ) : (
@@ -300,19 +331,14 @@ export default function Community() {
         <div className="space-y-5">
 
           {/* ── Single flat tab bar ── */}
-          <CommunityTabBar
-            activeSection={activeSection}
-            onTabSelect={(section) => {
-              navigate(`/community?tab=${section}`, { replace: true });
-            }}
-          />
+          <CommunityTabBar activeSection={activeSection} onTabSelect={handleTabSelect} />
 
           {/* ─── UTISCI TAB ─── */}
           {activeSection === "reviews" && (
             <ReviewsTab
               loading={loading}
               visibleRatings={visibleRatings}
-              reviewsReturnTo={reviewsReturnTo}
+              reviewsReturnTo={COMMUNITY_RETURN_REVIEWS}
               openLabelWithReturn={openLabelWithReturn}
               handleReport={handleReport}
               safeStr={safeStr}
@@ -322,7 +348,12 @@ export default function Community() {
 
           {/* ─── TOP LISTE TAB ─── */}
           {activeSection === "tops" && (
-            <TopsTab topRakija={topRakija} topVina={topVina} topsReturnTo={topsReturnTo} openLabelWithReturn={openLabelWithReturn} />
+            <TopsTab
+              topRakija={topRakija}
+              topVina={topVina}
+              topsReturnTo={COMMUNITY_RETURN_TOPS}
+              openLabelWithReturn={openLabelWithReturn}
+            />
           )}
 
           {/* ─── UPOREDI TAB ─── */}
@@ -362,7 +393,7 @@ export default function Community() {
               filteredMapDistilleries={filteredMapDistilleries}
               isCatalogLoaded={isCatalogLoaded}
               tabCls={tabCls}
-              onOpenDistillery={(distilleryId) => navigate(`/distillery/${distilleryId}`)}
+              onOpenDistillery={openDistillery}
             />
           )}
 
