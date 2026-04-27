@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` + `queryKeys`:** `queryKeys.admin.scope()` i `productsPrefix()` za invalidaciju / `setQueriesData`; ispod tabova jedno dugme „Osveži podatke“ za sve admin upite. I dalje važi `patchAllAdminProductCaches` posle mutacija.
+**Poslednji zapis:** 2026-04-27 — **`Admin` UX osvežavanja:** dugme „Osveži podatke“ koristi `useIsFetching({ queryKey: queryKeys.admin.scope() })` — spinner + „Učitavanje…“ i `disabled` dok bilo koji admin query refetch-uje (uključujući prvi ulazak na stranicu).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

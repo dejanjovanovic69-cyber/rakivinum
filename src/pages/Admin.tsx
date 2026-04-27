@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useIsFetching } from "@tanstack/react-query";
 import { ArrowLeft, Save, Loader2, CheckCircle, Database, Upload, ImageIcon, Trash2, Edit2, Search, ChevronDown, BookOpen, MapPin, Eye, Flag, ShieldAlert, AlertTriangle, Star, Mail, FileText, BarChart2, Building2, ClipboardCopy } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "../lib/firebase";
@@ -264,6 +264,7 @@ export default function Admin() {
   const [licenseLogSearch, setLicenseLogSearch] = useState("");
 
   const queryClient = useQueryClient();
+  const adminQueriesFetching = useIsFetching({ queryKey: queryKeys.admin.scope() });
 
   /** Refetch sve TanStack admin upite (core, moderation, licensing, products). */
   const refreshAllAdminQueries = useCallback(() => {
@@ -2090,10 +2091,18 @@ export default function Admin() {
       <div className="relative z-10 mb-4 flex justify-end">
         <button
           type="button"
+          disabled={adminQueriesFetching > 0}
           onClick={() => void refreshAllAdminQueries()}
-          className="px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase"
+          className="inline-flex items-center justify-center gap-2 min-w-[10.5rem] px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          Osveži podatke
+          {adminQueriesFetching > 0 ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
+              Učitavanje…
+            </>
+          ) : (
+            "Osveži podatke"
+          )}
         </button>
       </div>
 
