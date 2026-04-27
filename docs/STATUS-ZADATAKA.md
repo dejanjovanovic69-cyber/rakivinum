@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **Playwright smoke:** `/my-clubs`; **smoke-edge:** drugi GET na `products` (keš). Ranije: `/collection`, `/menu`, `/scan`, `/radionica`, Community tabovi; `dataService` edge circuit breaker; Worker KV.
+**Poslednji zapis:** 2026-04-27 — **Playwright:** `/activate` (forma); **smoke-edge:** drugi GET na `ratings-feed`. Ranije: `/my-clubs`, `products-repeat`, Community tabovi, `dataService` circuit breaker, Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

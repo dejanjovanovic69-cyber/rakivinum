@@ -94,4 +94,9 @@ test.describe("public routes", () => {
     await page.goto("/my-clubs");
     await expect(page.getByRole("heading", { name: /Moji klubovi/i })).toBeVisible({ timeout: 25_000 });
   });
+
+  test("activate page without token shows licence form", async ({ page }) => {
+    await page.goto("/activate");
+    await expect(page.getByRole("heading", { name: /Aktivacija licence/i })).toBeVisible({ timeout: 25_000 });
+  });
 });

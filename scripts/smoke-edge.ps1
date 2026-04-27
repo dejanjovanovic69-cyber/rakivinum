@@ -56,13 +56,15 @@ function Invoke-EdgeCheck {
 $cb = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $distilleriesSmokeUrl = "$BaseUrl/api/public/distilleries?limit=5&_cb=$cb"
 $productsSmokeUrl = "$BaseUrl/api/public/products?limit=5&_cb=$cb"
+$ratingsFeedSmokeUrl = "$BaseUrl/api/public/ratings-feed?limit=5&_cb=$cb"
 $targets = @(
   @{ Name = "health"; Url = "$BaseUrl/health?_cb=$cb" },
   @{ Name = "distilleries"; Url = $distilleriesSmokeUrl },
   @{ Name = "distilleries-repeat"; Url = $distilleriesSmokeUrl },
   @{ Name = "products"; Url = $productsSmokeUrl },
   @{ Name = "products-repeat"; Url = $productsSmokeUrl },
-  @{ Name = "ratings-feed"; Url = "$BaseUrl/api/public/ratings-feed?limit=5&_cb=$cb" },
+  @{ Name = "ratings-feed"; Url = $ratingsFeedSmokeUrl },
+  @{ Name = "ratings-feed-repeat"; Url = $ratingsFeedSmokeUrl },
   @{ Name = "ratings-summary"; Url = "$BaseUrl/api/public/ratings-summary/$SampleProductId?_cb=$cb" },
   @{ Name = "product-ratings"; Url = "$BaseUrl/api/public/product-ratings/$SampleProductId?limit=5&_cb=$cb" },
   @{ Name = "club-actions"; Url = "$BaseUrl/api/public/club-actions?limit=5&_cb=$cb" },
