@@ -41,4 +41,30 @@ test.describe("public routes", () => {
     await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
     await expect(page.getByRole("heading", { name: /Uporedi 2 artikla/i })).toBeVisible({ timeout: 25_000 });
   });
+
+  test("community events tab deep link", async ({ page }) => {
+    await page.goto("/community?tab=events");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole("heading", { name: /Manifestacije i događaji/i })).toBeVisible({
+      timeout: 25_000,
+    });
+  });
+
+  test("community producers tab deep link", async ({ page }) => {
+    await page.goto("/community?tab=producers");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole("heading", { name: /Rakijski i vinski putevi/i })).toBeVisible({ timeout: 25_000 });
+  });
+
+  test("community tops tab deep link", async ({ page }) => {
+    await page.goto("/community?tab=tops");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByText(/Top 10 Rakija/i)).toBeVisible({ timeout: 25_000 });
+  });
+
+  test("community search tab deep link", async ({ page }) => {
+    await page.goto("/community?tab=search");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByPlaceholder(/Pretraži proizvode/i)).toBeVisible({ timeout: 25_000 });
+  });
 });
