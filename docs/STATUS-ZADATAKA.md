@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **Playwright:** `/distillery` nepostojeći id; **smoke-edge:** `club-actions-repeat`. Ranije: `/label` smoke, `community-links-repeat`, `/activate`, Worker KV.
+**Poslednji zapis:** 2026-04-27 — **smoke-edge:** dupli GET i za `ratings-summary`, `product-ratings`, `products-by-distillery`, `club-actions-by-distillery`, `club-membership-count`, `product-lookup`, `scan-clusters` (KV/edge repeat). Ranije: Playwright `/distillery`, `club-actions-repeat`, `/label`, `community-links-repeat`, `/activate`, Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

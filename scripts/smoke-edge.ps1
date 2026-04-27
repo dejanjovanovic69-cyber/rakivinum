@@ -59,6 +59,13 @@ $productsSmokeUrl = "$BaseUrl/api/public/products?limit=5&_cb=$cb"
 $ratingsFeedSmokeUrl = "$BaseUrl/api/public/ratings-feed?limit=5&_cb=$cb"
 $communityLinksSmokeUrl = "$BaseUrl/api/public/community-links?limit=10&_cb=$cb"
 $clubActionsSmokeUrl = "$BaseUrl/api/public/club-actions?limit=5&_cb=$cb"
+$ratingsSummarySmokeUrl = "$BaseUrl/api/public/ratings-summary/$SampleProductId?_cb=$cb"
+$productRatingsSmokeUrl = "$BaseUrl/api/public/product-ratings/$SampleProductId?limit=5&_cb=$cb"
+$productsByDistillerySmokeUrl = "$BaseUrl/api/public/products-by-distillery/smoke-test?limit=5&_cb=$cb"
+$clubActionsByDistillerySmokeUrl = "$BaseUrl/api/public/club-actions-by-distillery/smoke-test?limit=5&_cb=$cb"
+$clubMembershipCountSmokeUrl = "$BaseUrl/api/public/club-membership-count/smoke-test?_cb=$cb"
+$productLookupSmokeUrl = "$BaseUrl/api/public/product-lookup?n=0&r=0&_cb=$cb"
+$scanClustersSmokeUrl = "$BaseUrl/api/public/scan-clusters/$SampleProductId?limit=5&_cb=$cb"
 $targets = @(
   @{ Name = "health"; Url = "$BaseUrl/health?_cb=$cb" },
   @{ Name = "distilleries"; Url = $distilleriesSmokeUrl },
@@ -67,17 +74,24 @@ $targets = @(
   @{ Name = "products-repeat"; Url = $productsSmokeUrl },
   @{ Name = "ratings-feed"; Url = $ratingsFeedSmokeUrl },
   @{ Name = "ratings-feed-repeat"; Url = $ratingsFeedSmokeUrl },
-  @{ Name = "ratings-summary"; Url = "$BaseUrl/api/public/ratings-summary/$SampleProductId?_cb=$cb" },
-  @{ Name = "product-ratings"; Url = "$BaseUrl/api/public/product-ratings/$SampleProductId?limit=5&_cb=$cb" },
+  @{ Name = "ratings-summary"; Url = $ratingsSummarySmokeUrl },
+  @{ Name = "ratings-summary-repeat"; Url = $ratingsSummarySmokeUrl },
+  @{ Name = "product-ratings"; Url = $productRatingsSmokeUrl },
+  @{ Name = "product-ratings-repeat"; Url = $productRatingsSmokeUrl },
   @{ Name = "club-actions"; Url = $clubActionsSmokeUrl },
   @{ Name = "club-actions-repeat"; Url = $clubActionsSmokeUrl },
   @{ Name = "community-links"; Url = $communityLinksSmokeUrl },
   @{ Name = "community-links-repeat"; Url = $communityLinksSmokeUrl },
-  @{ Name = "products-by-distillery"; Url = "$BaseUrl/api/public/products-by-distillery/smoke-test?limit=5&_cb=$cb" },
-  @{ Name = "club-actions-by-distillery"; Url = "$BaseUrl/api/public/club-actions-by-distillery/smoke-test?limit=5&_cb=$cb" },
-  @{ Name = "club-membership-count"; Url = "$BaseUrl/api/public/club-membership-count/smoke-test?_cb=$cb" },
-  @{ Name = "product-lookup"; Url = "$BaseUrl/api/public/product-lookup?n=0&r=0&_cb=$cb" },
-  @{ Name = "scan-clusters"; Url = "$BaseUrl/api/public/scan-clusters/$SampleProductId?limit=5&_cb=$cb" }
+  @{ Name = "products-by-distillery"; Url = $productsByDistillerySmokeUrl },
+  @{ Name = "products-by-distillery-repeat"; Url = $productsByDistillerySmokeUrl },
+  @{ Name = "club-actions-by-distillery"; Url = $clubActionsByDistillerySmokeUrl },
+  @{ Name = "club-actions-by-distillery-repeat"; Url = $clubActionsByDistillerySmokeUrl },
+  @{ Name = "club-membership-count"; Url = $clubMembershipCountSmokeUrl },
+  @{ Name = "club-membership-count-repeat"; Url = $clubMembershipCountSmokeUrl },
+  @{ Name = "product-lookup"; Url = $productLookupSmokeUrl },
+  @{ Name = "product-lookup-repeat"; Url = $productLookupSmokeUrl },
+  @{ Name = "scan-clusters"; Url = $scanClustersSmokeUrl },
+  @{ Name = "scan-clusters-repeat"; Url = $scanClustersSmokeUrl }
 )
 
 if ($SampleVisitorId -and $SampleVisitorId.Trim()) {
