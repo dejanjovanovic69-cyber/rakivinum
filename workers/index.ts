@@ -1,8 +1,12 @@
 ﻿type Env = {
   FIREBASE_PROJECT_ID?: string;
+  VITE_FIREBASE_PROJECT_ID?: string;
   FIRESTORE_DATABASE_ID?: string;
   GCP_CLIENT_EMAIL?: string;
   GCP_PRIVATE_KEY?: string;
+  FIREBASE_CLIENT_EMAIL?: string;
+  FIREBASE_PRIVATE_KEY?: string;
+  FIRESTORE_CACHE?: KVNamespace;
 };
 
 type FirestoreValue =
@@ -36,6 +40,7 @@ const EDGE_CACHE_TTL_CATALOG_SEC = 86_400;
 
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
 let rateLimitState = new Map<string, { count: number; resetAt: number }>();
+let submitRateState = new Map<string, { count: number; resetAt: number }>();
 
 function getClientIp(request: Request): string {
   const fromCf = String(request.headers.get("cf-connecting-ip") || "").trim();
@@ -71,6 +76,7 @@ function withDefaultHeaders(response: Response): Response {
   const headers = new Headers(response.headers);
   if (!headers.has("content-type")) headers.set("content-type", "application/json; charset=utf-8");
   if (!headers.has("cache-control")) headers.set("cache-control", "public, max-age=300, s-maxage=7200");
+  if (!headers.has("x-cache-status")) headers.set("x-cache-status", "bypass");
   return new Response(response.body, { status: response.status, headers });
 }
 
@@ -78,23 +84,48 @@ type PublicCacheProfile = "catalog" | "interactive";
 
 async function servePublicCached(
   request: Request,
+  env: Env,
   handler: () => Promise<Response>,
   profile: PublicCacheProfile = "interactive",
 ): Promise<Response> {
   const edgeSec = profile === "catalog" ? EDGE_CACHE_TTL_CATALOG_SEC : EDGE_CACHE_TTL_INTERACTIVE_SEC;
   const sMax = profile === "catalog" ? EDGE_CACHE_TTL_CATALOG_SEC : 7_200;
+  const kvTtl = edgeSec;
+  const kvKey = `resp:${new URL(request.url).pathname}?${new URL(request.url).searchParams.toString()}`;
+
+  if (env.FIRESTORE_CACHE) {
+    const kvHit = await env.FIRESTORE_CACHE.get(kvKey);
+    if (kvHit) {
+      return new Response(kvHit, {
+        status: 200,
+        headers: {
+          ...jsonHeaders,
+          "x-cache-status": "kv-hit",
+          "cache-control": `public, max-age=${edgeSec}, s-maxage=${sMax}`,
+        },
+      });
+    }
+  }
 
   const cache = caches.default;
   const cacheKey = new Request(request.url, { method: "GET" });
   const hit = await cache.match(cacheKey);
-  if (hit) return withDefaultHeaders(hit);
+  if (hit) {
+    const headers = new Headers(hit.headers);
+    headers.set("x-cache-status", "edge-hit");
+    return new Response(hit.body, { status: hit.status, headers });
+  }
 
   const fresh = await handler();
   if (fresh.ok) {
     const headers = new Headers(fresh.headers);
     headers.set("cache-control", `public, max-age=${edgeSec}, s-maxage=${sMax}`);
+    headers.set("x-cache-status", "miss");
     const responseToCache = new Response(fresh.body, { status: fresh.status, headers });
     await cache.put(cacheKey, responseToCache.clone());
+    if (env.FIRESTORE_CACHE) {
+      await env.FIRESTORE_CACHE.put(kvKey, await responseToCache.clone().text(), { expirationTtl: kvTtl });
+    }
     return responseToCache;
   }
   return withDefaultHeaders(fresh);
@@ -136,6 +167,132 @@ function parseLimit(url: URL, fallback: number, max: number): number {
   const n = Number(url.searchParams.get("limit") || fallback);
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.min(max, Math.floor(n));
+}
+
+function isSubmitRateLimited(request: Request, visitorId: string): boolean {
+  const ip = getClientIp(request);
+  const key = `${ip}:${visitorId || "anon"}`;
+  const now = Date.now();
+  const windowMs = 60_000;
+  const maxRequests = 2;
+  const row = submitRateState.get(key);
+  if (!row || now >= row.resetAt) {
+    submitRateState.set(key, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+  row.count += 1;
+  if (row.count > maxRequests) return true;
+  return false;
+}
+
+function encodeFirestoreValue(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) return { nullValue: null };
+  if (typeof value === "string") return { stringValue: value };
+  if (typeof value === "boolean") return { booleanValue: value };
+  if (typeof value === "number") {
+    if (Number.isInteger(value)) return { integerValue: String(value) };
+    return { doubleValue: value };
+  }
+  if (value instanceof Date) return { timestampValue: value.toISOString() };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map((v) => encodeFirestoreValue(v)) } };
+  if (typeof value === "object") {
+    const fields: Record<string, unknown> = {};
+    Object.entries(value as Record<string, unknown>).forEach(([k, v]) => {
+      fields[k] = encodeFirestoreValue(v);
+    });
+    return { mapValue: { fields } };
+  }
+  return { nullValue: null };
+}
+
+async function createDocument(
+  env: Env,
+  collectionName: string,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  const projectId = env.FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECT_ID || "";
+  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
+  const accessToken = await getAccessToken(env);
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collectionName)}`;
+  const firestoreFields: Record<string, unknown> = {};
+  Object.entries(fields).forEach(([k, v]) => {
+    firestoreFields[k] = encodeFirestoreValue(v);
+  });
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ fields: firestoreFields }),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Firestore create doc error ${res.status}: ${txt.slice(0, 240)}`);
+  }
+}
+
+async function updateProductRatingAggregate(
+  env: Env,
+  productId: string,
+  averageRating: number,
+  ratingCount: number,
+): Promise<void> {
+  const projectId = env.FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECT_ID || "";
+  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
+  const accessToken = await getAccessToken(env);
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/products/${encodeURIComponent(productId)}?updateMask.fieldPaths=averageRating&updateMask.fieldPaths=ratingCount`;
+  const res = await fetch(endpoint, {
+    method: "PATCH",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      fields: {
+        averageRating: { doubleValue: averageRating },
+        ratingCount: { integerValue: String(ratingCount) },
+      },
+    }),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Firestore update product aggregate error ${res.status}: ${txt.slice(0, 240)}`);
+  }
+}
+
+async function invalidatePublicCache(request: Request, env: Env, productId?: string): Promise<void> {
+  const origin = new URL(request.url).origin;
+  const cache = caches.default;
+  const toDelete = [
+    `${origin}/api/public/products?limit=300`,
+    `${origin}/api/public/products?limit=500`,
+    `${origin}/api/public/ratings-feed?limit=20`,
+    `${origin}/api/public/ratings-feed?limit=40`,
+  ];
+  if (productId) {
+    toDelete.push(
+      `${origin}/api/public/product/${encodeURIComponent(productId)}`,
+      `${origin}/api/public/ratings-summary/${encodeURIComponent(productId)}`,
+      `${origin}/api/public/product-ratings/${encodeURIComponent(productId)}?limit=150`,
+      `${origin}/api/public/product-ratings/${encodeURIComponent(productId)}?limit=200`,
+    );
+  }
+  await Promise.all(
+    toDelete.map((u) => cache.delete(new Request(u, { method: "GET" })).catch(() => false)),
+  );
+  if (env.FIRESTORE_CACHE) {
+    const keys = [
+      "live:list:products",
+      "stale:list:products",
+    ];
+    if (productId) {
+      keys.push(`live:doc:products:${productId}`, `stale:doc:products:${productId}`);
+    }
+    await Promise.all(keys.map((k) => env.FIRESTORE_CACHE!.delete(k).catch(() => undefined)));
+  }
 }
 
 function asText(value: unknown): string | undefined {
@@ -358,10 +515,10 @@ async function getAccessToken(env: Env): Promise<string> {
     return cachedAccessToken.token;
   }
 
-  const clientEmail = String(env.GCP_CLIENT_EMAIL || "").trim();
-  const privateKey = String(env.GCP_PRIVATE_KEY || "").trim();
+  const clientEmail = String(env.GCP_CLIENT_EMAIL || env.FIREBASE_CLIENT_EMAIL || "").trim();
+  const privateKey = String(env.GCP_PRIVATE_KEY || env.FIREBASE_PRIVATE_KEY || "").trim();
   if (!clientEmail || !privateKey) {
-    throw new Error("Missing GCP_CLIENT_EMAIL or GCP_PRIVATE_KEY");
+    throw new Error("Missing client email/private key (GCP_* or FIREBASE_* env vars)");
   }
 
   const assertion = await createSignedJwt(clientEmail, normalizePrivateKey(privateKey));
@@ -393,7 +550,7 @@ async function getAccessToken(env: Env): Promise<string> {
 }
 
 async function fetchCollection(env: Env, collectionName: string, pageSize: number): Promise<Record<string, unknown>[]> {
-  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const projectId = env.FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECT_ID || "";
   const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
   if (!projectId) {
     throw new Error("Missing FIREBASE_PROJECT_ID");
@@ -418,7 +575,7 @@ async function fetchDocumentById(
   collectionName: string,
   docId: string,
 ): Promise<Record<string, unknown> | null> {
-  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const projectId = env.FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECT_ID || "";
   const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
   if (!projectId) {
     throw new Error("Missing FIREBASE_PROJECT_ID");
@@ -445,7 +602,7 @@ async function fetchCollectionWhereEquals(
   fieldValue: string,
   pageSize: number,
 ): Promise<Record<string, unknown>[]> {
-  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const projectId = env.FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECT_ID || "";
   const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
   if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
   const accessToken = await getAccessToken(env);
@@ -487,7 +644,7 @@ async function fetchCountWhereEquals(
   fieldName: string,
   fieldValue: string,
 ): Promise<number> {
-  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const projectId = env.FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECT_ID || "";
   const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
   if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
   const accessToken = await getAccessToken(env);
@@ -532,6 +689,79 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     try {
+      if (request.method === "POST" && url.pathname === "/api/submit") {
+        let payload: Record<string, unknown> = {};
+        try {
+          payload = (await request.json()) as Record<string, unknown>;
+        } catch {
+          return new Response(JSON.stringify({ error: "invalid_json" }), { status: 400, headers: jsonHeaders });
+        }
+
+        const productId = String(payload.productId || "").trim();
+        const distilleryId = String(payload.distilleryId || "").trim();
+        const productName = String(payload.productName || "").trim();
+        const productImage = String(payload.productImage || "").trim();
+        const visitorId = String(payload.visitorId || "").trim();
+        const reviewTextRaw = String(payload.reviewText || "").trim();
+        const reviewText = reviewTextRaw.length > 0 ? reviewTextRaw.slice(0, 1000) : null;
+        const userLocationRaw = String(payload.userLocation || "").trim();
+        const userLocation = userLocationRaw.length > 0 ? userLocationRaw.slice(0, 120) : null;
+        const rating = Number(payload.rating || 0);
+        const userAgent = String(payload.userAgent || "").trim().slice(0, 400);
+        const honeypot = String(payload.website || "").trim();
+
+        if (honeypot) {
+          return new Response(JSON.stringify({ error: "spam_detected" }), { status: 400, headers: jsonHeaders });
+        }
+        if (!productId || !distilleryId || !productName || !visitorId) {
+          return new Response(JSON.stringify({ error: "missing_required_fields" }), { status: 400, headers: jsonHeaders });
+        }
+        if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+          return new Response(JSON.stringify({ error: "invalid_rating" }), { status: 400, headers: jsonHeaders });
+        }
+        if (isSubmitRateLimited(request, visitorId)) {
+          return new Response(JSON.stringify({ error: "rate_limited_submit" }), {
+            status: 429,
+            headers: { ...jsonHeaders, "retry-after": "60" },
+          });
+        }
+
+        const product = await fetchDocumentById(env, "products", productId);
+        if (!product || !isPublicProductRow(product)) {
+          return new Response(JSON.stringify({ error: "product_not_public" }), { status: 400, headers: jsonHeaders });
+        }
+
+        const currentCount = Math.max(0, Math.floor(Number(product.ratingCount || 0)));
+        const currentAverage = Number(product.averageRating || 0);
+        const nextCount = currentCount + 1;
+        const nextAverage = ((currentAverage * currentCount) + rating) / nextCount;
+
+        await createDocument(env, "ratings", {
+          productId,
+          distilleryId,
+          productName,
+          productImage,
+          rating,
+          reviewText,
+          userLocation,
+          userName: "Gost",
+          userId: null,
+          visitorId,
+          createdAt: new Date(),
+          isFlagged: false,
+          isAutoFlagged: false,
+          flagReason: null,
+          userAgent,
+        });
+        await updateProductRatingAggregate(env, productId, nextAverage, nextCount);
+        await invalidatePublicCache(request, env, productId);
+
+        return new Response(
+          JSON.stringify({ ok: true, averageRating: nextAverage, ratingCount: nextCount, suspiciousSource: false }),
+          { headers: jsonHeaders },
+        );
+      }
+
       if (request.method !== "GET") {
         return new Response(JSON.stringify({ error: "method_not_allowed" }), {
           status: 405,
@@ -543,6 +773,49 @@ export default {
         return new Response(JSON.stringify({ ok: true, service: "rakivinum-api" }), {
           headers: jsonHeaders,
         });
+      }
+
+      // Generic cache-aside aliases for local/dev integration:
+      // /api/list?collection=products&limit=300
+      // /api/doc?collection=products&id=DOC_ID
+      if (url.pathname === "/api/list") {
+        return servePublicCached(
+          request,
+          env,
+          async () => {
+            const collectionName = String(url.searchParams.get("collection") || "").trim();
+            if (!collectionName) {
+              return new Response(JSON.stringify({ error: "missing_collection" }), {
+                status: 400,
+                headers: jsonHeaders,
+              });
+            }
+            const limitCount = parseLimit(url, 300, 500);
+            const rows = await fetchCollection(env, collectionName, limitCount);
+            return new Response(JSON.stringify({ items: rows }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
+      }
+
+      if (url.pathname === "/api/doc") {
+        return servePublicCached(
+          request,
+          env,
+          async () => {
+            const collectionName = String(url.searchParams.get("collection") || "").trim();
+            const docId = String(url.searchParams.get("id") || "").trim();
+            if (!collectionName || !docId) {
+              return new Response(JSON.stringify({ error: "missing_collection_or_id" }), {
+                status: 400,
+                headers: jsonHeaders,
+              });
+            }
+            const item = await fetchDocumentById(env, collectionName, docId);
+            return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
+          },
+          "catalog",
+        );
       }
 
       if (url.pathname.startsWith("/api/public/")) {
@@ -563,6 +836,7 @@ export default {
       if (url.pathname === "/api/public/distilleries") {
         return servePublicCached(
           request,
+          env,
           async () => {
             const limitCount = parseLimit(url, 250, 400);
             const rows = await fetchCollection(env, "distilleries", limitCount);
@@ -577,6 +851,7 @@ export default {
       if (url.pathname === "/api/public/distilleries-by-ids") {
         return servePublicCached(
           request,
+          env,
           async () => {
             const raw = String(url.searchParams.get("ids") || "");
             const ids = Array.from(
@@ -600,6 +875,7 @@ export default {
       if (url.pathname === "/api/public/products") {
         return servePublicCached(
           request,
+          env,
           async () => {
             const limitCount = parseLimit(url, 300, 500);
             const rows = await fetchCollection(env, "products", limitCount);
@@ -616,6 +892,7 @@ export default {
       if (url.pathname === "/api/public/community-events") {
         return servePublicCached(
           request,
+          env,
           async () => {
             const limitCount = parseLimit(url, 60, 200);
             const rows = await fetchCollection(env, "community_events", limitCount);
@@ -629,6 +906,7 @@ export default {
       if (url.pathname === "/api/public/community-links") {
         return servePublicCached(
           request,
+          env,
           async () => {
             const limitCount = parseLimit(url, 80, 200);
             const rows = await fetchCollection(env, "community_links", limitCount);
@@ -643,9 +921,9 @@ export default {
       }
 
       if (url.pathname === "/api/public/ratings-feed") {
-        return servePublicCached(request, async () => {
+        return servePublicCached(request, env, async () => {
           const limitCount = parseLimit(url, 20, 80);
-          const rows = await fetchCollection(env, "ratings", 120);
+          const rows = await fetchCollection(env, "ratings", FIRESTORE_LIST_MAX);
           const filtered = rows
             .filter((r) => r.isFlagged !== true)
             .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
@@ -658,9 +936,10 @@ export default {
       if (url.pathname === "/api/public/club-actions") {
         return servePublicCached(
           request,
+          env,
           async () => {
             const limitCount = parseLimit(url, 20, 80);
-            const rows = await fetchCollection(env, "club_actions", 120);
+            const rows = await fetchCollection(env, "club_actions", FIRESTORE_LIST_MAX);
             const items = rows
               .filter((r) => r.isActive === true)
               .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
@@ -673,7 +952,7 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/public/club-memberships/")) {
-        return servePublicCached(request, async () => {
+        return servePublicCached(request, env, async () => {
           const visitorId = decodeURIComponent(url.pathname.replace("/api/public/club-memberships/", "").trim());
           if (!visitorId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
           const limitCount = parseLimit(url, 30, 120);
@@ -684,7 +963,7 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/public/license/")) {
-        return servePublicCached(request, async () => {
+        return servePublicCached(request, env, async () => {
           const token = decodeURIComponent(url.pathname.replace("/api/public/license/", "").trim());
           if (!token) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
           const rows = await fetchCollectionWhereEquals(env, "licenses", "token", token, 1);
@@ -696,6 +975,7 @@ export default {
       if (url.pathname.startsWith("/api/public/distillery/")) {
         return servePublicCached(
           request,
+          env,
           async () => {
             const id = decodeURIComponent(url.pathname.replace("/api/public/distillery/", "").trim());
             if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
@@ -710,6 +990,7 @@ export default {
       if (url.pathname.startsWith("/api/public/products-by-distillery/")) {
         return servePublicCached(
           request,
+          env,
           async () => {
             const distilleryId = decodeURIComponent(
               url.pathname.replace("/api/public/products-by-distillery/", "").trim(),
@@ -730,13 +1011,14 @@ export default {
       if (url.pathname.startsWith("/api/public/club-actions-by-distillery/")) {
         return servePublicCached(
           request,
+          env,
           async () => {
             const distilleryId = decodeURIComponent(
               url.pathname.replace("/api/public/club-actions-by-distillery/", "").trim(),
             );
             if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
             const limitCount = parseLimit(url, 40, 120);
-            const fetchCap = Math.min(200, Math.max(limitCount * 3, 80));
+            const fetchCap = Math.min(FIRESTORE_LIST_MAX, Math.max(limitCount, 1));
             const rows = await fetchCollectionWhereEquals(env, "club_actions", "distilleryId", distilleryId, fetchCap);
             const items = rows
               .filter((r) => r.isActive === true)
@@ -750,7 +1032,7 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/public/club-membership-count/")) {
-        return servePublicCached(request, async () => {
+        return servePublicCached(request, env, async () => {
           const distilleryId = decodeURIComponent(
             url.pathname.replace("/api/public/club-membership-count/", "").trim(),
           );
@@ -761,7 +1043,7 @@ export default {
       }
 
       if (url.pathname === "/api/public/product-lookup") {
-        return servePublicCached(request, async () => {
+        return servePublicCached(request, env, async () => {
           const n = String(url.searchParams.get("n") || "").trim();
           const r = String(url.searchParams.get("r") || "").trim();
           const tryField = async (field: string, val: string): Promise<Record<string, unknown> | null> => {
@@ -785,6 +1067,7 @@ export default {
       if (url.pathname.startsWith("/api/public/product/")) {
         return servePublicCached(
           request,
+          env,
           async () => {
             const id = decodeURIComponent(url.pathname.replace("/api/public/product/", "").trim());
             if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
@@ -804,6 +1087,7 @@ export default {
       if (url.pathname.startsWith("/api/public/ratings-summary/")) {
         return servePublicCached(
           request,
+          env,
           async () => {
             const productId = decodeURIComponent(url.pathname.replace("/api/public/ratings-summary/", "").trim());
             if (!productId) {
@@ -822,7 +1106,7 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/public/product-ratings/")) {
-        return servePublicCached(request, async () => {
+        return servePublicCached(request, env, async () => {
           const productId = decodeURIComponent(url.pathname.replace("/api/public/product-ratings/", "").trim());
           if (!productId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
           const limitCount = parseLimit(url, 150, 300);
@@ -835,7 +1119,7 @@ export default {
       }
 
       if (url.pathname.startsWith("/api/public/scan-clusters/")) {
-        return servePublicCached(request, async () => {
+        return servePublicCached(request, env, async () => {
           const productId = decodeURIComponent(url.pathname.replace("/api/public/scan-clusters/", "").trim());
           if (!productId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
           const sampleSize = parseLimit(url, 200, 500);
