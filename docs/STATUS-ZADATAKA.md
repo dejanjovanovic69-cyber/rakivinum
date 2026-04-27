@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-26 — **Katalog ne mora na sekund:** klijentski `CACHE_TTL` za liste (destilerije, proizvodi, događaji, home map, club actions) = **24h**; Worker `servePublicCached(..., "catalog")` sa **max-age/s-maxage 24h** za iste javne rute (bez ponovnog Firestore-a na svakom ulasku). Interaktivne rute (ocene, članstva, licence) ostaju kraći keš.
+**Poslednji zapis:** 2026-04-27 — **`AdminAudit`:** bundle read (`rating_logs`, `users`, `abuse_blocks`) prebačen na jedan `useQuery` (`queryKeys.adminAudit.bundle()`), `stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M)`, `placeholderData` iz lokalnog keša; uklonjeni focus/visibility refetch listeneri; posle `toggleBlockUser` / `toggleSourceBlock` ide `invalidateQueries` da UI prati mutacije.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -12,6 +12,102 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 
 **Resilient deploy (kad Cloudflare vrati 500/10500):**  
 `npm run cf:deploy:resilient` (retry Worker deploy + Pages deploy sa `functions` workaround-om).
+
+**Standard od sada (read/write):**
+- Javni read ide **Worker-first** (`/api/public/*`) uz edge/KV keš; frontend ne radi “sirove” velike Firestore list upite gde postoji Worker ruta.
+- Write forme idu preko **Worker write-proxy** (validacija, throttling/debounce idempotency, pa jedan čist Firestore REST upis).
+- Posle write-a radi se **cache invalidation** za pogođene javne ključeve/rute da korisnici vide sveže stanje bez read-storma.
+
+## Post-incident smernice (Community / read-storm)
+
+- **Status:** incident sa prekomernim read-ovima je klasifikovan kao kombinacija React state-race + neadekvatnog fetching obrasca za složen ekran.
+- **1) useEffect za data fetching:** dugoročno izbaciti ručni efekat-obrazac za mrežu iz složenih stranica; preći na `TanStack Query` (ili `SWR`) za dedupe, retry/cancel, stale policy i cache lifecycle.
+- **2) Hook lint pravila kao build-gate:** obavezno uključiti i zaključati `eslint-plugin-react-hooks` sa `react-hooks/exhaustive-deps: "error"` i `react-hooks/rules-of-hooks: "error"` (build treba da padne na kršenje).
+- **3) Memoizacija referentnih tipova:** objekti/nizovi/funkcije koji ulaze u hook zavisnosti moraju biti stabilni (`useMemo`/`useCallback`) ili izvučeni van komponente.
+- **4) Klijentski circuit-breaker:** u `dataService` dodati globalni osigurač po endpointu (npr. max 3 poziva/s, zatim cooldown 5s) da se spreči read-storm i pri frontend regresiji.
+- **5) URL kao izvor istine:** minimizovati sinhronizaciju URL <-> lokalni state kroz efekte; gde je moguće čitati `location.search` direktno u render toku i izbeći waterfall setState cikluse.
+- **6) Strict Mode-safe fetching:** ne koristiti `...FetchSentRef` obrasce koji blokiraju remount tok; koristiti request-token/abort obrasce gde samo poslednji aktivni zahtev sme da upiše state.
+
+## PLAN DO SUTRA - 10 PRAVILA (BLOCKER RECOVERY)
+
+Status: **deploy pauza** dok je nalog blokiran; radi se samo stabilizacija koda + lokalne provere.
+
+1. **Napustiti manuelni `useEffect` data-fetch obrazac na kritičnim ekranima**
+   - Uvesti `TanStack Query` (ili `SWR`) kao standard za async state.
+   - `dataService` ostaje čist transport sloj (bez UI lifecycle logike).
+
+2. **Hook lint kao obavezni quality gate**
+   - `react-hooks/rules-of-hooks = error`
+   - `react-hooks/exhaustive-deps = error`
+   - `lint` mora oboriti build na kršenje.
+
+3. **Memoizacija referentnih tipova**
+   - Svaki objekat/niz/funkcija u hook deps mora biti `useMemo`/`useCallback` ili izvučen van komponente.
+   - Zabraniti inline `init/options` objekte u fetch hook pozivima.
+
+4. **Klijentski Circuit Breaker**
+   - Globalni osigurač po endpointu (max 3 poziva/s + cooldown 5s).
+   - Aktivno za sve edge read helper funkcije.
+
+5. **URL decoupling / Single Source of Truth**
+   - URL parametri se čitaju kao primarni izvor istine.
+   - Smanjiti efekat-sinhronizaciju URL -> local state gde nije neophodno.
+
+6. **Strict Mode-safe effect pattern**
+   - Zabranjeni `...FetchSentRef` lock obrasci.
+   - Dozvoljen request-token / abort / latest-request-only obrazac.
+
+7. **Fallback izolacija (Firestore zaštita)**
+   - Javni tokovi ostaju Worker/KV-first.
+   - Firestore fallback samo eksplicitno kroz feature flag i samo gde je nužno.
+
+8. **Read budget hard-cap po ekranu**
+   - Lista upiti ostaju hard-capovani.
+   - Uvesti i per-screen budžet (npr. prekid daljih read pokušaja kada se pređe prag u jednom lifecycle ciklusu).
+
+9. **PWA/SW politika za rizične rute**
+   - `/community` mora izbeći frozen navigate cache scenarije.
+   - Držati jasna pravila za `NetworkFirst`/denylist po ruti i auditirati ih.
+
+10. **Incident observability i runbook**
+   - Standardizovati debug marker-e za efekte/fetch tokove (count + source + route).
+   - Imati gotov incident runbook: “stop-the-bleed” prekidači + rollback redosled.
+
+### Prioritet implementacije (redom)
+- **P0 danas:** 2, 4, 6, 7
+- **P1 danas/večeras:** 3, 5, 8
+- **P2 sutra ujutru:** 1, 9, 10
+
+## DODATNIH 5 ARHITEKTONSKIH SAVETA (potvrđeno)
+
+1. **Razbijanje "God komponente" (`Community.tsx`)**
+   - `Community.tsx` treba svesti na tab/router shell.
+   - Svaki tab prebaciti u zasebnu komponentu (`ReviewsTab`, `CompareTab`, `SearchTab`, `EventsTab`, `TopTab`, `ProducersTab`).
+   - Cilj: manji render obim i manji CPU pritisak na telefonu.
+
+2. **`useMemo` za skupe filtere i derivacije**
+   - Teške iteracije (`filteredProducts`, `filteredDistilleries`, compare pool/filteri) obavezno obmotati u `useMemo`.
+   - Cilj: izbeći ponovno računanje pri svakom sitnom render okidaču.
+
+3. **Thundering Herd zaštita (fallback disciplina)**
+   - Cloudflare Worker ostaje jedini javni ulaz za bazu.
+   - Kada edge podbaci, prioritet je lokalni cache + korisnička poruka, a ne masovni direktni fallback ka Firestore-u.
+   - Direktni fallback ostaje strogo kontrolisan i iza feature flag-a.
+
+4. **Rate limit backend memorije (Worker map state)**
+   - Trenutni in-memory limiter je privremen i best-effort.
+   - Za produkciju planirati prelaz na robustniji sloj (Cloudflare Rate Limiting / Durable Objects / KV strategija).
+   - Cilj: stabilniji limiter bez nepotrebnog opterećenja memorije izolata.
+
+5. **Storage write optimizacija (`sessionStorage`)**
+   - Upise stanja poređenja ne raditi na svako slovo bez kontrole.
+   - Uvesti debounce (npr. 400-500ms) ili write-on-intent (na izbor artikla / izlaz sa taba).
+   - Cilj: manje "micro-stutter" ponašanja na slabijim uređajima.
+
+### Prioritet za ovih 5 stavki
+- **P0:** 1, 2, 3
+- **P1:** 5
+- **P2:** 4
 
 ---
 
@@ -45,6 +141,8 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 
 - **Firestore / kvota:** `limit()` na upitima, kes/dedup (`dataService`, `resilience`), smanjeni `onSnapshot` gde nije neophodno, `refreshGate` za `focus` burst (`Home`, `Menu`, `Distillery`, itd.).
 - **Zajednica (`Community`):** ocene (feed) vise nisu teski `onSnapshot` - kontrolisan `getDocs` + periodicno/fokus osvezavanje + gate.
+- **Zajednica (`Community`) P0 refactor (lokalno):** tab UI + data tok su modularizovani (`components/community/*`, `hooks/useCommunityData.ts`, `components/community/{types,constants,utils}.ts`) radi manjeg render opterećenja i lakšeg održavanja/debug-a.
+- **Query standard (lokalno uspostavljen):** dodati su `src/lib/queryDefaults.ts` (`stableQueryOptions`) i `src/lib/queryKeys.ts` (centralizovani ključevi). `Community`, `Home` i `Collection` su prebačeni na isti obrazac (`useQuery` + key factory + shared stale/gc policy, bez `refetchOnWindowFocus`).
 - **Skener (`Scanner`):** barcode upiti sa `limit`; fallback preko `fetchPublicProducts` (kes/dedup), bez `getDocs` cele `products` kolekcije; direct ID lookup radi samo za `/label/...` i ID-like payload, za numerički barkod se preskače dupli raw barkod upit, a Firestore barcode fallback ide sa `limit(1)`.
 - **Pocetna (`Home`):** sacuvano - `getCountFromServer` + poslednji artikal preko `orderBy(createdAt)+limit(1)`; top-ocena ide preko `limit(1)` upita (fallback cap smanjen na `limit(60)` dok index nije spreman).
 - **Kolekcija (`Collection`):** ucitavanje sacuvanog sa `limit` (+ `orderBy` za ulogovanog); fallback za product detalje je batched (`documentId in`) umesto pojedinacnih `getDoc`; kada cache postoji koristi se odmah bez automatskog instant refetch-a.
@@ -57,6 +155,10 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **Meni / MyClubs (distillery read) fix:** prazan edge rezultat (`items: []`) više ne aktivira fallback read ka Firestore-u.
 - **Meni / MyClubs (distillery read) dedupe:** ID lista se sortira pre batch zahteva, pa se smanjuju dupli pozivi za isti set destilerija u različitom redosledu.
 - **Meni / MyClubs (distillery read) cache:** dodat 1h cache za batch set ID-jeva u `fetchPublicDistilleriesByIds`.
+- **Public read hard stop (quota-safe):** u `dataService` direct Firestore fallback za javne read helper-e je podrazumevano isključen; javni tokovi idu Worker/KV-only osim ako se eksplicitno uključi `VITE_ENABLE_FIRESTORE_FALLBACK=1`.
+- **Scanner read hardening:** uklonjeni direktni Firestore barcode fallback upiti (`barcodeNormalized/barcode/raw`); lookup ostaje edge-first + cache katalog fallback bez direktnog read udara.
+- **MyClubs hot-spot fix:** uklonjeni veliki direktni read upiti nad `scans` i `ratings` pri otvaranju stranice.
+- **Home user stats hardening:** ukinut focus/visibility periodični refetch za user stats kako bi se sprečilo ponavljanje read-ova pri navigaciji.
 - **Distillery katalog cache:** dodat 1h cache za `fetchPublicProductsByDistilleryId` po distillery/limit kombinaciji.
 - **Community / club-actions cache:** dodat 1h cache u `fetchPublicClubActions` (po limitu) i `fetchPublicClubActionsForDistillery` (po distillery/limit kombinaciji).
 - **Home/Menu memberships cache:** dodat 1h cache u `fetchPublicClubMembershipsByVisitorId` (po visitor/limit kombinaciji).
