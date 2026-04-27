@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **Playwright:** `/community?tab=search&q=…` sinhronizacija polja; **AGENTS:** ispravka napomene za `cf:smoke:edge` (BaseUrl u skripti, link na QA-E2E). Ranije: QA-E2E edge sekcija, smoke visitor/token repeat, Worker KV.
+**Poslednji zapis:** 2026-04-27 — **Playwright:** `/community?tab=compare&lq=…&rq=…` sinhronizacija polja za uporedi. Ranije: `tab=search&q`, AGENTS smoke-edge, QA-E2E edge, visitor/token smoke repeat, Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

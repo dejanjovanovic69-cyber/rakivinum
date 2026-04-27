@@ -42,6 +42,14 @@ test.describe("public routes", () => {
     await expect(page.getByRole("heading", { name: /Uporedi 2 artikla/i })).toBeVisible({ timeout: 25_000 });
   });
 
+  test("community compare tab applies lq and rq from URL", async ({ page }) => {
+    await page.goto("/community?tab=compare&lq=left-compare-smoke&rq=right-compare-smoke");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    const compareInputs = page.getByPlaceholder("Pretraži naziv...");
+    await expect(compareInputs.first()).toHaveValue("left-compare-smoke", { timeout: 25_000 });
+    await expect(compareInputs.nth(1)).toHaveValue("right-compare-smoke", { timeout: 25_000 });
+  });
+
   test("community events tab deep link", async ({ page }) => {
     await page.goto("/community?tab=events");
     await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });

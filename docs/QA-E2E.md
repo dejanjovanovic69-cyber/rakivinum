@@ -54,7 +54,7 @@ Prazni `-SampleVisitorId` / `-SampleLicenseToken` = te rute se preskaču (podraz
 
 U `e2e/smoke.spec.ts` (ili novi fajl) dodaj kratke testove: **jedan assert po ponašanju** (npr. „nema beskonačnog loadera“, „naslov taba vidljiv“). Teške Firebase brojke ne testiramo ovde — za Worker javne read-ove koristi `npm run cf:smoke:edge` (vidi sekciju iznad); za dubinu Firebase konzola.
 
-Trenutno smoke pokriva: početnu, Community (default + tab deep linkovi + `?tab=search&q=…` iz URL-a), `/distilleries`, `/collection` (gost prazan ili „Arhiva“), `/menu` (Gost/Korisnik), `/scan`, `/radionica`, `/my-clubs`, `/activate` (bez tokena — forma), `/label/…` i `/distillery/…` (nepostojeći id — poruka o nedostupnosti).
+Trenutno smoke pokriva: početnu, Community (default + tab deep linkovi + `?tab=search&q=…` + `?tab=compare&lq=…&rq=…` iz URL-a), `/distilleries`, `/collection` (gost prazan ili „Arhiva“), `/menu` (Gost/Korisnik), `/scan`, `/radionica`, `/my-clubs`, `/activate` (bez tokena — forma), `/label/…` i `/distillery/…` (nepostojeći id — poruka o nedostupnosti).
 
 ## Ako test „ne vidi“ naslove
 
