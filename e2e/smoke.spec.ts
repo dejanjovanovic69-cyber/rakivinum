@@ -67,4 +67,16 @@ test.describe("public routes", () => {
     await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
     await expect(page.getByPlaceholder(/Pretraži proizvode/i)).toBeVisible({ timeout: 25_000 });
   });
+
+  test("collection route: guest empty or archive shell", async ({ page }) => {
+    await page.goto("/collection");
+    const guestEmpty = page.getByRole("heading", { name: /Kolekcija čeka/i });
+    const archive = page.getByRole("heading", { name: /Arhiva/i });
+    await expect(guestEmpty.or(archive)).toBeVisible({ timeout: 35_000 });
+  });
+
+  test("menu shows identity heading", async ({ page }) => {
+    await page.goto("/menu");
+    await expect(page.getByRole("heading", { name: /Gost|Korisnik/i })).toBeVisible({ timeout: 25_000 });
+  });
 });
