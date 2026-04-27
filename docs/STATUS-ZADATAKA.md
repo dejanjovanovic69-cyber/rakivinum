@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **Community / TanStack:** `useCommunityData` + tab komponente; `QueryClientProvider` u `main.tsx`; Home i Distilleries na `useQuery`; ESLint flat config sa `react-hooks` kao gate; Worker opcioni KV `FIRESTORE_CACHE` + `x-cache-status`; Community emergency read samo uz `VITE_COMMUNITY_READ_EMERGENCY=1`.
+**Poslednji zapis:** 2026-04-27 — **`dataService`:** klijentski circuit breaker na Worker GET (max 3 / 1s po ruti, zatim 5s cooldown → `null` i fallback na keš/Firestore). Ranije istog dana: Community TanStack + tabovi, `QueryClientProvider`, Home/Distilleries `useQuery`, ESLint `react-hooks`, Worker KV + `x-cache-status`, `VITE_COMMUNITY_READ_EMERGENCY`.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -24,7 +24,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 - **1) useEffect za data fetching:** dugoročno izbaciti ručni efekat-obrazac za mrežu iz složenih stranica; preći na `TanStack Query` (ili `SWR`) za dedupe, retry/cancel, stale policy i cache lifecycle.
 - **2) Hook lint pravila kao build-gate:** obavezno uključiti i zaključati `eslint-plugin-react-hooks` sa `react-hooks/exhaustive-deps: "error"` i `react-hooks/rules-of-hooks: "error"` (build treba da padne na kršenje).
 - **3) Memoizacija referentnih tipova:** objekti/nizovi/funkcije koji ulaze u hook zavisnosti moraju biti stabilni (`useMemo`/`useCallback`) ili izvučeni van komponente.
-- **4) Klijentski circuit-breaker:** u `dataService` dodati globalni osigurač po endpointu (npr. max 3 poziva/s, zatim cooldown 5s) da se spreči read-storm i pri frontend regresiji.
+- **4) Klijentski circuit-breaker:** u `dataService` za edge GET (max 3 u 1s prozoru po ruti, cooldown 5s) — **urađeno**; širi obuhvat (npr. Firestore direktno) po potrebi odvojeno.
 - **5) URL kao izvor istine:** minimizovati sinhronizaciju URL <-> lokalni state kroz efekte; gde je moguće čitati `location.search` direktno u render toku i izbeći waterfall setState cikluse.
 - **6) Strict Mode-safe fetching:** ne koristiti `...FetchSentRef` obrasce koji blokiraju remount tok; koristiti request-token/abort obrasce gde samo poslednji aktivni zahtev sme da upiše state.
 
