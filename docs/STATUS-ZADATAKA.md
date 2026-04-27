@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **Playwright:** `/community?tab=search&pf=sljivovica` (aktivni filter iz URL-a). Ranije: compare `lq`/`rq`, search `q`, AGENTS/QA-E2E smoke, visitor/token repeat, Worker KV.
+**Poslednji zapis:** 2026-04-27 — **Playwright:** `/community?tab=compare&cf=sljivovica` (aktivni compare-filter iz URL-a). Ranije: search `pf`/`q`, compare `lq`/`rq`, AGENTS/QA-E2E smoke, visitor/token repeat, Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

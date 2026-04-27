@@ -50,6 +50,15 @@ test.describe("public routes", () => {
     await expect(compareInputs.nth(1)).toHaveValue("right-compare-smoke", { timeout: 25_000 });
   });
 
+  test("community compare tab applies cf from URL", async ({ page }) => {
+    await page.goto("/community?tab=compare&cf=sljivovica");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole("heading", { name: /Uporedi 2 artikla/i })).toBeVisible({ timeout: 25_000 });
+    const sljChip = page.getByRole("button", { name: "Šljivovice" });
+    await expect(sljChip).toBeVisible({ timeout: 25_000 });
+    await expect(sljChip).toHaveClass(/bg-gold-500/);
+  });
+
   test("community events tab deep link", async ({ page }) => {
     await page.goto("/community?tab=events");
     await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
