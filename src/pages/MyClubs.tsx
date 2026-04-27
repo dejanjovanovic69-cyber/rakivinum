@@ -13,7 +13,7 @@ import {
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { stableQueryOptions } from "../lib/queryDefaults";
 import { queryKeys } from "../lib/queryKeys";
-import { invalidateVisitorClubCaches } from "../lib/invalidateClubCaches";
+import { invalidateAfterClubMembershipChange } from "../lib/invalidateClubCaches";
 
 type ClubTarget = { label: string; current: number; target: number };
 type ClubAction = {
@@ -172,6 +172,7 @@ export default function MyClubs() {
   const isLoading = Boolean(visitorId) && clubs === null && clubsQuery.isFetching;
 
   const leaveClub = async (distilleryId: string) => {
+    if (!visitorId) return;
     if (!confirm("Da li ste sigurni da želite da napustite ovaj klub? Sav vaš napredak ka nagradama u ovom klubu će biti izgubljen.")) return;
 
     try {
@@ -190,7 +191,7 @@ export default function MyClubs() {
 
       // Update State
       setClubs(prev => prev.filter(c => c.id !== distilleryId));
-      invalidateVisitorClubCaches(queryClient, visitorId);
+      invalidateAfterClubMembershipChange(queryClient, visitorId, distilleryId);
       alert("Uspešno ste napustili klub.");
     } catch (e) {
       console.error("Error leaving club", e);

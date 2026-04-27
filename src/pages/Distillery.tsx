@@ -10,7 +10,7 @@ import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { readCache, writeCache } from "../lib/resilience";
 import { stableQueryOptions } from "../lib/queryDefaults";
 import { queryKeys, DISTILLERY_PUBLIC_PRODUCTS_LIMIT } from "../lib/queryKeys";
-import { invalidateVisitorClubCaches } from "../lib/invalidateClubCaches";
+import { invalidateAfterClubMembershipChange, invalidateVisitorClubCaches } from "../lib/invalidateClubCaches";
 import {
   fetchPublicClubMembershipCount,
   fetchPublicClubMembershipsByVisitorId,
@@ -315,10 +315,10 @@ export default function Distillery() {
       localStorage.setItem(storageKey, JSON.stringify(clubs));
 
       if (id) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.membership(id, visitorId) });
-        void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.memberCount(id) });
+        invalidateAfterClubMembershipChange(queryClient, visitorId, id);
+      } else {
+        invalidateVisitorClubCaches(queryClient, visitorId);
       }
-      invalidateVisitorClubCaches(queryClient, visitorId);
     } catch (e) {
       console.error("Error toggling membership", e);
       alert("Došlo je do greške. Molimo pokušajte ponovo.");
