@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import React, { useMemo } from "react";
+import React, { useCallback, useMemo } from "react";
 import { db } from "../lib/firebase";
 import { doc, updateDoc } from "firebase/firestore";
 import { cn } from "../lib/utils";
@@ -141,11 +141,14 @@ export default function Community() {
     [distilleries, selectedRegion, producerSearch],
   );
 
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const visibleEvents = (eventsView === "active"
-    ? communityEvents.filter((ev) => !ev.eventDate || String(ev.eventDate) >= todayIso)
-    : communityEvents.filter((ev) => ev.eventDate && String(ev.eventDate) < todayIso));
-  const hasSearchQuery = searchQuery.trim() !== "";
+  const visibleEvents = useMemo(() => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    return eventsView === "active"
+      ? communityEvents.filter((ev) => !ev.eventDate || String(ev.eventDate) >= todayIso)
+      : communityEvents.filter((ev) => ev.eventDate && String(ev.eventDate) < todayIso);
+  }, [communityEvents, eventsView]);
+
+  const hasSearchQuery = useMemo(() => searchQuery.trim() !== "", [searchQuery]);
   const isResultsMode = activeSection === "search";
   const activeProductIds = useMemo(() => new Set(catalogProducts.map((p) => p.id)), [catalogProducts]);
   // If catalog is unavailable/empty, never hide existing ratings.
@@ -210,19 +213,37 @@ export default function Community() {
     [catalogProducts, compareFilter],
   );
 
-  const compareLeft = comparePool.find((p) => p.id === compareLeftId) || null;
-  const compareRight = comparePool.find((p) => p.id === compareRightId) || null;
-  const compareLeftMatches = findCompareMatches(comparePool, compareLeftQuery, compareRightId);
-  const compareRightMatches = findCompareMatches(comparePool, compareRightQuery, compareLeftId);
-  const leftCandidateList = buildCompareCandidateList(comparePool, compareLeftQuery, compareLeftMatches, compareRightId);
-  const rightCandidateList = buildCompareCandidateList(comparePool, compareRightQuery, compareRightMatches, compareLeftId);
+  const compareLeft = useMemo(
+    () => comparePool.find((p) => p.id === compareLeftId) || null,
+    [comparePool, compareLeftId],
+  );
+  const compareRight = useMemo(
+    () => comparePool.find((p) => p.id === compareRightId) || null,
+    [comparePool, compareRightId],
+  );
+  const compareLeftMatches = useMemo(
+    () => findCompareMatches(comparePool, compareLeftQuery, compareRightId),
+    [comparePool, compareLeftQuery, compareRightId],
+  );
+  const compareRightMatches = useMemo(
+    () => findCompareMatches(comparePool, compareRightQuery, compareLeftId),
+    [comparePool, compareRightQuery, compareLeftId],
+  );
+  const leftCandidateList = useMemo(
+    () => buildCompareCandidateList(comparePool, compareLeftQuery, compareLeftMatches, compareRightId),
+    [comparePool, compareLeftQuery, compareLeftMatches, compareRightId],
+  );
+  const rightCandidateList = useMemo(
+    () => buildCompareCandidateList(comparePool, compareRightQuery, compareRightMatches, compareLeftId),
+    [comparePool, compareRightQuery, compareRightMatches, compareLeftId],
+  );
 
-  const resetCompareSelection = () => {
+  const resetCompareSelection = useCallback(() => {
     setCompareLeftId("");
     setCompareRightId("");
     setCompareLeftQuery("");
     setCompareRightQuery("");
-  };
+  }, [setCompareLeftId, setCompareRightId, setCompareLeftQuery, setCompareRightQuery]);
   const searchReturnTo = `/community?tab=search&q=${encodeURIComponent(searchQuery)}&pf=${encodeURIComponent(activeProductFilter)}`;
   const reviewsReturnTo = `/community?tab=reviews`;
   const topsReturnTo = `/community?tab=tops`;
