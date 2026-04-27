@@ -1628,13 +1628,43 @@ export default function Admin() {
          : Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
 
        if (editingDistilleryId) {
+         const eid = editingDistilleryId;
          const updatePayload: Record<string, unknown> = { ...basePayload };
          if (trialDateStr) {
            updatePayload.trialEndsAt = trialEndsAtTs;
          }
-         await updateDoc(doc(db, 'distilleries', editingDistilleryId), updatePayload);
+         await updateDoc(doc(db, 'distilleries', eid), updatePayload);
          setManualResult("Destilerija uspešno izmenjena!");
          setEditingDistilleryId(null);
+         queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+           if (!prev) return prev;
+           const distilleries = prev.distilleries
+             .map((d) => {
+               if (d.id !== eid) return d;
+               const next: DistilleryListItem = {
+                 ...d,
+                 name: (distilleryData.name || "").trim(),
+                 region: (distilleryData.region || "Srbija").trim(),
+                 logoUrl: (distilleryData.logoUrl || "").trim() || "https://picsum.photos/seed/dist/200/200",
+                 pib: (distilleryData.pib || "").trim(),
+                 location: {
+                   address: (distilleryData.address || "").trim(),
+                   city: (distilleryData.city || "").trim(),
+                 },
+                 galleryImages,
+               };
+               if (distilleryData.website?.trim()) next.website = distilleryData.website.trim();
+               if (distilleryData.mapsUrl?.trim()) next.mapsUrl = distilleryData.mapsUrl.trim();
+               else delete next.mapsUrl;
+               if (distilleryData.email?.trim()) next.email = distilleryData.email.trim();
+               else delete next.email;
+               if (distilleryData.description?.trim()) next.description = distilleryData.description.trim();
+               if (trialDateStr) next.trialEndsAt = trialEndsAtTs;
+               return next;
+             })
+             .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
+           return { ...prev, distilleries };
+         });
        } else {
          const dId = doc(collection(db, "distilleries")).id;
          await setDoc(doc(db, "distilleries", dId), {
@@ -1646,16 +1676,37 @@ export default function Admin() {
          setManualResult("Destilerija uspešno dodata!");
         setSelectedDistilleryId(dId);
         setActiveTab("distilleries");
+         queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
+           if (!prev) return prev;
+           const newRow: DistilleryListItem = {
+             id: dId,
+             name: (distilleryData.name || "").trim(),
+             region: (distilleryData.region || "Srbija").trim(),
+             logoUrl: (distilleryData.logoUrl || "").trim() || "https://picsum.photos/seed/dist/200/200",
+             pib: (distilleryData.pib || "").trim(),
+             location: {
+               address: (distilleryData.address || "").trim(),
+               city: (distilleryData.city || "").trim(),
+             },
+             galleryImages,
+             isVerified: false,
+             trialEndsAt: trialEndsAtTs,
+             createdAt: Timestamp.now(),
+           };
+           if (distilleryData.website?.trim()) newRow.website = distilleryData.website.trim();
+           if (distilleryData.mapsUrl?.trim()) newRow.mapsUrl = distilleryData.mapsUrl.trim();
+           if (distilleryData.email?.trim()) newRow.email = distilleryData.email.trim();
+           if (distilleryData.description?.trim()) newRow.description = distilleryData.description.trim();
+           const distilleries = [...prev.distilleries, newRow].sort((a, b) =>
+             String(a.name || "").localeCompare(String(b.name || ""), "sr"),
+           );
+           return { ...prev, distilleries };
+         });
        }
 
        clearTimeout(timeout);
       setDistilleryData({ id: "", name: "", region: "Beograd i okolina", website: "", email: "", description: "", logoUrl: "", pib: "", address: "", city: "", mapsUrl: "", trialEndsAt: "" });
        clearGallerySlots();
-       try {
-         await queryClient.refetchQueries({ queryKey: queryKeys.admin.coreBundle() });
-       } catch (e) {
-         console.warn("Refresh list failed", e);
-       }
     } catch (err: unknown) {
        clearTimeout(timeout);
        console.error("Distillery Save Error:", err);

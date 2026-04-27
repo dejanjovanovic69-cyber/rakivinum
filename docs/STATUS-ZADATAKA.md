@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` širi `setQueryData`:** community linkovi/događaji/predlozi, licence (batch + limit + brisanje), verifikacija destilerije, brisanje/arhiva destilerije, CRUD liste proizvoda za trenutni `products` query — sve to patch-uje keš umesto `invalidateAdminCoreBundle` / `invalidateAdminLicensingBundle`. Ostaje ručno „Osveži“ (`invalidateAdminCoreBundle`), `invalidateAdminProducts()` gde su agregati ili masovni upisi proizvoda, i `handleAddDistillery` koji i dalje radi `refetchQueries` na core (sledeći mali korak: patch core umesto refetch).
+**Poslednji zapis:** 2026-04-27 — **`Admin` dodavanje/izmena destilerije:** `handleAddDistillery` više ne radi `refetchQueries` na `core-bundle`; lista destilerija u kešu se ažurira `setQueryData` (nova stavka ili merge polja, uključujući brisanje `mapsUrl` / `email` u kešu kad Firestore dobija `deleteField`). Ostaje ručno „Osveži“ i `invalidateAdminProducts()` za agregate / masovne izmene proizvoda.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
