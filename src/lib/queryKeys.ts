@@ -1,5 +1,6 @@
-/** Isti limit kao u `pages/Distillery.tsx` za `useQuery` kataloga; koristi se i u invalidaciji posle izmena sa dashboarda. */
-export const DISTILLERY_PUBLIC_PRODUCTS_LIMIT = 300;
+import { DISTILLERY_PUBLIC_PRODUCTS_LIMIT } from "./publicCatalogLimits";
+
+export { DISTILLERY_PUBLIC_PRODUCTS_LIMIT } from "./publicCatalogLimits";
 
 export const queryKeys = {
   community: {

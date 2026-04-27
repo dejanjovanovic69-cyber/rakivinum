@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`DISTILLERY_PUBLIC_PRODUCTS_LIMIT`:** izvezen iz `queryKeys.ts` (300); `distillery.products()` koristi ga kao podrazumevani limit; `Distillery` stranica i dashboard invalidacija dele istu konstantu.
+**Poslednji zapis:** 2026-04-27 — **`publicCatalogLimits.ts`:** `DISTILLERY_PUBLIC_PRODUCTS_LIMIT` je izvor istine; uvezuju ga `queryKeys` (re-eksport), `dataService.fetchPublicProductsByDistilleryId` default i `Distillery` stranica.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

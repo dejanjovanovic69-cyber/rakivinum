@@ -2,6 +2,7 @@
 import { db } from "./firebase";
 import { isQuotaError, readCache, writeCache } from "./resilience";
 import { CACHE_TTL } from "./cachePolicy";
+import { DISTILLERY_PUBLIC_PRODUCTS_LIMIT } from "./publicCatalogLimits";
 import { meterDbRead } from "./requestMeter";
 
 type DistilleryPublic = { id: string; isArchived?: boolean; isVerified?: boolean; [key: string]: unknown };
@@ -336,7 +337,10 @@ export async function fetchPublicDistilleriesByIds(ids: string[]): Promise<Disti
   });
 }
 
-export async function fetchPublicProductsByDistilleryId(distilleryId: string, limitCount = 300): Promise<ProductPublic[]> {
+export async function fetchPublicProductsByDistilleryId(
+  distilleryId: string,
+  limitCount = DISTILLERY_PUBLIC_PRODUCTS_LIMIT,
+): Promise<ProductPublic[]> {
   const safeId = String(distilleryId || "").trim();
   if (!safeId) return [];
   return dedupe(`productsByDistillery:${safeId}:${limitCount}`, async () => {
