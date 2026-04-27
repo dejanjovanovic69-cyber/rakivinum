@@ -99,4 +99,13 @@ test.describe("public routes", () => {
     await page.goto("/activate");
     await expect(page.getByRole("heading", { name: /Aktivacija licence/i })).toBeVisible({ timeout: 25_000 });
   });
+
+  test("label page resolves missing product state", async ({ page }) => {
+    await page.goto("/label/e2e-missing-product-id-00000");
+    const notInDb = page.getByRole("heading", { name: /Proizvod nije u bazi/i });
+    const quota = page.getByRole("heading", { name: /Privremeno nedostupno/i });
+    const archived = page.getByRole("heading", { name: /Proizvod nije dostupan/i });
+    const qrOff = page.getByRole("heading", { name: /Javni pristup je isključen/i });
+    await expect(notInDb.or(quota).or(archived).or(qrOff)).toBeVisible({ timeout: 35_000 });
+  });
 });
