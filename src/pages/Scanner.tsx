@@ -1,15 +1,15 @@
 import { QrCode, Camera, Loader2, MapPin, Search, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
-import { db } from "../lib/firebase";
-import { query, where, getDocs, collection, limit } from "firebase/firestore";
+import { useQueryClient } from "@tanstack/react-query";
 import { fetchPublicProductByBarcodeLookup, fetchPublicProducts, fetchScannerProductById } from "../lib/dataService";
 import { extractActivateTokenFromInput } from '../lib/extractActivateToken';
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { BarcodeFormat, DecodeHintType, NotFoundException } from "@zxing/library";
 import { logProductScan } from "../lib/logProductScan";
-import { meterDbRead } from "../lib/requestMeter";
 import { CACHE_TTL } from "../lib/cachePolicy";
+import { stableQueryOptions } from "../lib/queryDefaults";
+import { queryKeys } from "../lib/queryKeys";
 
 type PendingRatingEntry = {
   id: string;
@@ -37,6 +37,7 @@ type BarcodeDetectorStatic = {
 };
 
 export default function Scanner() {
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
   const [isScanning, setIsScanning] = useState(false);
@@ -62,6 +63,8 @@ export default function Scanner() {
     }
     return "";
   };
+  const handleScanSuccessRef = useRef<(scannedText: string) => Promise<void>>(async () => {});
+
   const updatePendingQueue = (entry: PendingRatingEntry) => {
     localStorage.setItem('rakivinum_pending_rating', JSON.stringify(entry));
     try {
@@ -141,7 +144,7 @@ export default function Scanner() {
               const value = String(first?.rawValue || "").trim();
               if (value) {
                 scanLockRef.current = true;
-                void handleScanSuccess(value).finally(() => {
+                void handleScanSuccessRef.current(value).finally(() => {
                   setTimeout(() => (scanLockRef.current = false), 220);
                 });
               }
@@ -175,7 +178,7 @@ export default function Scanner() {
         const decodeCb = (result: { getText: () => string } | null, err: unknown) => {
           if (result && !scanLockRef.current) {
             scanLockRef.current = true;
-            void handleScanSuccess(result.getText()).finally(() => {
+            void handleScanSuccessRef.current(result.getText()).finally(() => {
               setTimeout(() => {
                 scanLockRef.current = false;
               }, 220);
@@ -282,49 +285,19 @@ export default function Scanner() {
           finalProductData = edgeBarcodeHit as ProductLookupData;
         }
 
-        // Preferred lookup: normalized barcode (fast + format-safe)
-        if (!finalProductId && scannedBarcode) {
-          const qNorm = query(collection(db, "products"), where("barcodeNormalized", "==", scannedBarcode), limit(1));
-          const normSnap = await getDocs(qNorm);
-          meterDbRead("scanner:barcode_normalized_lookup", normSnap.size);
-          if (!normSnap.empty) {
-            finalProductId = normSnap.docs[0].id;
-            finalProductData = normSnap.docs[0].data();
-          }
-        }
-
-        // Fallback A: some records keep digits in raw `barcode` field.
-        if (!finalProductId && scannedBarcode) {
-          const qDigits = query(collection(db, "products"), where("barcode", "==", scannedBarcode), limit(1));
-          const digitsSnap = await getDocs(qDigits);
-          meterDbRead("scanner:barcode_digits_lookup", digitsSnap.size);
-          if (!digitsSnap.empty) {
-            finalProductId = digitsSnap.docs[0].id;
-            finalProductData = digitsSnap.docs[0].data();
-          }
-        }
-
-        // Fallback B: exact raw text match (legacy records / QR payloads).
-        // Skip when raw text is the same as digit-only barcode to avoid duplicate query.
-        if (!finalProductId && (!scannedBarcode || st !== scannedBarcode)) {
-          const q = query(collection(db, "products"), where("barcode", "==", st), limit(1));
-          const querySnapshot = await getDocs(q);
-          meterDbRead("scanner:barcode_raw_lookup", querySnapshot.size);
-          
-          if (!querySnapshot.empty) {
-            finalProductId = querySnapshot.docs[0].id;
-            finalProductData = querySnapshot.docs[0].data();
-          }
-        }
-
         if (!finalProductId) {
           // Robust fallback: normalize barcode and match client-side.
           // Handles values like "860-123 4567890", numeric Firestore fields, etc.
           if (scannedBarcode) {
-            const catalog = await fetchPublicProducts({
-              limitCount: 900,
-              cacheKey: "rakivinum_cache_scanner_barcode_fallback_v1",
-              ttlMs: CACHE_TTL.PRODUCTS_6H,
+            const catalog = await queryClient.fetchQuery({
+              queryKey: queryKeys.scanner.barcodeCatalog(900),
+              queryFn: async () =>
+                fetchPublicProducts({
+                  limitCount: 900,
+                  cacheKey: "rakivinum_cache_scanner_barcode_fallback_v1",
+                  ttlMs: CACHE_TTL.PRODUCTS_6H,
+                }),
+              ...stableQueryOptions(CACHE_TTL.PRODUCTS_6H),
             });
             const hit = catalog.find((row) => {
               const data = row as ProductLookupData;
@@ -379,6 +352,8 @@ export default function Scanner() {
       setIsScanning(false);
     }
   };
+
+  handleScanSuccessRef.current = handleScanSuccess;
 
   return (
     <div className="h-full flex flex-col items-center justify-center p-6 space-y-8 animate-in fade-in duration-500 relative">

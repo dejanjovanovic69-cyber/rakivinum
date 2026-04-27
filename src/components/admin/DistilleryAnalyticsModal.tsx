@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   collection,
   query,
@@ -48,15 +48,11 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
   const [platformAvg, setPlatformAvg] = useState<number | null>(null);
   const [clubMemberCount, setClubMemberCount] = useState(0);
 
-  useEffect(() => {
-    fetchData();
-  }, [distillery.id]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       // 1. Fetch products
-      const qProd = query(collection(db, "products"), where("distilleryId", "==", distillery.id), limit(500));
+      const qProd = query(collection(db, "products"), where("distilleryId", "==", distillery.id), limit(20));
       const pSnap = await getDocs(qProd);
       const prodData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       setProducts(prodData);
@@ -70,7 +66,7 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
         });
       };
       try {
-        const rQ = query(collection(db, 'ratings'), where('distilleryId', '==', distillery.id), limit(400));
+        const rQ = query(collection(db, 'ratings'), where('distilleryId', '==', distillery.id), limit(20));
         const rSnap = await getDocs(rQ);
         addRatingSnap(rSnap);
       } catch (e) {
@@ -80,7 +76,7 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
         const chunk = pIds.slice(i, i + 10);
         if (chunk.length === 0) continue;
         try {
-          const qRat = query(collection(db, "ratings"), where("productId", "in", chunk), limit(120));
+          const qRat = query(collection(db, "ratings"), where("productId", "in", chunk), limit(20));
           const rSnap = await getDocs(qRat);
           addRatingSnap(rSnap);
         } catch (e) {
@@ -101,14 +97,14 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
       try {
         let plat: { rating: number; productId?: string }[] = [];
         try {
-          const platQ = query(collection(db, 'ratings'), orderBy('createdAt', 'desc'), limit(400));
+          const platQ = query(collection(db, 'ratings'), orderBy('createdAt', 'desc'), limit(20));
           const platSnap = await getDocs(platQ);
           plat = parseRatingDocs(platSnap.docs);
         } catch (e) {
           console.warn('Benchmark orderBy(createdAt) nije uspeo — probam uzorak bez sortiranja', e);
         }
         if (plat.length < 5) {
-          const fbSnap = await getDocs(query(collection(db, 'ratings'), limit(400)));
+          const fbSnap = await getDocs(query(collection(db, 'ratings'), limit(20)));
           plat = parseRatingDocs(fbSnap.docs);
         }
         const others = plat.filter((r) => r.productId && !ownProductIds.has(r.productId));
@@ -135,7 +131,11 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
     } finally {
       setLoading(false);
     }
-  };
+  }, [distillery.id]);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const generateAiAnalysis = async () => {
     setGeneratingAi(true);

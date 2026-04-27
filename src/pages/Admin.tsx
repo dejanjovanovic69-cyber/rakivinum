@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { ArrowLeft, Save, Loader2, CheckCircle, Database, Upload, ImageIcon, Trash2, Edit2, Search, ChevronDown, BookOpen, MapPin, Eye, Flag, ShieldAlert, AlertTriangle, Star, Mail, FileText, BarChart2, Building2, ClipboardCopy } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "../lib/firebase";
@@ -255,7 +255,7 @@ export default function Admin() {
           collection(db, "online_presence"),
           where("isOnline", "==", true),
           where("lastSeenMs", ">=", thresholdMs),
-          limit(2000),
+          limit(20),
         );
         const countSnap = await getCountFromServer(qPresence);
         meterDbRead("admin:online_presence_count", 1);
@@ -701,7 +701,7 @@ export default function Admin() {
       }
 
       const allSnap = await getDocs(
-        query(collection(db, "ratings"), where("productId", "==", productId), limit(ADMIN_RATINGS_PER_PRODUCT_LIMIT)),
+        query(collection(db, "ratings"), where("productId", "==", productId), limit(Math.min(20, ADMIN_RATINGS_PER_PRODUCT_LIMIT))),
       );
       const remaining = allSnap.docs.filter((d) => d.id !== id);
       let sum = 0;
@@ -747,7 +747,7 @@ export default function Admin() {
 
   const fetchDistilleries = async () => {
     try {
-      const snap = await getDocs(query(collection(db, 'distilleries'), limit(ADMIN_DISTILLERIES_LIMIT)));
+      const snap = await getDocs(query(collection(db, 'distilleries'), limit(Math.min(20, ADMIN_DISTILLERIES_LIMIT))));
       meterDbRead("admin:distilleries", snap.size);
       const list: DistilleryListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as DistilleryListItem) }));
       list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
@@ -762,7 +762,7 @@ export default function Admin() {
     }
   };
 
-  const fetchAdminProducts = async () => {
+  const fetchAdminProducts = useCallback(async () => {
     try {
       if (!selectedDistilleryId) {
         setAdminProducts([]);
@@ -770,14 +770,14 @@ export default function Admin() {
       }
       // Super admin vidi sve ako želi, ili filtrira po izabranoj destileriji
       if (selectedDistilleryId === "all" && isSuperAdminUser) {
-        const snap = await getDocs(query(collection(db, "products"), limit(ADMIN_PRODUCTS_ALL_LIMIT)));
+        const snap = await getDocs(query(collection(db, "products"), limit(Math.min(20, ADMIN_PRODUCTS_ALL_LIMIT))));
         meterDbRead("admin:products_all", snap.size);
         setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) })));
       } else {
         const q = query(
           collection(db, "products"),
           where("distilleryId", "==", selectedDistilleryId),
-          limit(ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT),
+          limit(Math.min(20, ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT)),
         );
         const snap = await getDocs(q);
         meterDbRead("admin:products_by_distillery", snap.size);
@@ -786,11 +786,11 @@ export default function Admin() {
     } catch (err) {
       console.error("Greška pri učitavanju proizvoda", err);
     }
-  };
+  }, [selectedDistilleryId, isSuperAdminUser]);
 
   const fetchPendingProductApprovals = async () => {
     try {
-      const q = query(collection(db, "products"), where("isApproved", "==", false), limit(ADMIN_PENDING_APPROVALS_LIMIT));
+      const q = query(collection(db, "products"), where("isApproved", "==", false), limit(Math.min(20, ADMIN_PENDING_APPROVALS_LIMIT)));
       const snap = await getDocs(q);
       meterDbRead("admin:products_pending_approvals", snap.size);
       const list: ProductListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) }));
@@ -807,7 +807,7 @@ export default function Admin() {
 
   const fetchEventProposals = async () => {
     try {
-      const snap = await getDocs(query(collection(db, 'eventProposals'), limit(ADMIN_EVENT_PROPOSALS_LIMIT)));
+      const snap = await getDocs(query(collection(db, 'eventProposals'), limit(Math.min(20, ADMIN_EVENT_PROPOSALS_LIMIT))));
       setEventProposals(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch (err) {
       console.error("Error fetching event proposals:", err);
@@ -816,7 +816,7 @@ export default function Admin() {
 
   const fetchCommunityLinks = async () => {
     try {
-      const snap = await getDocs(query(collection(db, 'community_links'), limit(ADMIN_LINKS_LIMIT)));
+      const snap = await getDocs(query(collection(db, 'community_links'), limit(Math.min(20, ADMIN_LINKS_LIMIT))));
       const list: CommunityLinkItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityLinkItem) }));
       list.sort((a, b) => (a.label || "").localeCompare(b.label || "", 'sr'));
       setCommunityLinks(list);
@@ -827,7 +827,7 @@ export default function Admin() {
 
   const fetchCommunityEvents = async () => {
     try {
-      const snap = await getDocs(query(collection(db, 'community_events'), limit(ADMIN_EVENTS_LIMIT)));
+      const snap = await getDocs(query(collection(db, 'community_events'), limit(Math.min(20, ADMIN_EVENTS_LIMIT))));
       const list: CommunityEventItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityEventItem) }));
       list.sort((a, b) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
       setCommunityEvents(list);
@@ -839,7 +839,7 @@ export default function Admin() {
   const fetchFlaggedRatings = async () => {
     try {
       // Query for ratings where isFlagged is true OR it was auto-flagged
-      const q = query(collection(db, "ratings"), where("isFlagged", "==", true), limit(ADMIN_FLAGGED_RATINGS_LIMIT));
+      const q = query(collection(db, "ratings"), where("isFlagged", "==", true), limit(Math.min(20, ADMIN_FLAGGED_RATINGS_LIMIT)));
       const snap = await getDocs(q);
       setFlaggedRatings(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch (err) {
@@ -849,7 +849,7 @@ export default function Admin() {
 
   const fetchRecentRatings = async () => {
     try {
-      const q = query(collection(db, 'ratings'), limit(300));
+      const q = query(collection(db, 'ratings'), limit(20));
       const snap = await getDocs(q);
       meterDbRead("admin:ratings_recent", snap.size);
       setAllRatings(snap.docs.map(d => ({ id: d.id, ...d.data() } as RatingRow)).sort((a, b) => 
@@ -862,7 +862,7 @@ export default function Admin() {
 
   const fetchBlockedUsers = async () => {
     try {
-      const snap = await getDocs(query(collection(db, 'blocked_users'), limit(ADMIN_BLOCKED_USERS_LIMIT)));
+      const snap = await getDocs(query(collection(db, 'blocked_users'), limit(Math.min(20, ADMIN_BLOCKED_USERS_LIMIT))));
       setBlockedUsers(snap.docs.map(d => d.id));
     } catch (err) {
       console.error("Error fetching blocked users:", err);
@@ -914,7 +914,7 @@ export default function Admin() {
 
   const fetchLicenses = async () => {
     try {
-      const snap = await getDocs(query(collection(db, 'licenses'), limit(ADMIN_LICENSES_LIMIT)));
+      const snap = await getDocs(query(collection(db, 'licenses'), limit(Math.min(20, ADMIN_LICENSES_LIMIT))));
       setLicenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     } catch (err) {
       console.error("Error fetching licenses:", err);
@@ -1199,8 +1199,8 @@ export default function Admin() {
   }, []);
 
   useEffect(() => {
-    fetchAdminProducts();
-  }, [selectedDistilleryId]);
+    void fetchAdminProducts();
+  }, [fetchAdminProducts]);
 
   const handleSaveCommunityLink = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`AdminAudit`:** bundle read (`rating_logs`, `users`, `abuse_blocks`) prebačen na jedan `useQuery` (`queryKeys.adminAudit.bundle()`), `stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M)`, `placeholderData` iz lokalnog keša; uklonjeni focus/visibility refetch listeneri; posle `toggleBlockUser` / `toggleSourceBlock` ide `invalidateQueries` da UI prati mutacije.
+**Poslednji zapis:** 2026-04-27 — **`react-hooks/exhaustive-deps`:** ispravljeni build-gate lint upozori na više ekrana (`DistilleryAnalyticsModal` `fetchData` + `useCallback`; `Admin` `fetchAdminProducts` + `useCallback`; `DistilleryDashboard` kompletan `distillery` u deps; `Label` modul-nivo `EMPTY_LABEL_PAYLOAD` + keš helperi, `logProductScan` efekat sa `productData`; `Menu` ref za `showDomainError` u mount auth efektu; `ProductAnalytics` stabilni prazni nizovi; `Scanner` ref za `handleScanSuccess`). `npm run lint` ponovo prolazi.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

@@ -1,5 +1,6 @@
 import { Settings, Moon, Bell, Shield, Wallet, Book, LogOut, Database, BarChart3, ShieldAlert, X, Bookmark, QrCode, Award, Lock, Users, Globe } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { app, auth, db } from "../lib/firebase";
 import { getFirebaseRedirectResultOnce } from "../lib/firebaseRedirectResult";
 import { collection, query, where, getDocs, limit, updateDoc, doc, serverTimestamp } from "firebase/firestore";
@@ -17,9 +18,10 @@ import {
 import { useNavigate } from "react-router-dom";
 import { isSuperuserEmail } from "../lib/authz";
 import { normalizeLicenseToken } from "../lib/extractActivateToken";
-import { shouldRunRefresh } from "../lib/refreshGate";
 import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { fetchCommunityLinks, fetchPublicClubMembershipsByVisitorId, fetchPublicDistilleriesByIds } from "../lib/dataService";
+import { stableQueryOptions } from "../lib/queryDefaults";
+import { queryKeys } from "../lib/queryKeys";
 import {
   ACHIEVEMENT_EVENT_NAME,
   BADGE_DEFS,
@@ -146,11 +148,7 @@ export default function Menu() {
   const [guideTab, setGuideTab] = useState<"guide" | "badges">("guide");
   const [pendingRatingsCount, setPendingRatingsCount] = useState(0);
   const [achievementSummary, setAchievementSummary] = useState(() => getAchievementSummary());
-  /** Klubovi vezani za uređaj (visitorId) — važi i za gosta i za prijavljenog korisnika. */
-  const [joinedClubsMenu, setJoinedClubsMenu] = useState<{ id: string; name: string }[]>([]);
-  const [joinedClubsMenuReady, setJoinedClubsMenuReady] = useState(false);
-  const [helpLinks, setHelpLinks] = useState<{ id: string; label: string; url: string }[]>([]);
-  const [helpLinksReady, setHelpLinksReady] = useState(false);
+  const visitorId = localStorage.getItem("rakivinum_visitor_id");
   const navigate = useNavigate();
   const getFnErrorCode = (err: unknown) => String((err as { code?: unknown } | null)?.code || "");
 
@@ -169,6 +167,8 @@ export default function Menu() {
       console.warn("Failed to update last app access", e);
     }
   };
+
+  const showDomainErrorRef = useRef<(raw?: string) => void>(() => {});
 
   useEffect(() => {
     // Keep auth session persistent across reloads and redirects
@@ -189,7 +189,7 @@ export default function Menu() {
         if (menuRedirectAuthErrorShown) return;
         menuRedirectAuthErrorShown = true;
         if (error.code === 'auth/unauthorized-domain') {
-          showDomainError(error.message);
+          showDomainErrorRef.current(error.message);
         } else {
           alert(`Greška prijave (${error.code || "unknown"}): ${error.message || "Pokušajte ponovo."}`);
         }
@@ -267,35 +267,23 @@ export default function Menu() {
     return unsub;
   }, []);
 
-  useEffect(() => {
-    let mounted = true;
-    const loadHelpLinks = async () => {
-      try {
-        const rows = await fetchCommunityLinks({
-          limitCount: 80,
-          cacheKey: "rakivinum_cache_menu_help_links_v1",
-          ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
-        });
-        if (mounted) {
-          setHelpLinks(
-            rows.map((x) => ({
-              id: String(x.id),
-              label: String(x.label || "Link"),
-              url: String(x.url),
-            })),
-          );
-        }
-      } catch {
-        if (mounted) setHelpLinks([]);
-      } finally {
-        if (mounted) setHelpLinksReady(true);
-      }
-    };
-    void loadHelpLinks();
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  const helpLinksQuery = useQuery<{ id: string; label: string; url: string }[]>({
+    queryKey: queryKeys.menu.helpLinks(),
+    queryFn: async () => {
+      const rows = await fetchCommunityLinks({
+        limitCount: 80,
+        cacheKey: "rakivinum_cache_menu_help_links_v1",
+        ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
+      });
+      return rows.map((x) => ({
+        id: String(x.id),
+        label: String(x.label || "Link"),
+        url: String(x.url),
+      }));
+    },
+    initialData: [],
+    ...stableQueryOptions(CACHE_TTL.COMMUNITY_EVENTS_6H),
+  });
 
   useEffect(() => {
     const syncAchievements = () => setAchievementSummary(getAchievementSummary());
@@ -310,79 +298,57 @@ export default function Menu() {
     };
   }, []);
 
-  useEffect(() => {
-    const visitorId = localStorage.getItem("rakivinum_visitor_id");
-    if (!visitorId) {
-      setJoinedClubsMenu([]);
-      setJoinedClubsMenuReady(true);
-      return;
-    }
+  const joinedClubsQuery = useQuery<{ id: string; name: string }[]>({
+    queryKey: queryKeys.menu.joinedClubs(visitorId),
+    enabled: Boolean(visitorId),
+    queryFn: async () => {
+      if (!visitorId) return [];
+      const storageKey = `clubs_${visitorId}`;
+      const mergeIdsFromFirestore = (firestoreIds: string[]) => {
+        let localJoined: string[] = [];
+        try {
+          const parsed = JSON.parse(localStorage.getItem(storageKey) || "[]");
+          localJoined = Array.isArray(parsed) ? parsed.filter((x: unknown) => typeof x === "string") : [];
+        } catch {
+          localJoined = [];
+        }
+        return Array.from(new Set([...firestoreIds, ...localJoined])).filter(Boolean);
+      };
 
-    const storageKey = `clubs_${visitorId}`;
-
-    const mergeIdsFromFirestore = (firestoreIds: string[]) => {
-      let localJoined: string[] = [];
-      try {
-        const parsed = JSON.parse(localStorage.getItem(storageKey) || "[]");
-        localJoined = Array.isArray(parsed) ? parsed.filter((x: unknown) => typeof x === "string") : [];
-      } catch {
-        localJoined = [];
-      }
-      return Array.from(new Set([...firestoreIds, ...localJoined])).filter(Boolean);
-    };
-
-    const resolveClubRows = async (ids: string[]) => {
-      const distilleryRows = await fetchPublicDistilleriesByIds(ids);
-      const byId = new Map<string, DistilleryOwnershipRow & { name?: string }>(
-        distilleryRows.map((row) => [String(row.id), row as DistilleryOwnershipRow & { name?: string }]),
-      );
-
-      const rows = ids
-        .map((id) => {
-          const data = byId.get(String(id));
-          if (!data || data.isArchived) return null;
-          const name = String(data.name || "").trim() || "Klub";
-          return { id, name };
-        })
-        .filter((r): r is { id: string; name: string } => r !== null);
-
-      setJoinedClubsMenu(rows);
-      setJoinedClubsMenuReady(true);
-    };
-
-    const refreshJoinedClubs = async () => {
+      let merged: string[] = [];
       try {
         const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);
         const fromFs = memberships
           .map((m) => m.distilleryId)
           .filter((x): x is string => typeof x === "string" && x.length > 0);
-        const merged = mergeIdsFromFirestore(fromFs);
-        await resolveClubRows(merged);
+        merged = mergeIdsFromFirestore(fromFs);
       } catch (err) {
         console.warn("Menu: club_memberships refresh", err);
-        const merged = mergeIdsFromFirestore([]);
-        await resolveClubRows(merged);
+        merged = mergeIdsFromFirestore([]);
       }
-    };
 
-    void refreshJoinedClubs();
-    const onFocusRefresh = () => {
-      if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh("menu:focus-joined-clubs", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
-      void refreshJoinedClubs();
-    };
-    const onVisibilityRefresh = () => {
-      if (document.visibilityState !== "visible") return;
-      onFocusRefresh();
-    };
-    window.addEventListener("focus", onFocusRefresh);
-    document.addEventListener("visibilitychange", onVisibilityRefresh);
+      const distilleryRows = await fetchPublicDistilleriesByIds(merged);
+      const byId = new Map<string, DistilleryOwnershipRow & { name?: string }>(
+        distilleryRows.map((row) => [String(row.id), row as DistilleryOwnershipRow & { name?: string }]),
+      );
 
-    return () => {
-      window.removeEventListener("focus", onFocusRefresh);
-      document.removeEventListener("visibilitychange", onVisibilityRefresh);
-    };
-  }, []);
+      return merged
+        .map((clubId) => {
+          const data = byId.get(String(clubId));
+          if (!data || data.isArchived) return null;
+          const name = String(data.name || "").trim() || "Klub";
+          return { id: clubId, name };
+        })
+        .filter((row): row is { id: string; name: string } => row !== null);
+    },
+    initialData: [],
+    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
+  });
+
+  const joinedClubsMenu = joinedClubsQuery.data || [];
+  const joinedClubsMenuReady = !joinedClubsQuery.isFetching;
+  const helpLinks = helpLinksQuery.data || [];
+  const helpLinksReady = !helpLinksQuery.isFetching;
 
   useEffect(() => {
     const syncPendingCount = () => {
@@ -429,6 +395,13 @@ export default function Menu() {
       window.removeEventListener("rakivinum_pending_ratings_changed", syncPendingCount as EventListener);
     };
   }, []);
+
+  const googleProvider = () => {
+    const provider = new GoogleAuthProvider();
+    auth.languageCode = 'sr';
+    provider.setCustomParameters({ prompt: 'select_account' });
+    return provider;
+  };
 
   const showDomainError = (rawError?: string) => {
     const currentDomain = window.location.hostname;
@@ -488,13 +461,7 @@ export default function Menu() {
       )
     });
   };
-
-  const googleProvider = () => {
-    const provider = new GoogleAuthProvider();
-    auth.languageCode = 'sr';
-    provider.setCustomParameters({ prompt: 'select_account' });
-    return provider;
-  };
+  showDomainErrorRef.current = showDomainError;
 
   /**
    * Uvek prvo popup: na mobilnom Chrome-u redirect često ostavi korisnika kao „gost“ posle Google-a,
