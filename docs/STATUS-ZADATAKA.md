@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-28 — **Playwright:** `/community?tab=reviews` (eksplicitni deep link na Utiske). Potvrđeno: `react-hooks/exhaustive-deps` već **error** u `eslint.config.js`; compare persist u `useCommunityData` već na **500ms** debounce pre `sessionStorage`. Radna kopija: uklonjen lažni `M` na `dataService.ts` (sadržaj identičan HEAD-u, tipično CRLF/keš). **Sledeće:** Faza 4 — trend Firestore usage + povremeni `cf:smoke:edge` / `cf:monitor:edge` bez novih endpointa dok metrika ne pokaže usko grlo.
+**Poslednji zapis:** 2026-04-28 — **PWA / Workbox (`vite.config.ts`):** `navigateFallbackDenylist` i `NetworkFirst` navigacija prošireni na ceo pathname prefiks `/community` (uključujući buduće podrute), da SW ne servira zaleđeni SPA shell umesto svežeg HTML-a. Ranije istog dana: Playwright `tab=reviews`; Faza 4 checkpoint smoke. **Sledeće:** Firestore usage trend + `cf:smoke:edge` / `cf:monitor:edge`; bez novih Worker endpointa dok metrika ne traži.
 
 **Ranije (2026-04-27):** Playwright `/community?tab=compare&cf=sljivovica`; search `pf`/`q`, compare `lq`/`rq`, AGENTS/QA-E2E smoke, visitor/token repeat, Worker KV.
 

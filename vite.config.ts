@@ -28,12 +28,13 @@ export default defineConfig(({mode}) => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB limit
-          // Do not hijack Firebase / Google auth return navigations with cached index.html
-          navigateFallbackDenylist: [/^\/__\//, /^\/firebase-auth/, /^\/community(?:\/)?$/],
+          // Do not serve stale SPA shell for Community (query deep-links share pathname `/community`).
+          // Deny navigateFallback for the whole `/community` subtree so Workbox never hijacks with precached `index.html`.
+          navigateFallbackDenylist: [/^\/__\//, /^\/firebase-auth/, /^\/community(\/.*)?$/],
           runtimeCaching: [
             {
               urlPattern: ({ request, url }) =>
-                request.mode === 'navigate' && /^\/community(?:\/)?$/.test(url.pathname),
+                request.mode === 'navigate' && /^\/community(\/.*)?$/.test(url.pathname),
               handler: 'NetworkFirst',
               options: {
                 cacheName: 'community-navigation',
