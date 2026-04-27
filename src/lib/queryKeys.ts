@@ -23,6 +23,8 @@ export const queryKeys = {
     products: (id: string, limit: number) => ["distillery", "products", id, limit] as const,
     membership: (id: string, visitorId: string | null) =>
       ["distillery", "membership", id, visitorId ?? "guest"] as const,
+    /** Prefiks za `invalidateQueries` — svi `membership` upiti za datu destileriju (svi visitorId). */
+    membershipPrefix: (distilleryId: string) => ["distillery", "membership", distilleryId] as const,
     memberCount: (id: string) => ["distillery", "member-count", id] as const,
   },
   menu: {

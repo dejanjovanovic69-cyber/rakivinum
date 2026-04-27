@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`invalidateVisitorClubCaches`:** zajednički helper (`src/lib/invalidateClubCaches.ts`) za `myClubs` + `menu.joinedClubs` + `home.clubs`; koriste **Distillery** i **Moji klubovi** posle promene članstva.
+**Poslednji zapis:** 2026-04-27 — **`DistilleryDashboard` + javni profil:** posle `invalidateDashboardReads` (dodavanje proizvoda, izmene, klub setup) invalidira se i `distillery.profile` / `products(300)` / `memberCount` / `membershipPrefix` za aktivnu destileriju da `/distillery/:id` keš ne ostane star. **`queryKeys.distillery.membershipPrefix(id)`**.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
