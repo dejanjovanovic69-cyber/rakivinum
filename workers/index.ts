@@ -923,7 +923,7 @@ export default {
       if (url.pathname === "/api/public/ratings-feed") {
         return servePublicCached(request, env, async () => {
           const limitCount = parseLimit(url, 20, 80);
-          const rows = await fetchCollection(env, "ratings", FIRESTORE_LIST_MAX);
+          const rows = await fetchCollection(env, "ratings", 120);
           const filtered = rows
             .filter((r) => r.isFlagged !== true)
             .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
@@ -939,7 +939,7 @@ export default {
           env,
           async () => {
             const limitCount = parseLimit(url, 20, 80);
-            const rows = await fetchCollection(env, "club_actions", FIRESTORE_LIST_MAX);
+            const rows = await fetchCollection(env, "club_actions", 120);
             const items = rows
               .filter((r) => r.isActive === true)
               .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
@@ -1018,7 +1018,7 @@ export default {
             );
             if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
             const limitCount = parseLimit(url, 40, 120);
-            const fetchCap = Math.min(FIRESTORE_LIST_MAX, Math.max(limitCount, 1));
+            const fetchCap = Math.min(200, Math.max(limitCount * 3, 80));
             const rows = await fetchCollectionWhereEquals(env, "club_actions", "distilleryId", distilleryId, fetchCap);
             const items = rows
               .filter((r) => r.isActive === true)
