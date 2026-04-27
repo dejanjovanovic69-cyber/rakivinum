@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`AdminAudit`:** `queryKeys.adminAudit.scope()`, dugme „Osveži podatke“ + `useIsFetching`, `setQueryData` posle blok/izvor mutacija. **`Admin`:** i dalje `useIsFetching` + `queryKeys.admin.scope()` za globalno osvežavanje.
+**Poslednji zapis:** 2026-04-27 — **`queryKeys.distilleryDashboard.scope()`:** `invalidateDashboardReads` sada jednom invalidira prefiks `["distillery-dashboard"]` (core + club actions + member count). **`AdminAudit` / `Admin`:** bez promene ponašanja od prethodnog zapisa.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

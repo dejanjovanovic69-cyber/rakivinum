@@ -45,6 +45,8 @@ export const queryKeys = {
     page: (productId: string) => ["label", "page", productId] as const,
   },
   distilleryDashboard: {
+    /** Svi dashboard upiti (core po uid, club actions, member count). */
+    scope: () => ["distillery-dashboard"] as const,
     core: (uid: string) => ["distillery-dashboard", "core", uid] as const,
     clubActions: (distilleryId: string) => ["distillery-dashboard", "club-actions", distilleryId] as const,
     clubMembersCount: (distilleryId: string) => ["distillery-dashboard", "club-members-count", distilleryId] as const,

@@ -288,15 +288,8 @@ export default function DistilleryDashboard() {
 
   const queryClient = useQueryClient();
   const invalidateDashboardReads = useCallback(() => {
-    if (authUser?.uid) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.distilleryDashboard.core(authUser.uid) });
-    }
-    const did = distillery?.id;
-    if (did) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.distilleryDashboard.clubActions(did) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.distilleryDashboard.clubMembersCount(did) });
-    }
-  }, [authUser?.uid, distillery?.id, queryClient]);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.distilleryDashboard.scope() });
+  }, [queryClient]);
 
   useEffect(() => {
     if (!authReady) return;
