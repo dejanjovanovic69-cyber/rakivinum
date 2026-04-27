@@ -82,6 +82,14 @@ test.describe("public routes", () => {
     await expect(page.getByPlaceholder(/Pretraži proizvode/i)).toHaveValue("rakija-smoke", { timeout: 25_000 });
   });
 
+  test("community search tab applies pf from URL", async ({ page }) => {
+    await page.goto("/community?tab=search&pf=sljivovica");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    const sljFilter = page.getByRole("button", { name: "Šljivovica" });
+    await expect(sljFilter).toBeVisible({ timeout: 25_000 });
+    await expect(sljFilter).toHaveClass(/bg-gold-500/);
+  });
+
   test("collection route: guest empty or archive shell", async ({ page }) => {
     await page.goto("/collection");
     const guestEmpty = page.getByRole("heading", { name: /Kolekcija čeka/i });
