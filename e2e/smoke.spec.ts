@@ -35,4 +35,10 @@ test.describe("public routes", () => {
       timeout: 25_000,
     });
   });
+
+  test("community compare tab deep link", async ({ page }) => {
+    await page.goto("/community?tab=compare");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByRole("heading", { name: /Uporedi 2 artikla/i })).toBeVisible({ timeout: 25_000 });
+  });
 });
