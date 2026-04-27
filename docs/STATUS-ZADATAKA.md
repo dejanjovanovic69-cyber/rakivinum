@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` proizvodi bez invalidacije:** uveden je `patchAllAdminProductCaches` (`setQueriesData` na prefiks `["admin","products"]`) za proseke posle brisanja ocene, odobrenje proizvoda, verifikaciju destilerije (bulk `isApproved`), brisanje destilerije (filter po `distilleryId`) i arhivu (`isArchivedByDistillery`). Uklonjen je `invalidateAdminProducts`. Ostaje ručno „Osveži“ (`invalidateAdminCoreBundle`).
+**Poslednji zapis:** 2026-04-27 — **`Admin` ručno osvežavanje:** dugme „Osveži“ (tab odobrenja) sada invalidira prefiks `["admin"]` pa se paralelno refetch-uju core, moderation, licensing i svi `products` keševi. I dalje važi `patchAllAdminProductCaches` posle mutacija umesto `invalidateAdminProducts`.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

@@ -265,8 +265,9 @@ export default function Admin() {
 
   const queryClient = useQueryClient();
 
-  const invalidateAdminCoreBundle = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.coreBundle() });
+  /** Refetch sve TanStack admin upite (core, moderation, licensing, products). */
+  const refreshAllAdminQueries = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["admin"] });
   }, [queryClient]);
 
   /** Patch every cached admin product list (all distillery / super “all” keys). */
@@ -2492,7 +2493,7 @@ export default function Admin() {
               </p>
             </div>
             <button
-              onClick={() => invalidateAdminCoreBundle()}
+              onClick={() => refreshAllAdminQueries()}
               className="px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase"
             >
               Osveži
