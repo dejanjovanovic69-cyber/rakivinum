@@ -138,7 +138,7 @@ export default function AdminAudit() {
   const auditQueriesFetching = useIsFetching({ queryKey: queryKeys.adminAudit.scope() });
 
   const refreshAuditBundle = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.adminAudit.bundle() });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.adminAudit.scope() });
   }, [queryClient]);
 
   const goBackSafe = () => {

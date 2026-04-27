@@ -30,6 +30,7 @@ export const queryKeys = {
     joinedClubs: (visitorId: string | null) => ["menu", "joined-clubs", visitorId ?? "guest"] as const,
   },
   myClubs: {
+    scope: () => ["my-clubs"] as const,
     list: (visitorId: string | null) => ["my-clubs", "list", visitorId ?? "guest"] as const,
   },
   scanner: {

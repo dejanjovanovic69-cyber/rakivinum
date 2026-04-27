@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`queryKeys.distilleryDashboard.scope()`:** `invalidateDashboardReads` sada jednom invalidira prefiks `["distillery-dashboard"]` (core + club actions + member count). **`AdminAudit` / `Admin`:** bez promene ponašanja od prethodnog zapisa.
+**Poslednji zapis:** 2026-04-27 — **`MyClubs` / keš:** posle napuštanja kluba invalidira se `myClubs` scope, plus `menu.joinedClubs` i `home.clubs` za isti `visitorId` da Menu/Home ne ostanu zastareli. **`queryKeys.myClubs.scope()`**; **`AdminAudit`** ručno osvežavanje koristi `adminAudit.scope()` umesto samo `bundle()`.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
