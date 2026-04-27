@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **smoke-edge:** opcioni `-SampleVisitorId` / `-SampleLicenseToken` sada i `*-repeat` (KV). Ranije: `community-events`, by-ids, distillery/product detail, ostale javne rute, Playwright, Worker KV.
+**Poslednji zapis:** 2026-04-27 — **docs:** `QA-E2E.md` — sekcija za `cf:smoke:edge` i opcione PS parametre. Ranije: smoke opcioni repeat, `community-events`/by-ids/detail, Playwright, Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
@@ -8,7 +8,7 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 "Prvo procitaj `AGENTS.md` i `docs/STATUS-ZADATAKA.md`, pa nastavi od tamo."
 
 **Brza lokalna provera (bez eksternih testera):**  
-`npm run cf:smoke:edge` (proverava health + glavne public Worker rute i vraca status/latenciju/payload size).
+`npm run cf:smoke:edge` (proverava health + glavne public Worker rute i vraca status/latenciju/payload size; opcioni visitor/token: `docs/QA-E2E.md`).
 
 **Resilient deploy (kad Cloudflare vrati 500/10500):**  
 `npm run cf:deploy:resilient` (retry Worker deploy + Pages deploy sa `functions` workaround-om).
