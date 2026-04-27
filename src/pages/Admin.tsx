@@ -269,9 +269,13 @@ export default function Admin() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.admin.coreBundle() });
   }, [queryClient]);
 
-  const invalidateAdminProducts = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["admin", "products"] });
-  }, [queryClient]);
+  /** Patch every cached admin product list (all distillery / super “all” keys). */
+  const patchAllAdminProductCaches = useCallback(
+    (updater: (prev: ProductListItem[] | undefined) => ProductListItem[] | undefined) => {
+      queryClient.setQueriesData<ProductListItem[]>({ queryKey: ["admin", "products"] }, updater);
+    },
+    [queryClient],
+  );
 
   const adminCoreQuery = useQuery({
     queryKey: queryKeys.admin.coreBundle(),
@@ -962,7 +966,12 @@ export default function Admin() {
           allRatings: prev.allRatings.filter((r) => r.id !== id),
         };
       });
-      invalidateAdminProducts();
+      patchAllAdminProductCaches((prev) => {
+        if (!prev || !prev.some((p) => p.id === productId)) return prev;
+        return prev.map((p) =>
+          p.id === productId ? { ...p, averageRating: avg, ratingCount: count } : p,
+        );
+      });
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju ocene ili ažuriranju proseka proizvoda.");
@@ -1078,7 +1087,19 @@ export default function Admin() {
           pendingProductApprovals: prev.pendingProductApprovals.filter((p) => p.id !== productId),
         };
       });
-      invalidateAdminProducts();
+      patchAllAdminProductCaches((prev) => {
+        if (!prev || !prev.some((p) => p.id === productId)) return prev;
+        return prev.map((p) =>
+          p.id === productId
+            ? {
+                ...p,
+                isApproved: true,
+                approvedAt: Timestamp.now(),
+                approvedBy: auth.currentUser?.email || "admin",
+              }
+            : p,
+        );
+      });
       alert("Proizvod odobren!");
     } catch (err) {
       console.error(err);
@@ -1568,7 +1589,14 @@ export default function Admin() {
           pendingProductApprovals: pending,
         };
       });
-      invalidateAdminProducts();
+      if (nextVerified) {
+        patchAllAdminProductCaches((prev) => {
+          if (!prev) return prev;
+          return prev.map((p) =>
+            p.distilleryId === id && p.isApproved === false ? { ...p, isApproved: true } : p,
+          );
+        });
+      }
     } catch (err) {
       console.error("Greška pri promeni statusa:", err);
       alert("Niste ovlašćeni za ovu akciju.");
@@ -1778,7 +1806,7 @@ export default function Admin() {
           pendingProductApprovals: prev.pendingProductApprovals.filter((p) => p.distilleryId !== id),
         };
       });
-      invalidateAdminProducts();
+      patchAllAdminProductCaches((prev) => (prev ? prev.filter((p) => p.distilleryId !== id) : prev));
       setManualResult("Destilerija i sve njene rakije su uspešno obrisane.");
     } catch (err: unknown) {
       console.error(err);
@@ -1856,7 +1884,12 @@ export default function Admin() {
           ),
         };
       });
-      invalidateAdminProducts();
+      patchAllAdminProductCaches((prev) => {
+        if (!prev) return prev;
+        return prev.map((p) =>
+          p.distilleryId === dist.id ? { ...p, isArchivedByDistillery: nextArchived } : p,
+        );
+      });
     } catch (err: unknown) {
       console.error(err);
       setManualResult("Greška pri arhiviranju: " + ((err as { message?: string } | null)?.message || "Nepoznata greška."));

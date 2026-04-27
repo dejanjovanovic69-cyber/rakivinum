@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`Admin` dodavanje/izmena destilerije:** `handleAddDistillery` više ne radi `refetchQueries` na `core-bundle`; lista destilerija u kešu se ažurira `setQueryData` (nova stavka ili merge polja, uključujući brisanje `mapsUrl` / `email` u kešu kad Firestore dobija `deleteField`). Ostaje ručno „Osveži“ i `invalidateAdminProducts()` za agregate / masovne izmene proizvoda.
+**Poslednji zapis:** 2026-04-27 — **`Admin` proizvodi bez invalidacije:** uveden je `patchAllAdminProductCaches` (`setQueriesData` na prefiks `["admin","products"]`) za proseke posle brisanja ocene, odobrenje proizvoda, verifikaciju destilerije (bulk `isApproved`), brisanje destilerije (filter po `distilleryId`) i arhivu (`isArchivedByDistillery`). Uklonjen je `invalidateAdminProducts`. Ostaje ručno „Osveži“ (`invalidateAdminCoreBundle`).
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
