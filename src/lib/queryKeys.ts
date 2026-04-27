@@ -1,3 +1,6 @@
+/** Isti limit kao u `pages/Distillery.tsx` za `useQuery` kataloga; koristi se i u invalidaciji posle izmena sa dashboarda. */
+export const DISTILLERY_PUBLIC_PRODUCTS_LIMIT = 300;
+
 export const queryKeys = {
   community: {
     ratings: () => ["community", "ratings"] as const,
@@ -20,7 +23,8 @@ export const queryKeys = {
   },
   distillery: {
     profile: (id: string) => ["distillery", "profile", id] as const,
-    products: (id: string, limit: number) => ["distillery", "products", id, limit] as const,
+    products: (id: string, limit: number = DISTILLERY_PUBLIC_PRODUCTS_LIMIT) =>
+      ["distillery", "products", id, limit] as const,
     membership: (id: string, visitorId: string | null) =>
       ["distillery", "membership", id, visitorId ?? "guest"] as const,
     /** Prefiks za `invalidateQueries` — svi `membership` upiti za datu destileriju (svi visitorId). */

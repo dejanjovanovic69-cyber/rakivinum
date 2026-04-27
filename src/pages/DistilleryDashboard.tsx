@@ -292,7 +292,7 @@ export default function DistilleryDashboard() {
     const did = distillery?.id;
     if (did) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.profile(did) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.products(did, 300) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.products(did) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.memberCount(did) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.membershipPrefix(did) });
     }

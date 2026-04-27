@@ -9,7 +9,7 @@ import { recordClubMembershipAchievement } from "../lib/achievements";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { readCache, writeCache } from "../lib/resilience";
 import { stableQueryOptions } from "../lib/queryDefaults";
-import { queryKeys } from "../lib/queryKeys";
+import { queryKeys, DISTILLERY_PUBLIC_PRODUCTS_LIMIT } from "../lib/queryKeys";
 import { invalidateVisitorClubCaches } from "../lib/invalidateClubCaches";
 import {
   fetchPublicClubMembershipCount,
@@ -157,11 +157,16 @@ export default function Distillery() {
   });
 
   const productsQuery = useQuery<ProductCard[]>({
-    queryKey: id ? queryKeys.distillery.products(id, 300) : ["distillery", "products", "missing", 300] as const,
+    queryKey: id
+      ? queryKeys.distillery.products(id)
+      : (["distillery", "products", "missing", DISTILLERY_PUBLIC_PRODUCTS_LIMIT] as const),
     enabled: Boolean(id),
     queryFn: async () => {
       if (!id) return [];
-      const filteredProducts = await fetchPublicProductsByDistilleryId(id, 300) as ProductCard[];
+      const filteredProducts = await fetchPublicProductsByDistilleryId(
+        id,
+        DISTILLERY_PUBLIC_PRODUCTS_LIMIT,
+      ) as ProductCard[];
       if (productsCacheKey) writeCache(productsCacheKey, filteredProducts, REFRESH_INTERVAL.USER_LIGHT_1H);
       return filteredProducts;
     },
