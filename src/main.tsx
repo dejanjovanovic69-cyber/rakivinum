@@ -6,6 +6,9 @@ import './lib/requestMeter';
 import './index.css';
 import { registerSW } from 'virtual:pwa-register';
 import { getFirebaseRedirectResultOnce } from './lib/firebaseRedirectResult';
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+const queryClient = new QueryClient();
 
 function normalizeNameLikeValue(value: unknown): string {
   if (typeof value === "string") return value;
@@ -100,7 +103,9 @@ async function bootstrap() {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <ErrorBoundary>
-        <App />
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
       </ErrorBoundary>
     </StrictMode>,
   );

@@ -1,6 +1,7 @@
 import { ArrowRight, Trophy, Droplet, Flame, ArrowUpRight, Sparkles, Star, Clock, Download, ShieldAlert, X, Gift, Ticket, CheckCircle2 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { auth, db } from "../lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import { collection, query, where, getDocs, getDoc, doc, getCountFromServer, orderBy, limit } from "firebase/firestore";
@@ -14,9 +15,10 @@ import {
   fetchPublicProductById,
   fetchPublicProducts,
 } from "../lib/dataService";
-import { shouldRunRefresh } from "../lib/refreshGate";
 import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
+import { stableQueryOptions } from "../lib/queryDefaults";
+import { queryKeys } from "../lib/queryKeys";
 
 type ProductLite = {
   id: string;
@@ -56,7 +58,38 @@ type ClubActionLite = {
   targetValue?: number;
 };
 
+function pickFromPool(pool: ProductLite[], historyKey: string): ProductLite | null {
+  if (pool.length === 0) return null;
+  const today = new Date().toISOString().split("T")[0];
+  const raw = localStorage.getItem(historyKey) || "[]";
+  const history = (() => {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  })() as string[];
+
+  const historySet = new Set(history);
+  const freshPool = pool.filter((product) => !historySet.has(product.id));
+  const candidatePool = freshPool.length > 0 ? freshPool : pool;
+
+  let hash = 0;
+  for (let i = 0; i < today.length; i++) {
+    hash = today.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  hash += history.length * 37;
+  const picked = candidatePool[Math.abs(hash) % candidatePool.length];
+
+  const nextHistory = [picked.id, ...history.filter((id) => id !== picked.id)].slice(0, 7);
+  localStorage.setItem(historyKey, JSON.stringify(nextHistory));
+  return picked;
+}
+
 export default function Home() {
+  const HOME_PUBLIC_DISTILLERIES_LIMIT = 120;
+  const HOME_PUBLIC_PRODUCTS_LIMIT = 120;
   const location = useLocation();
   const homeReturnTo = `${location.pathname}${location.search}`;
   const labelHref = (productId: string) => `/label/${productId}?rt=${encodeURIComponent(homeReturnTo)}`;
@@ -67,20 +100,14 @@ export default function Home() {
       // ignore storage errors
     }
   };
-  const [savedCount, setSavedCount] = useState<number | "-">("-");
-  const [topRating, setTopRating] = useState<number | null>(null);
-  const [lastSavedProduct, setLastSavedProduct] = useState<ProductLite | null>(null);
-  const [recommendedRakija, setRecommendedRakija] = useState<ProductLite | null>(null);
-  const [recommendedVino, setRecommendedVino] = useState<ProductLite | null>(null);
-  const [distilleries, setDistilleries] = useState<DistilleryLite[]>([]);
-  const [isLoadingRec, setIsLoadingRec] = useState(true);
+  const [dismissedLicenseWarning, setDismissedLicenseWarning] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [recentScans, setRecentScans] = useState<RecentScanItem[]>([]);
-  const [licenseWarning, setLicenseWarning] = useState<string | null>(null);
-  const [joinedClubs, setJoinedClubs] = useState<string[]>([]);
-  const [activeActions, setActiveActions] = useState<ClubActionLite[]>([]);
   const [distilleryMap, setDistilleryMap] = useState<Record<string, string>>({});
   const [quotaExceeded, setQuotaExceeded] = useState(false);
+  const visitorId = useMemo(() => localStorage.getItem("rakivinum_visitor_id"), []);
+  const clubsCacheKey = visitorId ? `rakivinum_cache_home_clubs_${visitorId}_v1` : null;
+  const actionsCacheKey = "rakivinum_cache_home_actions_v1";
   const toDateSafe = (value: unknown): Date => {
     if (value && typeof (value as { toDate?: () => Date }).toDate === "function") {
       const d = (value as { toDate?: () => Date }).toDate?.();
@@ -91,126 +118,231 @@ export default function Home() {
     return Number.isNaN(d.getTime()) ? new Date(0) : d;
   };
 
+  const membershipsQuery = useQuery<string[]>({
+    queryKey: queryKeys.home.clubs(visitorId),
+    enabled: Boolean(visitorId),
+    queryFn: async () => {
+      if (!visitorId) return [];
+      const rows = await fetchPublicClubMembershipsByVisitorId(visitorId, 30);
+      const clubs = rows.map((d) => d.distilleryId).filter((x): x is string => typeof x === "string" && x.trim() !== "");
+      localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
+      if (clubsCacheKey) writeCache(clubsCacheKey, clubs, REFRESH_INTERVAL.USER_LIGHT_1H);
+      return clubs;
+    },
+    initialData: clubsCacheKey ? (readCache<string[]>(clubsCacheKey) || []) : [],
+    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
+  });
+
+  const actionsQuery = useQuery<ClubActionLite[]>({
+    queryKey: queryKeys.home.actions(),
+    queryFn: async () => {
+      const actions = await fetchPublicClubActions(20) as ClubActionLite[];
+      const filteredActions = actions
+        .filter((action) => {
+          if (!action.endsAt) return true;
+          const end = toDateSafe(action.endsAt);
+          return end > new Date();
+        })
+        .sort((a, b) => toDateSafe(b.createdAt).getTime() - toDateSafe(a.createdAt).getTime());
+      writeCache(actionsCacheKey, filteredActions, REFRESH_INTERVAL.USER_LIGHT_1H);
+      return filteredActions;
+    },
+    initialData: readCache<ClubActionLite[]>(actionsCacheKey) || [],
+    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
+  });
+
+  const distilleryMapQuery = useQuery<Record<string, string>>({
+    queryKey: queryKeys.home.distilleryMap(HOME_PUBLIC_DISTILLERIES_LIMIT),
+    queryFn: async () => {
+      const distilleries = await fetchPublicDistilleries({
+        limitCount: HOME_PUBLIC_DISTILLERIES_LIMIT,
+        cacheKey: "rakivinum_cache_home_distillery_list_v1",
+        ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
+      });
+      const map: Record<string, string> = {};
+      distilleries.forEach((d: DistilleryLite) => {
+        map[d.id] = String(d.name || "");
+      });
+      writeCache("rakivinum_cache_home_distillery_map_v1", map, CACHE_TTL.HOME_DISTILLERY_MAP_6H);
+      return map;
+    },
+    initialData: readCache<Record<string, string>>("rakivinum_cache_home_distillery_map_v1") || {},
+    ...stableQueryOptions(CACHE_TTL.HOME_DISTILLERY_MAP_6H),
+  });
+
   useEffect(() => {
-    const visitorId = localStorage.getItem('rakivinum_visitor_id');
-    const clubsCacheKey = visitorId ? `rakivinum_cache_home_clubs_${visitorId}_v1` : null;
-    const actionsCacheKey = "rakivinum_cache_home_actions_v1";
+    if (membershipsQuery.error && isQuotaError(membershipsQuery.error)) setQuotaExceeded(true);
+  }, [membershipsQuery.error]);
 
-    const refreshMemberships = async () => {
-      if (!visitorId) return;
-      try {
-        const rows = await fetchPublicClubMembershipsByVisitorId(visitorId, 30);
-        const clubs = rows.map((d) => d.distilleryId).filter((x): x is string => typeof x === "string" && x.trim() !== "");
-        setJoinedClubs(clubs);
-        localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
-        if (clubsCacheKey) writeCache(clubsCacheKey, clubs, REFRESH_INTERVAL.USER_LIGHT_1H);
-      } catch (err) {
-        console.error("Error fetching memberships:", err);
-        if (isQuotaError(err)) setQuotaExceeded(true);
-        if (clubsCacheKey) {
-          const cached = readCache<string[]>(clubsCacheKey);
-          if (cached) setJoinedClubs(cached);
-        }
-      }
-    };
+  useEffect(() => {
+    if (actionsQuery.error && isQuotaError(actionsQuery.error)) setQuotaExceeded(true);
+  }, [actionsQuery.error]);
 
-    const fetchDistilleries = async () => {
-      try {
-        const distilleries = await fetchPublicDistilleries({
-          limitCount: 250,
+  useEffect(() => {
+    if (distilleryMapQuery.error && isQuotaError(distilleryMapQuery.error)) setQuotaExceeded(true);
+  }, [distilleryMapQuery.error]);
+
+  useEffect(() => {
+    setDistilleryMap(distilleryMapQuery.data || {});
+  }, [distilleryMapQuery.data]);
+
+  const joinedClubs = membershipsQuery.data || [];
+  const activeActions = actionsQuery.data || [];
+
+  const recommendationQuery = useQuery<{ rakija: ProductLite | null; vino: ProductLite | null }>({
+    queryKey: queryKeys.home.recommendations(HOME_PUBLIC_PRODUCTS_LIMIT, HOME_PUBLIC_DISTILLERIES_LIMIT),
+    queryFn: async () => {
+      const [products, distilleries] = await Promise.all([
+        fetchPublicProducts({
+          limitCount: HOME_PUBLIC_PRODUCTS_LIMIT,
+          cacheKey: "rakivinum_cache_home_products_v1",
+          ttlMs: CACHE_TTL.HOME_RECOMMENDATIONS_6H,
+        }),
+        fetchPublicDistilleries({
+          limitCount: HOME_PUBLIC_DISTILLERIES_LIMIT,
           cacheKey: "rakivinum_cache_home_distillery_list_v1",
           ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
-        });
-        const map: Record<string, string> = {};
-        distilleries.forEach((d: DistilleryLite) => {
-          map[d.id] = String(d.name || "");
-        });
-        setDistilleryMap(map);
-        writeCache("rakivinum_cache_home_distillery_map_v1", map, CACHE_TTL.HOME_DISTILLERY_MAP_6H);
-      } catch (e) {
-        console.error("Error fetching distillery map", e);
-        if (isQuotaError(e)) setQuotaExceeded(true);
-        const cachedMap = readCache<Record<string, string>>("rakivinum_cache_home_distillery_map_v1");
-        if (cachedMap) setDistilleryMap(cachedMap);
-      }
-    };
-    fetchDistilleries();
+        }),
+      ]);
 
-    const refreshActions = async () => {
-      try {
-        const actions = await fetchPublicClubActions(20) as ClubActionLite[];
-        const filteredActions = actions
-          .filter((action) => {
-            if (!action.endsAt) return true;
-            const end = toDateSafe(action.endsAt);
-            return end > new Date();
-          })
-          .sort((a, b) => {
-            const dateA = toDateSafe(a.createdAt).getTime();
-            const dateB = toDateSafe(b.createdAt).getTime();
-            return dateB - dateA;
-          });
-        setActiveActions(filteredActions);
-        writeCache(actionsCacheKey, filteredActions, REFRESH_INTERVAL.USER_LIGHT_1H);
-      } catch (err) {
-        console.error("Error fetching active actions:", err);
-        if (isQuotaError(err)) setQuotaExceeded(true);
-        const cached = readCache<ClubActionLite[]>(actionsCacheKey);
-        if (cached) setActiveActions(cached);
-      }
-    };
+      const topDistilleries = (distilleries as DistilleryLite[]).slice(0, 5);
+      writeCache("rakivinum_cache_home_distilleries_v1", topDistilleries, CACHE_TTL.DISTILLERY_LIST_6H);
 
-    const cachedClubs = clubsCacheKey ? readCache<string[]>(clubsCacheKey) : null;
-    if (cachedClubs) setJoinedClubs(cachedClubs);
-    const cachedActions = readCache<ClubActionLite[]>(actionsCacheKey);
-    if (cachedActions) setActiveActions(cachedActions);
-
-    const shouldWarmNow = shouldRunRefresh("home:initial-clubs-actions", REFRESH_INTERVAL.USER_LIGHT_1H);
-    if (!cachedClubs || shouldWarmNow) void refreshMemberships();
-    if (!cachedActions || shouldWarmNow) void refreshActions();
-
-    const onFocusRefresh = () => {
-      if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh("home:focus-clubs-actions", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
-      void refreshMemberships();
-      void refreshActions();
-    };
-    const onVisibilityRefresh = () => {
-      if (document.visibilityState !== "visible") return;
-      onFocusRefresh();
-    };
-    window.addEventListener('focus', onFocusRefresh);
-    document.addEventListener('visibilitychange', onVisibilityRefresh);
-
-    return () => {
-      window.removeEventListener('focus', onFocusRefresh);
-      document.removeEventListener('visibilitychange', onVisibilityRefresh);
-    };
-  }, []);
+      const publicDistilleryIds = new Set(distilleries.map((d: DistilleryLite) => d.id));
+      const eligibleProducts = (products as ProductLite[]).filter((p) => p.distilleryId && publicDistilleryIds.has(p.distilleryId));
+      const normalize = (v: unknown) => String(v || "").toLowerCase();
+      const isWine = (p: ProductLite) => {
+        const text = `${normalize(p.type)} ${normalize(p.category)} ${normalize(p.name)}`;
+        return text.includes("vino") || text.includes("wine");
+      };
+      const winePool = eligibleProducts.filter(isWine);
+      const rakijaPool = eligibleProducts.filter((p) => !isWine(p));
+      const pickedRakija = pickFromPool(rakijaPool, "rakivinum_rec_history_rakija");
+      const pickedVino = pickFromPool(winePool, "rakivinum_rec_history_vino");
+      const payload = { rakija: pickedRakija, vino: pickedVino };
+      writeCache("rakivinum_cache_home_recommendation_v1", payload, CACHE_TTL.HOME_RECOMMENDATIONS_6H);
+      return payload;
+    },
+    initialData: readCache<{ rakija: ProductLite | null; vino: ProductLite | null }>("rakivinum_cache_home_recommendation_v1") || {
+      rakija: null,
+      vino: null,
+    },
+    ...stableQueryOptions(CACHE_TTL.HOME_RECOMMENDATIONS_6H),
+  });
 
   useEffect(() => {
-    const checkLicenseExpiry = async () => {
-      const token = localStorage.getItem('rakivinum_license_token');
-      if (!token) return;
+    if (recommendationQuery.error && isQuotaError(recommendationQuery.error)) setQuotaExceeded(true);
+  }, [recommendationQuery.error]);
 
-      try {
-        const lic = await fetchPublicLicenseByToken(token);
-        if (lic?.expiresAt) {
-          const expiry = toDateSafe(lic.expiresAt);
-          const daysLeft = Math.ceil((expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  const recommendedRakija = recommendationQuery.data?.rakija ?? null;
+  const recommendedVino = recommendationQuery.data?.vino ?? null;
+  const isLoadingRec = recommendationQuery.isFetching && !recommendationQuery.data;
 
-          if (daysLeft <= 0) {
-            setLicenseWarning("Vaša licenca je istekla. Obratite se administratoru za produženje.");
-          } else if (daysLeft <= 30) {
-            setLicenseWarning(`Vaša licenca ističe za ${daysLeft} dana (${expiry.toLocaleDateString('sr-RS')}). Kontaktirajte administratora za produženje.`);
+  const licenseWarningQuery = useQuery<string | null>({
+    queryKey: queryKeys.home.licenseWarning(),
+    queryFn: async () => {
+      const token = localStorage.getItem("rakivinum_license_token");
+      if (!token) return null;
+      const lic = await fetchPublicLicenseByToken(token);
+      if (!lic?.expiresAt) return null;
+      const expiry = toDateSafe(lic.expiresAt);
+      const daysLeft = Math.ceil((expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      if (daysLeft <= 0) {
+        return "Vaša licenca je istekla. Obratite se administratoru za produženje.";
+      }
+      if (daysLeft <= 30) {
+        return `Vaša licenca ističe za ${daysLeft} dana (${expiry.toLocaleDateString("sr-RS")}). Kontaktirajte administratora za produženje.`;
+      }
+      return null;
+    },
+    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
+  });
+
+  useEffect(() => {
+    if (licenseWarningQuery.error && isQuotaError(licenseWarningQuery.error)) setQuotaExceeded(true);
+  }, [licenseWarningQuery.error]);
+
+  const userStatsQuery = useQuery<{ savedCount: number | "-"; topRating: number | null; lastSavedProduct: ProductLite | null }>({
+    queryKey: queryKeys.home.userStats(userId),
+    enabled: Boolean(userId),
+    queryFn: async () => {
+      if (!userId) return { savedCount: "-", topRating: null, lastSavedProduct: null };
+      const userStatsCacheKey = `rakivinum_cache_home_user_stats_${userId}_v1`;
+      let nextSavedCount: number | "-" = "-";
+      let nextTopRating: number | null = null;
+      let nextLastSavedProduct: ProductLite | null = null;
+
+      const savedCol = collection(db, "users", userId, "savedItems");
+      const countSnap = await getCountFromServer(savedCol);
+      meterDbRead("home:user_saved_count", 1);
+      nextSavedCount = countSnap.data().count;
+
+      const recentSnap = await getDocs(query(savedCol, orderBy("createdAt", "desc"), limit(1)));
+      meterDbRead("home:user_saved_recent", recentSnap.size);
+      if (!recentSnap.empty) {
+        const row = recentSnap.docs[0].data() as { productId?: string };
+        const lastId = row?.productId;
+        if (lastId) {
+          const pub = await fetchPublicProductById(lastId);
+          if (pub) {
+            nextLastSavedProduct = { id: pub.id, ...pub } as ProductLite;
+          } else {
+            const prodSnap = await getDoc(doc(db, "products", lastId));
+            meterDbRead("home:user_saved_product", prodSnap.exists() ? 1 : 0);
+            if (prodSnap.exists()) {
+              nextLastSavedProduct = { id: prodSnap.id, ...prodSnap.data() } as ProductLite;
+            }
           }
         }
-      } catch (e) {
-        console.error("Error checking license expiry", e);
       }
-    };
-    checkLicenseExpiry();
-  }, []);
+
+      try {
+        const topQuery = query(
+          collection(db, "ratings"),
+          where("userId", "==", userId),
+          orderBy("rating", "desc"),
+          limit(1),
+        );
+        const topSnap = await getDocs(topQuery);
+        meterDbRead("home:user_ratings_top1", topSnap.size);
+        if (!topSnap.empty) {
+          const best = Number(topSnap.docs[0].data()?.rating);
+          nextTopRating = Number.isFinite(best) ? best : null;
+        }
+      } catch {
+        const ratingQuery = query(collection(db, "ratings"), where("userId", "==", userId), limit(20));
+        const snap = await getDocs(ratingQuery);
+        meterDbRead("home:user_ratings_fallback", snap.size);
+        if (!snap.empty) {
+          const ratings = snap.docs.map((d) => Number(d.data()?.rating) || 0);
+          nextTopRating = Math.max(...ratings);
+        }
+      }
+
+      const payload = {
+        savedCount: nextSavedCount,
+        topRating: nextTopRating,
+        lastSavedProduct: nextLastSavedProduct,
+      };
+      writeCache(userStatsCacheKey, payload, REFRESH_INTERVAL.USER_LIGHT_1H);
+      return payload;
+    },
+    initialData: userId
+      ? (readCache<{ savedCount: number | "-"; topRating: number | null; lastSavedProduct: ProductLite | null }>(`rakivinum_cache_home_user_stats_${userId}_v1`)
+        || { savedCount: "-", topRating: null, lastSavedProduct: null })
+      : { savedCount: "-", topRating: null, lastSavedProduct: null },
+    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
+  });
+
+  useEffect(() => {
+    if (userStatsQuery.error && isQuotaError(userStatsQuery.error)) setQuotaExceeded(true);
+  }, [userStatsQuery.error]);
+
+  const savedCount = userId ? (userStatsQuery.data?.savedCount ?? "-") : "-";
+  const topRating = userId ? (userStatsQuery.data?.topRating ?? null) : null;
+  const lastSavedProduct = userId ? (userStatsQuery.data?.lastSavedProduct ?? null) : null;
+  const licenseWarning = dismissedLicenseWarning ? null : (licenseWarningQuery.data ?? null);
+
 
   useEffect(() => {
     const historyStr = localStorage.getItem('rakivinum_scan_history') || '[]';
@@ -229,245 +361,6 @@ export default function Home() {
     return () => unsubscribe();
   }, []);
 
-  // Public catalog slices for the home hero — not tied to userId so we do not re-fetch when
-  // auth resolves from null → uid (that transition used to duplicate heavy Worker/Firestore work).
-  useEffect(() => {
-    /** Isti ključ kao u effect-u iznad za mapu — jedan dedupe/network umesto tri odvojena fetch-a destilerija. */
-    const HOME_DISTILLERY_LIST_KEY = "rakivinum_cache_home_distillery_list_v1";
-
-    const cachedFullList = readCache<DistilleryLite[]>(HOME_DISTILLERY_LIST_KEY);
-    if (cachedFullList && cachedFullList.length > 0) {
-      setDistilleries(cachedFullList.slice(0, 5));
-    } else {
-      const topOnly = readCache<DistilleryLite[]>("rakivinum_cache_home_distilleries_v1");
-      if (topOnly?.length) setDistilleries(topOnly);
-    }
-
-    const cachedRec = readCache<{ rakija: ProductLite | null; vino: ProductLite | null }>(
-      "rakivinum_cache_home_recommendation_v1",
-    );
-    if (cachedRec && (cachedRec.rakija || cachedRec.vino)) {
-      setRecommendedRakija(cachedRec.rakija || null);
-      setRecommendedVino(cachedRec.vino || null);
-      setIsLoadingRec(false);
-    } else {
-      setIsLoadingRec(true);
-    }
-
-    const fetchDailyRecommendation = async () => {
-      try {
-        const [products, distilleries] = await Promise.all([
-          fetchPublicProducts({
-            limitCount: 300,
-            cacheKey: "rakivinum_cache_home_products_v1",
-            ttlMs: CACHE_TTL.HOME_RECOMMENDATIONS_6H,
-          }),
-          fetchPublicDistilleries({
-            limitCount: 250,
-            cacheKey: HOME_DISTILLERY_LIST_KEY,
-            ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
-          }),
-        ]);
-        const topDistilleries = (distilleries as DistilleryLite[]).slice(0, 5);
-        setDistilleries(topDistilleries);
-        writeCache("rakivinum_cache_home_distilleries_v1", topDistilleries, CACHE_TTL.DISTILLERY_LIST_6H);
-
-        if (products.length > 0) {
-          const publicDistilleryIds = new Set(distilleries.map((d: DistilleryLite) => d.id));
-          const eligibleProducts = (products as ProductLite[]).filter((p) => p.distilleryId && publicDistilleryIds.has(p.distilleryId));
-          const normalize = (v: unknown) => String(v || "").toLowerCase();
-          const isWine = (p: ProductLite) => {
-            const text = `${normalize(p.type)} ${normalize(p.category)} ${normalize(p.name)}`;
-            return text.includes("vino") || text.includes("wine");
-          };
-          const winePool = eligibleProducts.filter(isWine);
-          const rakijaPool = eligibleProducts.filter((p) => !isWine(p));
-
-          const pickFromPool = (pool: ProductLite[], historyKey: string): ProductLite | null => {
-            if (pool.length === 0) return null;
-            const today = new Date().toISOString().split('T')[0];
-            const raw = localStorage.getItem(historyKey) || "[]";
-            const history = (() => {
-              try {
-                const parsed = JSON.parse(raw);
-                return Array.isArray(parsed) ? parsed : [];
-              } catch {
-                return [];
-              }
-            })() as string[];
-
-            const historySet = new Set(history);
-            const freshPool = pool.filter((p) => !historySet.has(p.id));
-            const candidatePool = freshPool.length > 0 ? freshPool : pool;
-
-            let hash = 0;
-            for (let i = 0; i < today.length; i++) {
-              hash = today.charCodeAt(i) + ((hash << 5) - hash);
-            }
-            hash += history.length * 37;
-            const picked = candidatePool[Math.abs(hash) % candidatePool.length];
-
-            const nextHistory = [picked.id, ...history.filter((id) => id !== picked.id)].slice(0, 7);
-            localStorage.setItem(historyKey, JSON.stringify(nextHistory));
-            return picked;
-          };
-
-          const pickedRakija = pickFromPool(rakijaPool, "rakivinum_rec_history_rakija");
-          const pickedVino = pickFromPool(winePool, "rakivinum_rec_history_vino");
-          setRecommendedRakija(pickedRakija);
-          setRecommendedVino(pickedVino);
-          writeCache("rakivinum_cache_home_recommendation_v1", {
-            rakija: pickedRakija,
-            vino: pickedVino,
-          }, CACHE_TTL.HOME_RECOMMENDATIONS_6H);
-        }
-      } catch (e) {
-        console.error("Error fetching recommendation:", e);
-        if (isQuotaError(e)) setQuotaExceeded(true);
-        const cachedRec = readCache<{ rakija: ProductLite | null; vino: ProductLite | null }>("rakivinum_cache_home_recommendation_v1");
-        if (cachedRec) {
-          setRecommendedRakija(cachedRec.rakija || null);
-          setRecommendedVino(cachedRec.vino || null);
-        }
-      } finally {
-        setIsLoadingRec(false);
-      }
-    };
-
-    void fetchDailyRecommendation();
-  }, []);
-
-  useEffect(() => {
-    const userStatsCacheKey = userId ? `rakivinum_cache_home_user_stats_${userId}_v1` : null;
-
-    if (!userId) {
-      setSavedCount("-");
-      setTopRating(null);
-      setLastSavedProduct(null);
-      return;
-    }
-
-    const refreshUserStats = async () => {
-      let nextSavedCount: number | "-" = "-";
-      let nextTopRating: number | null = null;
-      let nextLastSavedProduct: ProductLite | null = null;
-      try {
-        const savedCol = collection(db, "users", userId, "savedItems");
-        const countSnap = await getCountFromServer(savedCol);
-        meterDbRead("home:user_saved_count", 1);
-        nextSavedCount = countSnap.data().count;
-        setSavedCount(nextSavedCount);
-
-        const recentSnap = await getDocs(query(savedCol, orderBy("createdAt", "desc"), limit(1)));
-        meterDbRead("home:user_saved_recent", recentSnap.size);
-        if (recentSnap.empty) {
-          nextLastSavedProduct = null;
-          setLastSavedProduct(null);
-        } else {
-          const row = recentSnap.docs[0].data() as { productId?: string };
-          const lastId = row?.productId;
-          if (!lastId) {
-            nextLastSavedProduct = null;
-            setLastSavedProduct(null);
-          } else {
-            const pub = await fetchPublicProductById(lastId);
-            if (pub) {
-              nextLastSavedProduct = { id: pub.id, ...pub } as ProductLite;
-              setLastSavedProduct(nextLastSavedProduct);
-            } else {
-              const prodSnap = await getDoc(doc(db, "products", lastId));
-              meterDbRead("home:user_saved_product", prodSnap.exists() ? 1 : 0);
-              if (prodSnap.exists()) {
-                nextLastSavedProduct = { id: prodSnap.id, ...prodSnap.data() } as ProductLite;
-                setLastSavedProduct(nextLastSavedProduct);
-              } else {
-                nextLastSavedProduct = null;
-                setLastSavedProduct(null);
-              }
-            }
-          }
-        }
-      } catch (error) {
-        console.error("Error fetching saved items:", error);
-        if (isQuotaError(error)) setQuotaExceeded(true);
-      }
-
-      try {
-        // Primary path: one-row query for top rating.
-        const topQuery = query(
-          collection(db, "ratings"),
-          where("userId", "==", userId),
-          orderBy("rating", "desc"),
-          limit(1),
-        );
-        const topSnap = await getDocs(topQuery);
-        meterDbRead("home:user_ratings_top1", topSnap.size);
-        if (!topSnap.empty) {
-          const best = Number(topSnap.docs[0].data()?.rating);
-          nextTopRating = Number.isFinite(best) ? best : null;
-          setTopRating(nextTopRating);
-        } else {
-          nextTopRating = null;
-          setTopRating(null);
-        }
-      } catch (error) {
-        // Fallback when composite index is not ready in a given environment.
-        try {
-          const ratingQuery = query(collection(db, "ratings"), where("userId", "==", userId), limit(60));
-          const snap = await getDocs(ratingQuery);
-          meterDbRead("home:user_ratings_fallback", snap.size);
-          if (!snap.empty) {
-            const ratings = snap.docs.map((d) => Number(d.data()?.rating) || 0);
-            nextTopRating = Math.max(...ratings);
-            setTopRating(nextTopRating);
-          } else {
-            nextTopRating = null;
-            setTopRating(null);
-          }
-        } catch (fallbackError) {
-          console.error("Error fetching ratings:", fallbackError);
-          if (isQuotaError(fallbackError)) setQuotaExceeded(true);
-        }
-      }
-
-      if (userStatsCacheKey) {
-        writeCache(userStatsCacheKey, {
-          savedCount: nextSavedCount,
-          topRating: nextTopRating,
-          lastSavedProduct: nextLastSavedProduct,
-        }, REFRESH_INTERVAL.USER_LIGHT_1H);
-      }
-    };
-
-    const cachedUserStats = userStatsCacheKey
-      ? readCache<{ savedCount: number | "-"; topRating: number | null; lastSavedProduct: ProductLite | null }>(userStatsCacheKey)
-      : null;
-    if (cachedUserStats) {
-      setSavedCount(cachedUserStats.savedCount);
-      setTopRating(cachedUserStats.topRating);
-      setLastSavedProduct(cachedUserStats.lastSavedProduct);
-    }
-    if (!cachedUserStats || shouldRunRefresh(`home:user-stats-initial:${userId}`, REFRESH_INTERVAL.USER_LIGHT_1H)) {
-      void refreshUserStats();
-    }
-    const onFocusRefresh = () => {
-      if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh("home:user-stats", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
-      void refreshUserStats();
-    };
-    const onVisibilityRefresh = () => {
-      if (document.visibilityState !== "visible") return;
-      onFocusRefresh();
-    };
-    window.addEventListener('focus', onFocusRefresh);
-    document.addEventListener('visibilitychange', onVisibilityRefresh);
-
-    return () => {
-      window.removeEventListener('focus', onFocusRefresh);
-      document.removeEventListener('visibilitychange', onVisibilityRefresh);
-    };
-  }, [userId]);
-
   return (
     <div className="p-4 space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500 h-full overflow-y-auto w-full pb-24 scroll-smooth">
       {licenseWarning && (
@@ -482,7 +375,7 @@ export default function Home() {
               </div>
               <button
                 type="button"
-                onClick={() => setLicenseWarning(null)}
+                onClick={() => setDismissedLicenseWarning(true)}
                 className="p-1.5 hover:bg-white/5 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-red-500/20"
               >
                 <X className="w-4 h-4 text-text-secondary" />

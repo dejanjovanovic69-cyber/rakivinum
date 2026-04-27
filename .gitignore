@@ -1,4 +1,6 @@
 .firebase/
+.wrangler/
+gen-lang-client-*.json
 node_modules/
 build/
 dist/

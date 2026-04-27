@@ -29,7 +29,21 @@ export default defineConfig(({mode}) => {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB limit
           // Do not hijack Firebase / Google auth return navigations with cached index.html
-          navigateFallbackDenylist: [/^\/__\//, /^\/firebase-auth/],
+          navigateFallbackDenylist: [/^\/__\//, /^\/firebase-auth/, /^\/community(?:\/)?$/],
+          runtimeCaching: [
+            {
+              urlPattern: ({ request, url }) =>
+                request.mode === 'navigate' && /^\/community(?:\/)?$/.test(url.pathname),
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'community-navigation',
+                networkTimeoutSeconds: 3,
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+          ],
         }
       })
     ],

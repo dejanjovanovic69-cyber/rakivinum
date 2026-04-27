@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`publicCatalogLimits.ts`:** `DISTILLERY_PUBLIC_PRODUCTS_LIMIT` je izvor istine; uvezuju ga `queryKeys` (re-eksport), `dataService.fetchPublicProductsByDistilleryId` default i `Distillery` stranica.
+**Poslednji zapis:** 2026-04-27 — **Community / TanStack:** `useCommunityData` + tab komponente; `QueryClientProvider` u `main.tsx`; Home i Distilleries na `useQuery`; ESLint flat config sa `react-hooks` kao gate; Worker opcioni KV `FIRESTORE_CACHE` + `x-cache-status`; Community emergency read samo uz `VITE_COMMUNITY_READ_EMERGENCY=1`.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
