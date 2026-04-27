@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **docs:** `QA-E2E.md` — sekcija za `cf:smoke:edge` i opcione PS parametre. Ranije: smoke opcioni repeat, `community-events`/by-ids/detail, Playwright, Worker KV.
+**Poslednji zapis:** 2026-04-27 — **Playwright:** `/community?tab=search&q=…` sinhronizacija polja; **AGENTS:** ispravka napomene za `cf:smoke:edge` (BaseUrl u skripti, link na QA-E2E). Ranije: QA-E2E edge sekcija, smoke visitor/token repeat, Worker KV.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 

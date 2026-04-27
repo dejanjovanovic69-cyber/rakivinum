@@ -68,6 +68,12 @@ test.describe("public routes", () => {
     await expect(page.getByPlaceholder(/Pretraži proizvode/i)).toBeVisible({ timeout: 25_000 });
   });
 
+  test("community search tab applies q from URL", async ({ page }) => {
+    await page.goto("/community?tab=search&q=rakija-smoke");
+    await expect(page.getByRole("heading", { name: /Zajednica/i })).toBeVisible({ timeout: 25_000 });
+    await expect(page.getByPlaceholder(/Pretraži proizvode/i)).toHaveValue("rakija-smoke", { timeout: 25_000 });
+  });
+
   test("collection route: guest empty or archive shell", async ({ page }) => {
     await page.goto("/collection");
     const guestEmpty = page.getByRole("heading", { name: /Kolekcija čeka/i });

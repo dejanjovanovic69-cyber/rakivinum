@@ -24,7 +24,7 @@
 - `npm run lint`
 - `npm run build`
 - Ako menjaš **rute / layout / javne stranice**: `npm run test:e2e` (Playwright smoke; prvi put `npx playwright install chromium`). Detalji: `docs/QA-E2E.md`.
-- Ako diraš Worker ili edge ponašanje: `npm run cf:smoke:edge` (zahteva `VITE_EDGE_API_BASE` u okruženju skripte ako je tako podešeno).
+- Ako diraš Worker ili edge ponašanje: `npm run cf:smoke:edge` (podrazumevani `-BaseUrl` je u `scripts/smoke-edge.ps1`; opcioni argumenti npr. `npm run cf:smoke:edge -- -SampleVisitorId "…"` — vidi `docs/QA-E2E.md`).
 - Ako je završen veći paket izmena, obavezno osveži `docs/STATUS-ZADATAKA.md` (kratak “Poslednji zapis” + šta je sledeće).
 
 ## Deploy
