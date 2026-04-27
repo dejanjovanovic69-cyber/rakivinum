@@ -79,4 +79,14 @@ test.describe("public routes", () => {
     await page.goto("/menu");
     await expect(page.getByRole("heading", { name: /Gost|Korisnik/i })).toBeVisible({ timeout: 25_000 });
   });
+
+  test("scanner shell heading", async ({ page }) => {
+    await page.goto("/scan");
+    await expect(page.getByRole("heading", { name: /Skeniraj Rakiju ili Vino/i })).toBeVisible({ timeout: 25_000 });
+  });
+
+  test("workshop radionica shell heading", async ({ page }) => {
+    await page.goto("/radionica");
+    await expect(page.getByRole("heading", { name: /Radionica/i })).toBeVisible({ timeout: 25_000 });
+  });
 });

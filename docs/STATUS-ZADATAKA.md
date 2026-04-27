@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-27 — **`dataService`:** klijentski circuit breaker na Worker GET (max 3 / 1s po ruti, zatim 5s cooldown → `null` i fallback na keš/Firestore). Ranije istog dana: Community TanStack + tabovi, `QueryClientProvider`, Home/Distilleries `useQuery`, ESLint `react-hooks`, Worker KV + `x-cache-status`, `VITE_COMMUNITY_READ_EMERGENCY`.
+**Poslednji zapis:** 2026-04-27 — **Playwright smoke:** proširen na `/collection`, `/menu`, `/scan`, `/radionica` (pored Community tabova i `/distilleries`). Ranije: `dataService` edge circuit breaker; Community TanStack; Worker KV + `x-cache-status`; `VITE_COMMUNITY_READ_EMERGENCY`.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
