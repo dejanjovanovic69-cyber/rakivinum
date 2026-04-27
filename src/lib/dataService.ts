@@ -25,9 +25,34 @@ type ProductRatingSummaryPublic = {
 
 const inFlight = new Map<string, Promise<unknown>>();
 const EDGE_API_BASE = String(import.meta.env.VITE_EDGE_API_BASE || "").trim();
-/** Sprečava beskonačno čekanje na Worker (spor mreža / zaglavljen edge) — posle toga fallback na Firestore ili keš. */
-/** Kraće čekanje na edge — spor fallback na Firestore/keš umesto 15s „vrtnje“. */
+/** Timeout na Worker GET — posle toga fallback na Firestore ili keš. */
 const EDGE_FETCH_TIMEOUT_MS = 6_000;
+/** Klijentski osigurač po ruti: sprečava read-storm ako nešto u petlji zove edge uzastopno. */
+const EDGE_CB_WINDOW_MS = 1_000;
+const EDGE_CB_MAX_PER_WINDOW = 3;
+const EDGE_CB_COOLDOWN_MS = 5_000;
+
+const edgeCircuitByRoute = new Map<string, { cooldownUntil: number; recent: number[] }>();
+
+function edgeCircuitAllows(routeKey: string): boolean {
+  const now = Date.now();
+  const row = edgeCircuitByRoute.get(routeKey) ?? { cooldownUntil: 0, recent: [] };
+  if (now < row.cooldownUntil) {
+    edgeCircuitByRoute.set(routeKey, row);
+    return false;
+  }
+  const recent = row.recent.filter((t) => now - t < EDGE_CB_WINDOW_MS);
+  if (recent.length >= EDGE_CB_MAX_PER_WINDOW) {
+    edgeCircuitByRoute.set(routeKey, {
+      cooldownUntil: now + EDGE_CB_COOLDOWN_MS,
+      recent: [],
+    });
+    return false;
+  }
+  recent.push(now);
+  edgeCircuitByRoute.set(routeKey, { cooldownUntil: 0, recent });
+  return true;
+}
 
 function dedupe<T>(key: string, factory: () => Promise<T>): Promise<T> {
   const existing = inFlight.get(key);
@@ -39,6 +64,7 @@ function dedupe<T>(key: string, factory: () => Promise<T>): Promise<T> {
 
 async function fetchEdgeItems<T>(path: string, limitCount: number): Promise<T[] | null> {
   if (!EDGE_API_BASE) return null;
+  if (!edgeCircuitAllows(path)) return null;
   try {
     const base = EDGE_API_BASE.endsWith("/") ? EDGE_API_BASE.slice(0, -1) : EDGE_API_BASE;
     const res = await fetch(`${base}${path}?limit=${encodeURIComponent(String(limitCount))}`, {
@@ -56,6 +82,7 @@ async function fetchEdgeItems<T>(path: string, limitCount: number): Promise<T[] 
 
 async function fetchEdgeItemWithAvailability<T>(path: string): Promise<{ available: boolean; item: T | null }> {
   if (!EDGE_API_BASE) return { available: false, item: null };
+  if (!edgeCircuitAllows(path)) return { available: false, item: null };
   try {
     const base = EDGE_API_BASE.endsWith("/") ? EDGE_API_BASE.slice(0, -1) : EDGE_API_BASE;
     const res = await fetch(`${base}${path}`, {
@@ -73,6 +100,8 @@ async function fetchEdgeItemWithAvailability<T>(path: string): Promise<{ availab
 
 async function fetchEdgeRawJson(pathAndQuery: string): Promise<Record<string, unknown> | null> {
   if (!EDGE_API_BASE) return null;
+  const routeKey = pathAndQuery.split("?")[0] || pathAndQuery;
+  if (!edgeCircuitAllows(routeKey)) return null;
   try {
     const base = EDGE_API_BASE.endsWith("/") ? EDGE_API_BASE.slice(0, -1) : EDGE_API_BASE;
     const res = await fetch(`${base}${pathAndQuery}`, {
