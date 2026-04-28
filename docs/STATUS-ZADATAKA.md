@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-28 — **`Community.tsx` (nastavak P1):** `useCallback` za `handleReport`, `openLabelWithReturn`, `navigateToReviews`, `handleTabSelect`, `openDistillery`, `resetSearchFilters`, `tabCls`; `useMemo` za `searchReturnTo`; modul konstante `COMMUNITY_RETURN_REVIEWS` / `COMMUNITY_RETURN_TOPS`; uklonjen nekorišćen import. **Ranije istog dana:** compare/events `useMemo` + `resetCompareSelection`; Admin kurzor; PWA `/community`. **Operativa:** bez deploy-a. **Sledeće:** trend read-ova + `cf:smoke:edge`; po meri TanStack/React.memo na child tabovima ako treba.
+**Poslednji zapis:** 2026-04-28 — **`dataService.ts` hardening:** uveden centralni env gate `VITE_ENABLE_FIRESTORE_FALLBACK=1` (Firestore fallback je sada stvarno opt-in); kada je gate ugašen, public read helper-i ostaju Worker/KV-only i vraćaju bezbedne default vrednosti (`[]`/`null`/`0`) umesto direktnog Firestore read-a. Ujedno očišćeni komentar stringovi sa encoding artefaktima. **Verifikacija:** `npm run lint` + `npm run build` + višestruki `cf:smoke:edge` prolazi 200/kv-hit. **Operativa:** bez deploy-a. **Sledeće:** 24h trend Firestore usage-a i tek po metrici novi endpoint/tuning.
 
 **Ranije (2026-04-27):** Playwright `/community?tab=compare&cf=sljivovica`; search `pf`/`q`, compare `lq`/`rq`, AGENTS/QA-E2E smoke, visitor/token repeat, Worker KV.
 
@@ -158,6 +158,7 @@ Status: **deploy pauza** dok je nalog blokiran; radi se samo stabilizacija koda 
 - **Meni / MyClubs (distillery read) dedupe:** ID lista se sortira pre batch zahteva, pa se smanjuju dupli pozivi za isti set destilerija u različitom redosledu.
 - **Meni / MyClubs (distillery read) cache:** dodat 1h cache za batch set ID-jeva u `fetchPublicDistilleriesByIds`.
 - **Public read hard stop (quota-safe):** u `dataService` direct Firestore fallback za javne read helper-e je podrazumevano isključen; javni tokovi idu Worker/KV-only osim ako se eksplicitno uključi `VITE_ENABLE_FIRESTORE_FALLBACK=1`.
+- **Public read hard stop (enforced):** `src/lib/dataService.ts` sada eksplicitno sprovodi `VITE_ENABLE_FIRESTORE_FALLBACK=1` gate pre svakog direct Firestore fallback-a u public read helper-ima.
 - **Scanner read hardening:** uklonjeni direktni Firestore barcode fallback upiti (`barcodeNormalized/barcode/raw`); lookup ostaje edge-first + cache katalog fallback bez direktnog read udara.
 - **MyClubs hot-spot fix:** uklonjeni veliki direktni read upiti nad `scans` i `ratings` pri otvaranju stranice.
 - **Home user stats hardening:** ukinut focus/visibility periodični refetch za user stats kako bi se sprečilo ponavljanje read-ova pri navigaciji.
@@ -280,6 +281,18 @@ Status: **deploy pauza** dok je nalog blokiran; radi se samo stabilizacija koda 
 **Checkpoint #4 (2026-04-28):**
 - `npm run cf:smoke:edge` prošao (svi endpointi 200; `distilleries` prvi hit ~2432ms, repeat KV ~84ms).
 - Nema izmene Worker ruta u ovom paketu; regresioni signal nije očekivan.
+
+**Checkpoint #5 (2026-04-28):**
+- Dodatna 2x `npm run cf:smoke:edge` prošla bez greške (svi endpointi 200; repeat pozivi stabilno `kv-hit`).
+- `distilleries`: 1544ms i 2130ms (prvi hit varira, ali bez funkcionalne regresije).
+- `ratings-feed`: 764ms i 747ms (stabilnije u odnosu na ranije spike-ove).
+- `product-ratings`: jedan prolaz 432ms, drugi 1212ms (pojedinačni skok bez greške/payload promene).
+- Quality gate za isti paket prošao: `npm run lint` i `npm run build` bez greške.
+- Zaključak: edge sloj ostaje stabilan; nastaviti 24h trend praćenje bez dodavanja novih endpointa dok metrika ne pokaže jasno usko grlo.
+
+**Checkpoint #6 (2026-04-28):**
+- Posle `dataService` fallback-gate hardening izmena, `npm run cf:smoke:edge` ponovo prošao (svi endpointi 200, repeat `kv-hit`).
+- Brzi sanity: `distilleries` ~1523ms (miss) / ~67ms (kv-hit), `ratings-feed` ~1058ms (miss) / ~71ms (kv-hit), bez funkcionalne regresije.
 
 ---
 

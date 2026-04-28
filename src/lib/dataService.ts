@@ -25,6 +25,7 @@ type ProductRatingSummaryPublic = {
 
 const inFlight = new Map<string, Promise<unknown>>();
 const EDGE_API_BASE = String(import.meta.env.VITE_EDGE_API_BASE || "").trim();
+const FIRESTORE_FALLBACK_ENABLED = String(import.meta.env.VITE_ENABLE_FIRESTORE_FALLBACK || "").trim() === "1";
 /** Timeout na Worker GET — posle toga fallback na Firestore ili keš. */
 const EDGE_FETCH_TIMEOUT_MS = 6_000;
 /** Klijentski osigurač po ruti: sprečava read-storm ako nešto u petlji zove edge uzastopno. */
@@ -60,6 +61,11 @@ function dedupe<T>(key: string, factory: () => Promise<T>): Promise<T> {
   const created = factory().finally(() => inFlight.delete(key));
   inFlight.set(key, created);
   return created;
+}
+
+function readCachedOr<T>(cacheKey: string, fallbackValue: T): T {
+  const cached = readCache<T>(cacheKey);
+  return cached ?? fallbackValue;
 }
 
 async function fetchEdgeItems<T>(path: string, limitCount: number): Promise<T[] | null> {
@@ -132,6 +138,7 @@ export async function fetchPublicDistilleries(options?: {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
+      if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<DistilleryPublic[]>(cacheKey, []);
       const snap = await getDocs(query(collection(db, "distilleries"), limit(limitCount)));
       meterDbRead("dataService:distilleries", snap.size);
       const rows = snap.docs
@@ -165,6 +172,7 @@ export async function fetchPublicProducts(options?: {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
+      if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<ProductPublic[]>(cacheKey, []);
       const snap = await getDocs(query(collection(db, "products"), limit(limitCount)));
       meterDbRead("dataService:products", snap.size);
       const rows = snap.docs
@@ -198,6 +206,7 @@ export async function fetchCommunityEvents(options?: {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
+      if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<CommunityEventPublic[]>(cacheKey, []);
       const snap = await getDocs(query(collection(db, "community_events"), limit(limitCount)));
       meterDbRead("dataService:community_events", snap.size);
       const rows = snap.docs
@@ -231,6 +240,7 @@ export async function fetchCommunityLinks(options?: {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
+      if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<CommunityLinkPublic[]>(cacheKey, []);
       const snap = await getDocs(query(collection(db, "community_links"), limit(limitCount)));
       meterDbRead("dataService:community_links", snap.size);
       const rows = snap.docs
@@ -270,6 +280,7 @@ export async function fetchCommunityRatings(options?: {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
       }
+      if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<CommunityRatingPublic[]>(cacheKey, []);
       const snap = await getDocs(query(collection(db, "ratings"), limit(Math.max(limitCount, 40))));
       meterDbRead("dataService:community_ratings", snap.size);
       const rows = snap.docs
@@ -306,6 +317,7 @@ export async function fetchPublicDistilleryById(id: string): Promise<DistilleryP
       writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
       return null;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return null;
     const snap = await getDoc(doc(db, "distilleries", safeId));
     meterDbRead("dataService:distillery_by_id", 1);
     if (!snap.exists()) {
@@ -348,6 +360,7 @@ export async function fetchPublicDistilleriesByIds(ids: string[]): Promise<Disti
       writeCache(cacheKey, rows, CACHE_TTL.DISTILLERIES_BY_IDS_1H);
       return rows;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<DistilleryPublic[]>(cacheKey, []);
 
     const byId = new Map<string, DistilleryPublic>();
     for (let i = 0; i < safeIds.length; i += 10) {
@@ -388,6 +401,7 @@ export async function fetchPublicProductsByDistilleryId(
       writeCache(cacheKey, rows, CACHE_TTL.PRODUCTS_BY_DISTILLERY_1H);
       return rows;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<ProductPublic[]>(cacheKey, []);
     const snap = await getDocs(query(collection(db, "products"), where("distilleryId", "==", safeId), limit(limitCount)));
     meterDbRead("dataService:products_by_distillery", snap.size);
     const rows = snap.docs
@@ -415,6 +429,7 @@ export async function fetchPublicProductById(id: string): Promise<ProductPublic 
       writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
       return null;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return null;
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:product_by_id", 1);
     if (!snap.exists()) {
@@ -431,7 +446,7 @@ export async function fetchPublicProductById(id: string): Promise<ProductPublic 
   });
 }
 
-/** Barkod / QR tekst: Worker `product-lookup` (n=normalizovano, r=sirovi tekst), pa null â†’ klijent nastavlja sa Firestore upitima. */
+/** Barcode/QR lookup: Worker `product-lookup` (n=normalized, r=raw), returns null on miss/outage. */
 export async function fetchPublicProductByBarcodeLookup(normalized: string, rawScan: string): Promise<ProductPublic | null> {
   const n = String(normalized || "").trim();
   const r = String(rawScan || "").trim();
@@ -475,6 +490,7 @@ export async function fetchPublicClubMembershipCount(distilleryId: string): Prom
       writeCache(cacheKey, count, CACHE_TTL.CLUB_MEMBERSHIP_COUNT_2M);
       return count;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<number>(cacheKey, 0);
 
     const q = query(collection(db, "club_memberships"), where("distilleryId", "==", safeId));
     const countSnap = await getCountFromServer(q);
@@ -485,7 +501,7 @@ export async function fetchPublicClubMembershipCount(distilleryId: string): Prom
   });
 }
 
-/** Skener: prvo javni proizvod preko edge-a (0 Firestore), inaÄe taÄno jedan `getDoc` bez javnog filtera â€” UI i dalje odbija arhivu / iskljuÄen etiketu. */
+/** Scanner: edge first, optional single-doc Firestore fallback when enabled. */
 export async function fetchScannerProductById(id: string): Promise<ProductPublic | null> {
   const safeId = String(id || "").trim();
   if (!safeId) return null;
@@ -503,6 +519,7 @@ export async function fetchScannerProductById(id: string): Promise<ProductPublic
       writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PUBLIC_BY_ID_NEGATIVE_2M);
       return null;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return null;
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:scanner_product_by_id", 1);
     if (!snap.exists()) {
@@ -534,6 +551,7 @@ export async function fetchPublicProductRatingSummary(productId: string): Promis
       writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.PRODUCT_RATING_SUMMARY_NEGATIVE_2M);
       return null;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return null;
     const snap = await getDoc(doc(db, "products", safeId));
     meterDbRead("dataService:product_rating_summary_fallback", 1);
     if (!snap.exists()) {
@@ -573,6 +591,7 @@ export async function fetchPublicProductRatings(productId: string, limitCount = 
       writeCache(cacheKey, rows, CACHE_TTL.PRODUCT_RATINGS_1H);
       return rows;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<ProductRatingPublic[]>(cacheKey, []);
 
     const snap = await getDocs(query(collection(db, "ratings"), where("productId", "==", safeId), limit(limitCount)));
     meterDbRead("dataService:product_ratings_fallback", snap.size);
@@ -600,6 +619,7 @@ export async function fetchPublicScanClustersByProductId(productId: string, clus
       writeCache(cacheKey, edgeRows, CACHE_TTL.SCAN_CLUSTERS_1H);
       return edgeRows;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<ScanClusterPublic[]>(cacheKey, []);
 
     const clusters = new Map<string, number>();
     try {
@@ -636,6 +656,7 @@ export async function fetchPublicClubActions(limitCount = 20): Promise<ClubActio
       writeCache(cacheKey, rows, CACHE_TTL.CLUB_ACTIONS_1H);
       return rows;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<ClubActionPublic[]>(cacheKey, []);
 
     const snap = await getDocs(query(collection(db, "club_actions"), where("isActive", "==", true), limit(limitCount)));
     meterDbRead("dataService:club_actions_fallback", snap.size);
@@ -662,6 +683,7 @@ export async function fetchPublicClubActionsForDistillery(distilleryId: string, 
       writeCache(cacheKey, rows, CACHE_TTL.CLUB_ACTIONS_BY_DISTILLERY_1H);
       return rows;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<ClubActionPublic[]>(cacheKey, []);
 
     const snap = await getDocs(
       query(
@@ -694,6 +716,7 @@ export async function fetchPublicClubMembershipsByVisitorId(visitorId: string, l
       writeCache(cacheKey, edgeRows, CACHE_TTL.CLUB_MEMBERSHIPS_1H);
       return edgeRows;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return readCachedOr<ClubMembershipPublic[]>(cacheKey, []);
 
     const snap = await getDocs(query(collection(db, "club_memberships"), where("visitorId", "==", safeId), limit(limitCount)));
     meterDbRead("dataService:club_memberships_fallback", snap.size);
@@ -720,6 +743,7 @@ export async function fetchPublicLicenseByToken(token: string): Promise<LicenseP
       writeCache(cacheKey, { found: false, item: null }, CACHE_TTL.LICENSE_BY_TOKEN_NEGATIVE_2M);
       return null;
     }
+    if (!FIRESTORE_FALLBACK_ENABLED) return null;
 
     const snap = await getDocs(query(collection(db, "licenses"), where("token", "==", safeToken), limit(1)));
     meterDbRead("dataService:license_by_token_fallback", snap.size);
