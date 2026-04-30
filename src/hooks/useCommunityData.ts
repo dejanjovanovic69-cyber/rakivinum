@@ -11,6 +11,7 @@ import {
 } from "../lib/dataService";
 import { readCache } from "../lib/resilience";
 import { shouldRunRefresh } from "../lib/refreshGate";
+import { consumeReadBudget } from "../lib/readBudget";
 import {
   COMMUNITY_COMPARE_FILTER_OPTIONS,
   COMMUNITY_FILTER_OPTIONS,
@@ -104,6 +105,9 @@ export function useCommunityData(locationSearch: string): UseCommunityDataResult
       if (!shouldRefresh) {
         return readCommunityRatingsCache() ?? [];
       }
+      if (!consumeReadBudget("community", 1).allowed) {
+        return readCommunityRatingsCache() ?? [];
+      }
       const rows = await fetchCommunityRatings({
         limitCount: 20,
         cacheKey: COMMUNITY_RATINGS_CACHE_KEY,
@@ -124,6 +128,12 @@ export function useCommunityData(locationSearch: string): UseCommunityDataResult
         return {
           products: Array.isArray(cachedProducts) ? cachedProducts : [],
           distilleries: Array.isArray(cachedDistilleries) ? cachedDistilleries : [],
+        };
+      }
+      if (!consumeReadBudget("community", 2).allowed) {
+        return {
+          products: readCache<ProductItem[]>("rakivinum_cache_community_products_v1") || [],
+          distilleries: readCache<DistilleryItem[]>("rakivinum_cache_community_distilleries_v1") || [],
         };
       }
       const [prodResult, distResult] = await Promise.allSettled([
@@ -159,6 +169,9 @@ export function useCommunityData(locationSearch: string): UseCommunityDataResult
       if (COMMUNITY_READ_EMERGENCY_MODE) {
         const cachedEvents = readCache<CommunityEventItem[]>("rakivinum_cache_community_events_v1");
         return Array.isArray(cachedEvents) ? cachedEvents : [];
+      }
+      if (!consumeReadBudget("community", 1).allowed) {
+        return readCache<CommunityEventItem[]>("rakivinum_cache_community_events_v1") || [];
       }
       try {
         return await fetchCommunityEvents({

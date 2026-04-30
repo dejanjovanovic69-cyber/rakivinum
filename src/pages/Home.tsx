@@ -19,6 +19,7 @@ import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
 import { stableQueryOptions } from "../lib/queryDefaults";
 import { queryKeys } from "../lib/queryKeys";
+import { consumeReadBudget } from "../lib/readBudget";
 
 type ProductLite = {
   id: string;
@@ -105,6 +106,7 @@ export default function Home() {
   const [recentScans, setRecentScans] = useState<RecentScanItem[]>([]);
   const [distilleryMap, setDistilleryMap] = useState<Record<string, string>>({});
   const [quotaExceeded, setQuotaExceeded] = useState(false);
+  const [readBudgetCooling, setReadBudgetCooling] = useState(false);
   const visitorId = useMemo(() => localStorage.getItem("rakivinum_visitor_id"), []);
   const clubsCacheKey = visitorId ? `rakivinum_cache_home_clubs_${visitorId}_v1` : null;
   const actionsCacheKey = "rakivinum_cache_home_actions_v1";
@@ -123,6 +125,11 @@ export default function Home() {
     enabled: Boolean(visitorId),
     queryFn: async () => {
       if (!visitorId) return [];
+      const budget = consumeReadBudget("home", 1);
+      if (!budget.allowed) {
+        setReadBudgetCooling(true);
+        return clubsCacheKey ? (readCache<string[]>(clubsCacheKey) || []) : [];
+      }
       const rows = await fetchPublicClubMembershipsByVisitorId(visitorId, 30);
       const clubs = rows.map((d) => d.distilleryId).filter((x): x is string => typeof x === "string" && x.trim() !== "");
       localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
@@ -136,6 +143,11 @@ export default function Home() {
   const actionsQuery = useQuery<ClubActionLite[]>({
     queryKey: queryKeys.home.actions(),
     queryFn: async () => {
+      const budget = consumeReadBudget("home", 1);
+      if (!budget.allowed) {
+        setReadBudgetCooling(true);
+        return readCache<ClubActionLite[]>(actionsCacheKey) || [];
+      }
       const actions = await fetchPublicClubActions(20) as ClubActionLite[];
       const filteredActions = actions
         .filter((action) => {
@@ -154,6 +166,11 @@ export default function Home() {
   const distilleryMapQuery = useQuery<Record<string, string>>({
     queryKey: queryKeys.home.distilleryMap(HOME_PUBLIC_DISTILLERIES_LIMIT),
     queryFn: async () => {
+      const budget = consumeReadBudget("home", 1);
+      if (!budget.allowed) {
+        setReadBudgetCooling(true);
+        return readCache<Record<string, string>>("rakivinum_cache_home_distillery_map_v1") || {};
+      }
       const distilleries = await fetchPublicDistilleries({
         limitCount: HOME_PUBLIC_DISTILLERIES_LIMIT,
         cacheKey: "rakivinum_cache_home_distillery_list_v1",
@@ -192,6 +209,14 @@ export default function Home() {
   const recommendationQuery = useQuery<{ rakija: ProductLite | null; vino: ProductLite | null }>({
     queryKey: queryKeys.home.recommendations(HOME_PUBLIC_PRODUCTS_LIMIT, HOME_PUBLIC_DISTILLERIES_LIMIT),
     queryFn: async () => {
+      const budget = consumeReadBudget("home", 2);
+      if (!budget.allowed) {
+        setReadBudgetCooling(true);
+        return readCache<{ rakija: ProductLite | null; vino: ProductLite | null }>("rakivinum_cache_home_recommendation_v1") || {
+          rakija: null,
+          vino: null,
+        };
+      }
       const [products, distilleries] = await Promise.all([
         fetchPublicProducts({
           limitCount: HOME_PUBLIC_PRODUCTS_LIMIT,
@@ -243,6 +268,11 @@ export default function Home() {
     queryFn: async () => {
       const token = localStorage.getItem("rakivinum_license_token");
       if (!token) return null;
+      const budget = consumeReadBudget("home", 1);
+      if (!budget.allowed) {
+        setReadBudgetCooling(true);
+        return null;
+      }
       const lic = await fetchPublicLicenseByToken(token);
       if (!lic?.expiresAt) return null;
       const expiry = toDateSafe(lic.expiresAt);
@@ -267,6 +297,12 @@ export default function Home() {
     enabled: Boolean(userId),
     queryFn: async () => {
       if (!userId) return { savedCount: "-", topRating: null, lastSavedProduct: null };
+      const budget = consumeReadBudget("home", 2);
+      if (!budget.allowed) {
+        setReadBudgetCooling(true);
+        return readCache<{ savedCount: number | "-"; topRating: number | null; lastSavedProduct: ProductLite | null }>(`rakivinum_cache_home_user_stats_${userId}_v1`)
+          || { savedCount: "-", topRating: null, lastSavedProduct: null };
+      }
       const userStatsCacheKey = `rakivinum_cache_home_user_stats_${userId}_v1`;
       let nextSavedCount: number | "-" = "-";
       let nextTopRating: number | null = null;
@@ -361,6 +397,12 @@ export default function Home() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!readBudgetCooling) return;
+    const timer = window.setTimeout(() => setReadBudgetCooling(false), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [readBudgetCooling]);
+
   return (
     <div className="p-4 space-y-5 animate-in fade-in slide-in-from-bottom-4 duration-500 h-full overflow-y-auto w-full pb-24 scroll-smooth">
       {licenseWarning && (
@@ -388,6 +430,13 @@ export default function Home() {
         <div className="empty-state card-elevated rounded-[20px] px-4 py-3 text-center">
           <p className="text-xs text-text-secondary leading-relaxed">
             Privremeno nedostupno: dnevna Firestore kvota je potrošena. Podaci će se automatski vratiti nakon resetovanja kvote.
+          </p>
+        </div>
+      )}
+      {readBudgetCooling && (
+        <div className="empty-state card-elevated rounded-[20px] px-4 py-3 text-center">
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Privremena zaštita od prevelikog učitavanja je aktivna. Prikazujemo keširane podatke dok se osigurač ne resetuje.
           </p>
         </div>
       )}

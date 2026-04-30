@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import { db } from "../lib/firebase";
@@ -14,6 +14,7 @@ import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { stableQueryOptions } from "../lib/queryDefaults";
 import { queryKeys } from "../lib/queryKeys";
 import { invalidateAfterClubMembershipChange } from "../lib/invalidateClubCaches";
+import { consumeReadBudget } from "../lib/readBudget";
 
 type ClubTarget = { label: string; current: number; target: number };
 type ClubAction = {
@@ -75,6 +76,7 @@ export default function MyClubs() {
     navigate("/", { replace: true });
   };
   const [clubs, setClubs] = useState<ClubRow[] | null>(null);
+  const [readBudgetCooling, setReadBudgetCooling] = useState(false);
   const visitorId = localStorage.getItem('rakivinum_visitor_id');
 
   const clubsQuery = useQuery<ClubRow[]>({
@@ -82,6 +84,11 @@ export default function MyClubs() {
     enabled: Boolean(visitorId),
     queryFn: async () => {
       if (!visitorId) return [];
+      const budget = consumeReadBudget("my-clubs", 2);
+      if (!budget.allowed) {
+        setReadBudgetCooling(true);
+        return [];
+      }
       // Quota-safe mode: avoid expensive direct Firestore reads on each open.
       // Progress still renders, but starts from 0 until dedicated aggregate endpoint is added.
       const scansByDistillery = new Map<string, number>();
@@ -171,6 +178,12 @@ export default function MyClubs() {
   const effectiveClubs = clubs ?? clubsQuery.data ?? [];
   const isLoading = Boolean(visitorId) && clubs === null && clubsQuery.isFetching;
 
+  useEffect(() => {
+    if (!readBudgetCooling) return;
+    const timer = window.setTimeout(() => setReadBudgetCooling(false), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [readBudgetCooling]);
+
   const leaveClub = async (distilleryId: string) => {
     if (!visitorId) return;
     if (!confirm("Da li ste sigurni da želite da napustite ovaj klub? Sav vaš napredak ka nagradama u ovom klubu će biti izgubljen.")) return;
@@ -182,7 +195,9 @@ export default function MyClubs() {
       joined = joined.filter((id: string) => id !== distilleryId);
       localStorage.setItem(storageKey, JSON.stringify(joined));
 
-      const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
+      const leaveBudget = consumeReadBudget("my-clubs", 1);
+      const memberships = leaveBudget.allowed ? await fetchPublicClubMembershipsByVisitorId(visitorId, 80) : [];
+      if (!leaveBudget.allowed) setReadBudgetCooling(true);
       for (const m of memberships) {
         if (m.distilleryId === distilleryId && m.id) {
           await deleteDoc(doc(db, "club_memberships", m.id));
@@ -260,6 +275,13 @@ export default function MyClubs() {
       </div>
 
       <div className="px-6 space-y-8">
+        {readBudgetCooling && (
+          <div className="empty-state card-elevated rounded-[20px] px-4 py-3 text-center">
+            <p className="text-xs text-text-secondary leading-relaxed">
+              Privremena zaštita od prevelikog učitavanja je aktivna. Prikazujemo samo dostupne keširane podatke.
+            </p>
+          </div>
+        )}
         {effectiveClubs.length === 0 ? (
           <div className="empty-state card-elevated max-w-md mx-auto py-12 px-8 text-center space-y-6 rounded-[32px]">
             <div className="w-20 h-20 bg-gold-500/10 rounded-full flex items-center justify-center mx-auto border border-gold-500/20">

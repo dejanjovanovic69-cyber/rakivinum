@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-04-28 — **`dataService.ts` hardening:** uveden centralni env gate `VITE_ENABLE_FIRESTORE_FALLBACK=1` (Firestore fallback je sada stvarno opt-in); kada je gate ugašen, public read helper-i ostaju Worker/KV-only i vraćaju bezbedne default vrednosti (`[]`/`null`/`0`) umesto direktnog Firestore read-a. Ujedno očišćeni komentar stringovi sa encoding artefaktima. **Verifikacija:** `npm run lint` + `npm run build` + višestruki `cf:smoke:edge` prolazi 200/kv-hit. **Operativa:** bez deploy-a. **Sledeće:** 24h trend Firestore usage-a i tek po metrici novi endpoint/tuning.
+**Poslednji zapis:** 2026-04-30 — proširen kompletan “stop-the-bleed” paket: (1) klijentski **Firestore fallback circuit-breaker** u `src/lib/dataService.ts` (po ruti: max 2 fallback pokušaja u 1s, zatim 10s cooldown), i (2) **per-screen read budget** (`src/lib/readBudget.ts`) sa cache-only degradacijom kada se prekorači prag. Read budget je sada primenjen na `Community` (`useCommunityData`), `Home`, `MyClubs` i `Menu` (`useQuery` tokovi), čime se prekida burst read obrazac pri navigaciji/refetch ciklusima i na preostalim high-traffic ekranima. **Privremeni režim ostaje:** `safe freeze` (`VITE_ENABLE_FIRESTORE_FALLBACK=0`, `VITE_COMMUNITY_READ_EMERGENCY=1`, `VITE_EDGE_API_BASE` podešen na Worker URL), bez ad-hoc eksperimenata na produkciji.
 
 **Ranije (2026-04-27):** Playwright `/community?tab=compare&cf=sljivovica`; search `pf`/`q`, compare `lq`/`rq`, AGENTS/QA-E2E smoke, visitor/token repeat, Worker KV.
 

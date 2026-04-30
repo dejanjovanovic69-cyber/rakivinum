@@ -22,6 +22,7 @@ import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { fetchCommunityLinks, fetchPublicClubMembershipsByVisitorId, fetchPublicDistilleriesByIds } from "../lib/dataService";
 import { stableQueryOptions } from "../lib/queryDefaults";
 import { queryKeys } from "../lib/queryKeys";
+import { consumeReadBudget } from "../lib/readBudget";
 import {
   ACHIEVEMENT_EVENT_NAME,
   BADGE_DEFS,
@@ -148,6 +149,7 @@ export default function Menu() {
   const [guideTab, setGuideTab] = useState<"guide" | "badges">("guide");
   const [pendingRatingsCount, setPendingRatingsCount] = useState(0);
   const [achievementSummary, setAchievementSummary] = useState(() => getAchievementSummary());
+  const [readBudgetCooling, setReadBudgetCooling] = useState(false);
   const visitorId = localStorage.getItem("rakivinum_visitor_id");
   const navigate = useNavigate();
   const getFnErrorCode = (err: unknown) => String((err as { code?: unknown } | null)?.code || "");
@@ -270,6 +272,11 @@ export default function Menu() {
   const helpLinksQuery = useQuery<{ id: string; label: string; url: string }[]>({
     queryKey: queryKeys.menu.helpLinks(),
     queryFn: async () => {
+      const budget = consumeReadBudget("menu", 1);
+      if (!budget.allowed) {
+        setReadBudgetCooling(true);
+        return [];
+      }
       const rows = await fetchCommunityLinks({
         limitCount: 80,
         cacheKey: "rakivinum_cache_menu_help_links_v1",
@@ -303,6 +310,11 @@ export default function Menu() {
     enabled: Boolean(visitorId),
     queryFn: async () => {
       if (!visitorId) return [];
+      const budget = consumeReadBudget("menu", 2);
+      if (!budget.allowed) {
+        setReadBudgetCooling(true);
+        return [];
+      }
       const storageKey = `clubs_${visitorId}`;
       const mergeIdsFromFirestore = (firestoreIds: string[]) => {
         let localJoined: string[] = [];
@@ -349,6 +361,12 @@ export default function Menu() {
   const joinedClubsMenuReady = !joinedClubsQuery.isFetching;
   const helpLinks = helpLinksQuery.data || [];
   const helpLinksReady = !helpLinksQuery.isFetching;
+
+  useEffect(() => {
+    if (!readBudgetCooling) return;
+    const timer = window.setTimeout(() => setReadBudgetCooling(false), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [readBudgetCooling]);
 
   useEffect(() => {
     const syncPendingCount = () => {
@@ -948,6 +966,13 @@ export default function Menu() {
         </div>
       ) : (
         <div className="mb-2 h-16 rounded-2xl border border-white/5 bg-bg-card/20 animate-pulse" aria-hidden />
+      )}
+      {readBudgetCooling && (
+        <div className="empty-state card-elevated rounded-[20px] px-4 py-3 text-center mb-2">
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Privremena zaštita od prevelikog učitavanja je aktivna. Prikazujemo minimalan skup podataka.
+          </p>
+        </div>
       )}
 
       <div className="space-y-6">
