@@ -54,6 +54,13 @@ type ProductCard = {
   publicLabelDisabled?: boolean;
 };
 
+const DISTILLERY_PRODUCTS_PAGE_LIMIT = 48;
+
+function tabFromSearch(search: string): "products" | "about" {
+  const t = new URLSearchParams(search).get("tab");
+  return t === "about" ? "about" : "products";
+}
+
 export default function Distillery() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -87,7 +94,7 @@ export default function Distillery() {
   const [distillery, setDistillery] = useState<DistilleryProfile | null>(null);
   const [products, setProducts] = useState<ProductCard[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'products' | 'about'>('products');
+  const [activeTab, setActiveTab] = useState<"products" | "about">(() => tabFromSearch(location.search));
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get("tab");
     if (tab === "about" || tab === "products") {
@@ -165,10 +172,15 @@ export default function Distillery() {
           return;
         }
 
-        // Fetch their products
-        const filteredProducts = await fetchPublicProductsByDistilleryId(id, 300) as ProductCard[];
-        setProducts(filteredProducts);
-        if (productsCacheKey) writeCache(productsCacheKey, filteredProducts, REFRESH_INTERVAL.USER_LIGHT_1H);
+        // Katalog: samo na tabu „Proizvodi“ (tab „O nama“ ne treba do 100 read-ova za listu proizvoda).
+        if (activeTab === "products") {
+          const filteredProducts = (await fetchPublicProductsByDistilleryId(
+            id,
+            DISTILLERY_PRODUCTS_PAGE_LIMIT,
+          )) as ProductCard[];
+          setProducts(filteredProducts);
+          if (productsCacheKey) writeCache(productsCacheKey, filteredProducts, REFRESH_INTERVAL.USER_LIGHT_1H);
+        }
       } catch (err) {
         console.error("Error fetching distillery data", err);
         const cachedProfile = profileCacheKey ? readCache<DistilleryProfile>(profileCacheKey) : null;
@@ -189,7 +201,7 @@ export default function Distillery() {
           setMembershipDocId(null);
           return;
         }
-        const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 60);
+        const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 30);
         const membershipRow = memberships.find((m) => m.distilleryId === id);
         const joined = Boolean(membershipRow);
         setIsMember(joined);
@@ -232,12 +244,17 @@ export default function Distillery() {
     const cachedCount = memberCountCacheKey ? readCache<number>(memberCountCacheKey) : null;
     if (cachedProfile) setDistillery(cachedProfile);
     if (cachedProducts) setProducts(cachedProducts);
+    else setProducts([]);
     if (cachedProfile) setIsLoading(false);
     if (typeof cachedMembership === "boolean") setIsMember(cachedMembership);
     if (typeof cachedCount === "number") setTotalMembers(cachedCount);
 
     const shouldWarmNow = shouldRunRefresh(`distillery:${id || "unknown"}:initial`, REFRESH_INTERVAL.USER_LIGHT_1H);
-    if (!cachedProfile || !cachedProducts || shouldWarmNow) void fetchData(Boolean(cachedProfile));
+    const needProfileWarm = !cachedProfile || shouldWarmNow;
+    const needProductsWarm = activeTab === "products" && (!cachedProducts || shouldWarmNow);
+    if (needProfileWarm || needProductsWarm) {
+      void fetchData(Boolean(cachedProfile && (activeTab === "about" || !!cachedProducts)));
+    }
     if (typeof cachedMembership !== "boolean" || shouldWarmNow) void refreshMembership();
     if (typeof cachedCount !== "number" || shouldWarmNow) void refreshTotalMembers();
     const onFocusRefresh = () => {
@@ -257,7 +274,7 @@ export default function Distillery() {
       window.removeEventListener("focus", onFocusRefresh);
       document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
-  }, [id]);
+  }, [id, activeTab]);
 
   const [isJoining, setIsJoining] = useState(false);
 
