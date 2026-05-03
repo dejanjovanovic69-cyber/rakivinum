@@ -34,6 +34,14 @@ import { DISABLE_ONLINE_PRESENCE_TRACKING } from "../lib/presence";
 import { readCache, writeCache } from "../lib/resilience";
 
 const ADMIN_DISTILLERIES_LIST_CACHE_KEY = "rakivinum_cache_admin_distilleries_list_v1";
+const ADMIN_PENDING_APPROVALS_CACHE_KEY = "rakivinum_cache_admin_pending_approvals_v1";
+const ADMIN_EVENT_PROPOSALS_CACHE_KEY = "rakivinum_cache_admin_event_proposals_v1";
+const ADMIN_COMMUNITY_LINKS_CACHE_KEY = "rakivinum_cache_admin_community_links_v1";
+const ADMIN_COMMUNITY_EVENTS_CACHE_KEY = "rakivinum_cache_admin_community_events_v1";
+const ADMIN_FLAGGED_RATINGS_CACHE_KEY = "rakivinum_cache_admin_flagged_ratings_v1";
+const ADMIN_RECENT_RATINGS_CACHE_KEY = "rakivinum_cache_admin_recent_ratings_v1";
+const ADMIN_BLOCKED_USERS_CACHE_KEY = "rakivinum_cache_admin_blocked_users_v1";
+const ADMIN_LICENSES_CACHE_KEY = "rakivinum_cache_admin_licenses_v1";
 
 // Helper function to resize and compress image to base64
 const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality: number = 0.6): Promise<string> => {
@@ -845,8 +853,15 @@ export default function Admin() {
     }
   };
 
-  const fetchPendingProductApprovals = async () => {
+  const fetchPendingProductApprovals = async (opts?: { force?: boolean }) => {
     try {
+      if (!opts?.force) {
+        const cached = readCache<ProductListItem[]>(ADMIN_PENDING_APPROVALS_CACHE_KEY);
+        if (cached != null) {
+          setPendingProductApprovals(cached);
+          if (!shouldRunRefresh("admin:pending_approvals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        }
+      }
       const q = query(collection(db, "products"), where("isApproved", "==", false), limit(ADMIN_PENDING_APPROVALS_LIMIT));
       const snap = await getDocs(q);
       meterDbRead("admin:products_pending_approvals", snap.size);
@@ -856,70 +871,122 @@ export default function Admin() {
         const bTs = b.updatedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0;
         return bTs - aTs;
       });
+      writeCache(ADMIN_PENDING_APPROVALS_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setPendingProductApprovals(list);
     } catch (err) {
       console.error("Greška pri učitavanju promena za odobrenje", err);
     }
   };
 
-  const fetchEventProposals = async () => {
+  const fetchEventProposals = async (opts?: { force?: boolean }) => {
     try {
+      if (!opts?.force) {
+        const cached = readCache<EventProposalItem[]>(ADMIN_EVENT_PROPOSALS_CACHE_KEY);
+        if (cached != null) {
+          setEventProposals(cached);
+          if (!shouldRunRefresh("admin:event_proposals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        }
+      }
       const snap = await getDocs(query(collection(db, 'eventProposals'), limit(ADMIN_EVENT_PROPOSALS_LIMIT)));
-      setEventProposals(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const rows = snap.docs.map(d => ({ id: d.id, ...d.data() } as EventProposalItem));
+      writeCache(ADMIN_EVENT_PROPOSALS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      setEventProposals(rows);
     } catch (err) {
       console.error("Error fetching event proposals:", err);
     }
   };
 
-  const fetchCommunityLinks = async () => {
+  const fetchCommunityLinks = async (opts?: { force?: boolean }) => {
     try {
+      if (!opts?.force) {
+        const cached = readCache<CommunityLinkItem[]>(ADMIN_COMMUNITY_LINKS_CACHE_KEY);
+        if (cached != null) {
+          setCommunityLinks(cached);
+          if (!shouldRunRefresh("admin:community_links:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        }
+      }
       const snap = await getDocs(query(collection(db, 'community_links'), limit(ADMIN_LINKS_LIMIT)));
       const list: CommunityLinkItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityLinkItem) }));
       list.sort((a, b) => (a.label || "").localeCompare(b.label || "", 'sr'));
+      writeCache(ADMIN_COMMUNITY_LINKS_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setCommunityLinks(list);
     } catch (err) {
       console.error("Greška pri učitavanju korisnih linkova:", err);
     }
   };
 
-  const fetchCommunityEvents = async () => {
+  const fetchCommunityEvents = async (opts?: { force?: boolean }) => {
     try {
+      if (!opts?.force) {
+        const cached = readCache<CommunityEventItem[]>(ADMIN_COMMUNITY_EVENTS_CACHE_KEY);
+        if (cached != null) {
+          setCommunityEvents(cached);
+          if (!shouldRunRefresh("admin:community_events:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        }
+      }
       const snap = await getDocs(query(collection(db, 'community_events'), limit(ADMIN_EVENTS_LIMIT)));
       const list: CommunityEventItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityEventItem) }));
       list.sort((a, b) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
+      writeCache(ADMIN_COMMUNITY_EVENTS_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setCommunityEvents(list);
     } catch (err) {
       console.error("Greška pri učitavanju događaja:", err);
     }
   };
 
-  const fetchFlaggedRatings = async () => {
+  const fetchFlaggedRatings = async (opts?: { force?: boolean }) => {
     try {
-      // Query for ratings where isFlagged is true OR it was auto-flagged
+      if (!opts?.force) {
+        const cached = readCache<RatingRow[]>(ADMIN_FLAGGED_RATINGS_CACHE_KEY);
+        if (cached != null) {
+          setFlaggedRatings(cached);
+          if (!shouldRunRefresh("admin:ratings_flagged:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        }
+      }
       const q = query(collection(db, "ratings"), where("isFlagged", "==", true), limit(ADMIN_FLAGGED_RATINGS_LIMIT));
       const snap = await getDocs(q);
       meterDbRead("admin:ratings_flagged", snap.size);
-      setFlaggedRatings(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RatingRow));
+      writeCache(ADMIN_FLAGGED_RATINGS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      setFlaggedRatings(rows);
     } catch (err) {
       console.error("Error fetching flagged ratings:", err);
     }
   };
 
-  const fetchRecentRatings = async () => {
+  const fetchRecentRatings = async (opts?: { force?: boolean }) => {
     try {
+      if (!opts?.force) {
+        const cached = readCache<RatingRow[]>(ADMIN_RECENT_RATINGS_CACHE_KEY);
+        if (cached != null) {
+          setAllRatings(cached);
+          if (!shouldRunRefresh("admin:ratings_recent:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        }
+      }
       const q = query(collection(db, "ratings"), orderBy("createdAt", "desc"), limit(40));
       const snap = await getDocs(q);
       meterDbRead("admin:ratings_recent", snap.size);
-      setAllRatings(snap.docs.map((d) => ({ id: d.id, ...d.data() } as RatingRow)));
+      const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RatingRow));
+      writeCache(ADMIN_RECENT_RATINGS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      setAllRatings(rows);
     } catch (err) {
       console.error("Error fetching ratings:", err);
     }
   };
 
-  const fetchBlockedUsers = async () => {
+  const fetchBlockedUsers = async (opts?: { force?: boolean }) => {
     try {
+      if (!opts?.force) {
+        const cached = readCache<string[]>(ADMIN_BLOCKED_USERS_CACHE_KEY);
+        if (cached != null) {
+          setBlockedUsers(cached);
+          if (!shouldRunRefresh("admin:blocked_users:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        }
+      }
       const snap = await getDocs(query(collection(db, 'blocked_users'), limit(ADMIN_BLOCKED_USERS_LIMIT)));
-      setBlockedUsers(snap.docs.map(d => d.id));
+      const rows = snap.docs.map(d => d.id);
+      writeCache(ADMIN_BLOCKED_USERS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      setBlockedUsers(rows);
     } catch (err) {
       console.error("Error fetching blocked users:", err);
     }
@@ -968,10 +1035,19 @@ export default function Admin() {
     }
   };
 
-  const fetchLicenses = async () => {
+  const fetchLicenses = async (opts?: { force?: boolean }) => {
     try {
+      if (!opts?.force) {
+        const cached = readCache<LicenseItem[]>(ADMIN_LICENSES_CACHE_KEY);
+        if (cached != null) {
+          setLicenses(cached);
+          if (!shouldRunRefresh("admin:licenses:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        }
+      }
       const snap = await getDocs(query(collection(db, 'licenses'), limit(ADMIN_LICENSES_LIMIT)));
-      setLicenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const rows = snap.docs.map(d => ({ id: d.id, ...d.data() } as LicenseItem));
+      writeCache(ADMIN_LICENSES_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      setLicenses(rows);
     } catch (err) {
       console.error("Error fetching licenses:", err);
     }
@@ -1218,7 +1294,7 @@ export default function Admin() {
       // We will clear the count to 1 just in case
       setBatchCount(1);
       setBatchEmail("");
-      fetchLicenses();
+      void fetchLicenses({ force: true });
     } catch (err: unknown) {
       console.error(err);
       alert("Greška pri generisanju licenci: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
@@ -1235,7 +1311,7 @@ export default function Admin() {
           maxDevices: Number(newLimit),
           comment: `Limit povećan na ${newLimit} (${new Date().toLocaleDateString()})`
         });
-        fetchLicenses();
+        void fetchLicenses({ force: true });
       } catch (err) {
         console.error(err);
       }
@@ -1318,7 +1394,7 @@ export default function Admin() {
       }
       setLinkForm({ label: "", url: "" });
       setEditingLinkId(null);
-      fetchCommunityLinks();
+      void fetchCommunityLinks({ force: true });
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju linka.");
@@ -1333,7 +1409,7 @@ export default function Admin() {
         setEditingLinkId(null);
         setLinkForm({ label: "", url: "" });
       }
-      fetchCommunityLinks();
+      void fetchCommunityLinks({ force: true });
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju linka.");
@@ -1368,7 +1444,7 @@ export default function Admin() {
       }
       setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       setEditingEventId(null);
-      fetchCommunityEvents();
+      void fetchCommunityEvents({ force: true });
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju događaja.");
@@ -2227,7 +2303,7 @@ export default function Admin() {
               </p>
             </div>
             <button
-              onClick={() => fetchPendingProductApprovals()}
+              onClick={() => void fetchPendingProductApprovals({ force: true })}
               className="px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase"
             >
               Osveži
@@ -2911,7 +2987,7 @@ export default function Admin() {
                       onClick={async () => {
                         if (window.confirm("Obriši ovaj predlog?")) {
                           await deleteDoc(doc(db, 'eventProposals', ev.id));
-                          fetchEventProposals();
+                          void fetchEventProposals({ force: true });
                         }
                       }}
                       className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors shrink-0"
@@ -3346,7 +3422,7 @@ export default function Admin() {
                            try {
                              await deleteDoc(doc(db, 'licenses', lic.id));
                              setConfirmDeleteLicenseId(null);
-                             fetchLicenses();
+                             void fetchLicenses({ force: true });
                           } catch (e: unknown) {
                             alert("Greška pri brisanju: " + ((e as { message?: string } | null)?.message || "Nepoznata greška"));
                            }
