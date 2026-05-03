@@ -9,6 +9,7 @@ import PwaManager from "./components/PwaManager";
 import { isSuperuserEmail } from "./lib/authz";
 import { extractActivateTokenFromInput, isLicensedLocalStorage } from "./lib/extractActivateToken";
 import { initPresenceTracking } from "./lib/presence";
+import { DiagnosticRouteGate } from "./lib/routeDiagnostics";
 
 const Home = lazy(() => import("./pages/Home"));
 const Workshop = lazy(() => import("./pages/Workshop"));
@@ -177,31 +178,56 @@ export default function App() {
       <PwaManager />
       <Suspense fallback={routeFallback}>
         <Routes>
-          <Route path="/activate" element={<Activate />} />
-          <Route path="/admin" element={<Admin />} />
-          
-          {/* PUBLIC ROUTES - NO BURDEN */}
+          <Route path="/activate" element={<DiagnosticRouteGate><Activate /></DiagnosticRouteGate>} />
+          <Route path="/admin" element={<DiagnosticRouteGate><Admin /></DiagnosticRouteGate>} />
+
+          {/* PUBLIC ROUTES - NO BURDEN (VITE_DISABLED_ROUTES isključuje pojedine putanje bez menjanja koda) */}
           <Route path="/" element={<MobileLayout />}>
-            <Route index element={<Home />} />
-            <Route path="scan" element={<Scanner />} />
-            <Route path="radionica" element={<Workshop />} />
-            <Route path="community" element={<Community />} />
-            <Route path="menu" element={<Menu />} />
-            <Route path="my-clubs" element={<MyClubs />} />
-            <Route path="distilleries" element={<Distilleries />} />
-            <Route path="collection" element={<Collection />} />
-            
-            {/* PREMIUM ROUTES - LICENSED */}
+            <Route index element={<DiagnosticRouteGate><Home /></DiagnosticRouteGate>} />
+            <Route path="scan" element={<DiagnosticRouteGate><Scanner /></DiagnosticRouteGate>} />
+            <Route path="radionica" element={<DiagnosticRouteGate><Workshop /></DiagnosticRouteGate>} />
+            <Route path="community" element={<DiagnosticRouteGate><Community /></DiagnosticRouteGate>} />
+            <Route path="menu" element={<DiagnosticRouteGate><Menu /></DiagnosticRouteGate>} />
+            <Route path="my-clubs" element={<DiagnosticRouteGate><MyClubs /></DiagnosticRouteGate>} />
+            <Route path="distilleries" element={<DiagnosticRouteGate><Distilleries /></DiagnosticRouteGate>} />
+            <Route path="collection" element={<DiagnosticRouteGate><Collection /></DiagnosticRouteGate>} />
           </Route>
-          
+
           {/* Public Full screen routes */}
-          <Route path="/label/:id" element={<Label />} />
-          <Route path="/distillery/:id" element={<Distillery />} />
-          
+          <Route path="/label/:id" element={<DiagnosticRouteGate><Label /></DiagnosticRouteGate>} />
+          <Route path="/distillery/:id" element={<DiagnosticRouteGate><Distillery /></DiagnosticRouteGate>} />
+
           {/* Professional/B2B routes */}
-          <Route path="/distillery-dashboard" element={<LicenseGuard><DistilleryDashboard /></LicenseGuard>} />
-          <Route path="/product-analytics/:id" element={<LicenseGuard><ProductAnalytics /></LicenseGuard>} />
-          <Route path="/admin-audit" element={<LicenseGuard><AdminAudit /></LicenseGuard>} />
+          <Route
+            path="/distillery-dashboard"
+            element={
+              <DiagnosticRouteGate>
+                <LicenseGuard>
+                  <DistilleryDashboard />
+                </LicenseGuard>
+              </DiagnosticRouteGate>
+            }
+          />
+          <Route
+            path="/product-analytics/:id"
+            element={
+              <DiagnosticRouteGate>
+                <LicenseGuard>
+                  <ProductAnalytics />
+                </LicenseGuard>
+              </DiagnosticRouteGate>
+            }
+          />
+          <Route
+            path="/admin-audit"
+            element={
+              <DiagnosticRouteGate>
+                <LicenseGuard>
+                  <AdminAudit />
+                </LicenseGuard>
+              </DiagnosticRouteGate>
+            }
+          />
         </Routes>
       </Suspense>
     </Router>
