@@ -1,6 +1,6 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
-**Poslednji zapis:** 2026-05-03 — **Kritičan bug (read spike):** `dataService` **`dedupe`** i Worker **`servePublicCached` in-flight** su mapu popunjavali *posle* što je `factory()`/`handler()` već krenuo do prvog `await` — paralelni pozivi mogli da pokrenu **više punih** Firestore/edge puteva (npr. desetine istovremenih `home-bundle` / `products`). Sada se **Promise upisuje u mapu sinhrono pre** pokretanja rada. **Ranije istog dana:** home-bundle cap-ovi, Home `useRef`, `caches.default` + in-flight.
+**Poslednji zapis:** 2026-05-03 — **Kritičan bug (read spike):** `dataService` **`dedupe`** i Worker **`servePublicCached` in-flight** su mapu popunjavali *posle* što je `factory()`/`handler()` već krenuo do prvog `await` — paralelni pozivi mogli da pokrenu **više punih** Firestore/edge puteva (npr. desetine istovremenih `home-bundle` / `products`). Sada se **Promise upisuje u mapu sinhrono pre** pokretanja rada. **Worker `GET /`:** više nije prazan 404 u pregledaču — vraća kratki JSON (API host, nema HTML). **Zaključak celog niza (Worker vs domen vs grafici):** vidi odeljak **„Zaključak (Worker vs hosting vs Firestore)“** ispod. **Ranije istog dana:** home-bundle cap-ovi, Home `useRef`, `caches.default` + in-flight.
 
 **Isto (2026-05-03):** **Community** u jedan fajl, lint = `tsc`, skraćen Playwright smoke, `dataService`/Worker/`requestMeter` + indeksi, `.gitignore` (`.wrangler/`, service-account JSON obrasci), uklonjen slučajni credential JSON iz korena. **Firestore (nastavak):** `DistilleryDashboard` klub-panel preko **`fetchPublicClubActionsForDistillery`** / **`fetchPublicClubMembershipCount`**; `DistilleryAnalyticsModal` broj članova preko istog count helpera; **Admin** brisanje destilerije — proizvodi **`orderBy(documentId())` + kursor** kao kod arhive. **Još:** **Menu** — `sessionStorage` keš za vlasnički `distilleries` lookup (5 min / 45 s); **DistilleryDashboard** — `latestInit` protiv duplog `initData`; **MyClubs** — paralelno `fetchPublicClubActionsForDistillery`; **dataService** — 2m keš praznog edge odgovora za **daily-recommendations**. **Admin panel:** lista destilerija + lista proizvoda — **`readCache`/`writeCache` + `shouldRunRefresh`** (10m), mrežni `getDocs` samo kad treba ili uz **`force: true`** posle mutacija; **isti obrazac** za pending approvals, events/links/community events, moderation (flagged/recent/blocked), licence. Detalji u `FIRESTORE-READ-AUDIT.md`.
 
@@ -18,6 +18,18 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 
 **Resilient deploy (kad Cloudflare vrati 500/10500):**  
 `npm run cf:deploy:resilient` (retry Worker deploy + Pages deploy sa `functions` workaround-om).
+
+---
+
+## Zaključak (Worker vs hosting vs Firestore)
+
+1. **Dva različita „sajta“.** `rakivinum.com` (i Pages npr. `*.pages.dev`) servira **frontend** (HTML/JS). `https://rakivinum-api.*.workers.dev` je **samo JSON API** (`/health`, `/api/public/...`). Otvaranje Worker korena u pregledaču nikad nije bilo „pokvareno“ — ranije je bilo **404 jer nema stranice**; sada je **`GET /`** jasan JSON odgovor umesto zbunjujućeg „Not Found“.
+
+2. **Zašto grafici nisu isti po URL-u.** Firestore **Reads** u konzoli mere ono što **Firestore stvarno izvrši** (uključujući edge Worker koji zove Firestore). Različit hosting (Pages vs custom domen), **hladan keš**, prvi ulazak vs ponovni, i **broj paralelnih zahteva** daju različite pikove — to **ne znači** da je jedan URL „lošiji“ po dizajnu; znači da je u tom trenutku drugačiji niz read-ova (npr. više miss-eva ili više paralelnih poziva pre fix-a dedupe/in-flight).
+
+3. **Arhitektura koja štedi read-ove.** Javni read ide **Worker-first** (`VITE_EDGE_API_BASE`), pa **ograničen Firebase fallback** gde ima smisla; na Workeru su **cap-ovi**, **edge keš**, **in-flight koalescencija** i ispravan **dedupe** (Promise u mapu *pre* prvog `await`) da se izbegnu dupli puni tokovi. Privatni/admin podaci i dalje **ne** idu na javne GET rute bez auth modela.
+
+4. **Šta je „najbolje“ za korisnika.** Za normalno korišćenje aplikacije uvek **glavni domen** (npr. `rakivinum.com`). Worker URL koristiš za **smoke** (`/health`, `home-bundle`, itd.) ili za debag mreže — ne kao zamenik početne stranice u pregledaču.
 
 ---
 
