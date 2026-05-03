@@ -275,7 +275,7 @@ function parseHomeBundleJson(json: Record<string, unknown>): HomeBundlePublic {
 export async function fetchPublicHomeBundle(visitorId: string | null | undefined): Promise<HomeBundlePublic | null> {
   const v = String(visitorId || "").trim();
   const dedupeKey = `homeBundle:${v || "anon"}`;
-  const cacheKey = v ? `rakivinum_cache_home_bundle_${v}_v3` : `rakivinum_cache_home_bundle_anon_v3`;
+  const cacheKey = v ? `rakivinum_cache_home_bundle_${v}_v4` : `rakivinum_cache_home_bundle_anon_v4`;
 
   return dedupe(dedupeKey, async () => {
     const cached = readCache<HomeBundlePublic>(cacheKey);

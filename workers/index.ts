@@ -470,6 +470,22 @@ function dailyRecommendationsFromRows(rows: Record<string, unknown>[]): {
   };
 }
 
+/** Kada proizvod nema HTTP `image`/`bottleImageUrl` (npr. posle stripovanja data:), koristi logo destilerije za mali prikaz na Home. */
+async function enrichDailyItemWithDistilleryLogoFallback(
+  env: Env,
+  item: Record<string, unknown> | null,
+): Promise<Record<string, unknown> | null> {
+  if (!item) return null;
+  if (sanitizeImageUrl(item.image) || sanitizeImageUrl(item.bottleImageUrl)) return item;
+  const did = asText(item.distilleryId);
+  if (!did) return item;
+  const d = await fetchDocumentById(env, "distilleries", did);
+  if (!d || d.isArchived === true || d.isVerified !== true) return item;
+  const logo = sanitizeImageUrl(d.logoUrl);
+  if (!logo) return item;
+  return { ...item, image: logo };
+}
+
 function toNumberOrZero(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -966,7 +982,11 @@ export default {
               .map((r) => toClubActionItem(r));
 
             const productRows = await fetchCollection(env, "products", 8);
-            const daily = dailyRecommendationsFromRows(productRows);
+            const dailyRaw = dailyRecommendationsFromRows(productRows);
+            const daily = {
+              rakija: await enrichDailyItemWithDistilleryLogoFallback(env, dailyRaw.rakija),
+              vino: await enrichDailyItemWithDistilleryLogoFallback(env, dailyRaw.vino),
+            };
 
             const distilleryIds = Array.from(
               new Set(
@@ -1007,7 +1027,11 @@ export default {
           ctx,
           async () => {
             const rows = await fetchCollection(env, "products", 8);
-            const daily = dailyRecommendationsFromRows(rows);
+            const dailyRaw = dailyRecommendationsFromRows(rows);
+            const daily = {
+              rakija: await enrichDailyItemWithDistilleryLogoFallback(env, dailyRaw.rakija),
+              vino: await enrichDailyItemWithDistilleryLogoFallback(env, dailyRaw.vino),
+            };
             return new Response(JSON.stringify(daily), { headers: jsonHeaders });
           },
           { memTtlMs: 900_000 },

@@ -48,6 +48,47 @@ function pickProductThumbSrc(p: Pick<ProductLite, "id" | "image" | "bottleImageU
   return `https://picsum.photos/seed/${seed}/200/200`;
 }
 
+function HomeDailyThumbImg({ product, alt }: { product: ProductLite; alt: string }) {
+  const [src, setSrc] = useState(() => pickProductThumbSrc(product));
+  const phaseRef = useRef(0);
+
+  useEffect(() => {
+    phaseRef.current = 0;
+    setSrc(pickProductThumbSrc(product));
+  }, [product.id, product.image, product.bottleImageUrl, product.type]);
+
+  const fallbackPicsum = `https://picsum.photos/seed/rakivinum-${encodeURIComponent(product.id)}/200/200`;
+
+  const handleError = () => {
+    const a = String(product.image || "").trim();
+    const b = String(product.bottleImageUrl || "").trim();
+    if (phaseRef.current === 0 && a && b && a !== b) {
+      const other = src === a ? b : src === b ? a : "";
+      if (other && other !== src) {
+        phaseRef.current = 1;
+        setSrc(other);
+        return;
+      }
+    }
+    if (src !== fallbackPicsum) {
+      phaseRef.current = 2;
+      setSrc(fallbackPicsum);
+    }
+  };
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="h-full w-full object-cover object-center media-crisp"
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      onError={handleError}
+    />
+  );
+}
+
 type DistilleryLite = {
   id: string;
   name?: string;
@@ -119,7 +160,7 @@ export default function Home() {
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
     const visitorId = localStorage.getItem("rakivinum_visitor_id");
-    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v3` : `rakivinum_cache_home_bundle_anon_v3`;
+    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v4` : `rakivinum_cache_home_bundle_anon_v4`;
 
     const applyBundle = (b: HomeBundlePublic) => {
       const clubs = b.memberships
@@ -359,18 +400,7 @@ export default function Home() {
                 <div className="card-soft card-elevated card-interactive border-gold-500/25 p-4">
                   <div className="flex items-center gap-4">
                     <div className="h-[4.5rem] w-[4.5rem] rounded-xl overflow-hidden bg-black border border-white/10 shrink-0">
-                      <img
-                        src={pickProductThumbSrc(recommendedRakija)}
-                        alt="Rakija dana"
-                        className="h-full w-full object-cover object-center media-crisp"
-                        loading="lazy"
-                        decoding="async"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          const el = e.target as HTMLImageElement;
-                          el.src = `https://picsum.photos/seed/rakivinum-${encodeURIComponent(recommendedRakija.id)}/200/200`;
-                        }}
-                      />
+                      <HomeDailyThumbImg product={recommendedRakija} alt="Rakija dana" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="eyebrow-label text-gold-500">Rakija dana</p>
@@ -391,18 +421,7 @@ export default function Home() {
                 <div className="card-soft card-elevated card-interactive border-purple-500/25 p-4 hover:border-purple-500/50">
                   <div className="flex items-center gap-4">
                     <div className="h-[4.5rem] w-[4.5rem] rounded-xl overflow-hidden bg-black border border-white/10 shrink-0">
-                      <img
-                        src={pickProductThumbSrc(recommendedVino)}
-                        alt="Vino dana"
-                        className="h-full w-full object-cover object-center media-crisp"
-                        loading="lazy"
-                        decoding="async"
-                        referrerPolicy="no-referrer"
-                        onError={(e) => {
-                          const el = e.target as HTMLImageElement;
-                          el.src = `https://picsum.photos/seed/rakivinum-${encodeURIComponent(recommendedVino.id)}/200/200`;
-                        }}
-                      />
+                      <HomeDailyThumbImg product={recommendedVino} alt="Vino dana" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="eyebrow-label text-purple-400">Vino dana</p>
