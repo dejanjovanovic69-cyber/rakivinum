@@ -4,16 +4,11 @@ import { useState, useEffect } from "react";
 import { auth } from "../lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import { cn } from "../lib/utils";
-import { isQuotaError, readCache, writeCache } from "../lib/resilience";
-import {
-  fetchPublicClubActions,
-  fetchPublicClubMembershipsByVisitorId,
-  fetchPublicDailyRecommendations,
-  fetchPublicDistilleriesByIds,
-  fetchPublicLicenseByToken,
-} from "../lib/dataService";
+import { isQuotaError, readCache } from "../lib/resilience";
+import type { HomeBundlePublic } from "../lib/dataService";
+import { fetchPublicHomeBundle, fetchPublicLicenseByToken } from "../lib/dataService";
 import { shouldRunRefresh } from "../lib/refreshGate";
-import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 
 type ProductLite = {
   id: string;
@@ -95,78 +90,81 @@ export default function Home() {
 
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
-    const visitorId = localStorage.getItem('rakivinum_visitor_id');
-    const clubsCacheKey = visitorId ? `rakivinum_cache_home_clubs_${visitorId}_v1` : null;
-    const actionsCacheKey = "rakivinum_cache_home_actions_v1";
+    const visitorId = localStorage.getItem("rakivinum_visitor_id");
+    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v1` : `rakivinum_cache_home_bundle_anon_v1`;
 
-    const refreshMemberships = async () => {
-      if (!visitorId) return;
-      try {
-        const rows = await fetchPublicClubMembershipsByVisitorId(visitorId, 30);
-        const clubs = rows.map((d) => d.distilleryId).filter((x): x is string => typeof x === "string" && x.trim() !== "");
-        setJoinedClubs(clubs);
-        localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
-        if (clubsCacheKey) writeCache(clubsCacheKey, clubs, REFRESH_INTERVAL.USER_LIGHT_1H);
-      } catch (err) {
-        console.error("Error fetching memberships:", err);
-        if (isQuotaError(err)) setQuotaExceeded(true);
-        if (clubsCacheKey) {
-          const cached = readCache<string[]>(clubsCacheKey);
-          if (cached) setJoinedClubs(cached);
+    const applyBundle = (b: HomeBundlePublic) => {
+      const clubs = b.memberships
+        .map((d) => d.distilleryId)
+        .filter((x): x is string => typeof x === "string" && x.trim() !== "");
+      setJoinedClubs(clubs);
+      if (visitorId) {
+        try {
+          localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
+        } catch {
+          // ignore storage errors
         }
       }
+      const filteredActions = (b.actions as ClubActionLite[])
+        .filter((action) => {
+          if (!action.endsAt) return true;
+          const end = toDateSafe(action.endsAt);
+          return end > new Date();
+        })
+        .sort((a, b) => {
+          const dateA = toDateSafe(a.createdAt).getTime();
+          const dateB = toDateSafe(b.createdAt).getTime();
+          return dateB - dateA;
+        });
+      setActiveActions(filteredActions);
+      setRecommendedRakija((b.daily.rakija as ProductLite | null) || null);
+      setRecommendedVino((b.daily.vino as ProductLite | null) || null);
+      setDistilleryMap(b.distilleryNames || {});
     };
 
-    const refreshActions = async () => {
+    const cached = readCache<HomeBundlePublic>(bundleCacheKey);
+    if (cached) {
+      applyBundle(cached);
+      setIsLoadingRec(false);
+    } else {
+      setIsLoadingRec(true);
+    }
+
+    const refreshBundle = async () => {
       try {
-        const actions = await fetchPublicClubActions(20) as ClubActionLite[];
-        const filteredActions = actions
-          .filter((action) => {
-            if (!action.endsAt) return true;
-            const end = toDateSafe(action.endsAt);
-            return end > new Date();
-          })
-          .sort((a, b) => {
-            const dateA = toDateSafe(a.createdAt).getTime();
-            const dateB = toDateSafe(b.createdAt).getTime();
-            return dateB - dateA;
-          });
-        setActiveActions(filteredActions);
-        writeCache(actionsCacheKey, filteredActions, REFRESH_INTERVAL.USER_LIGHT_1H);
+        const b = await fetchPublicHomeBundle(visitorId);
+        if (b) applyBundle(b);
       } catch (err) {
-        console.error("Error fetching active actions:", err);
+        console.error("Greška pri učitavanju Home paketa:", err);
         if (isQuotaError(err)) setQuotaExceeded(true);
-        const cached = readCache<ClubActionLite[]>(actionsCacheKey);
-        if (cached) setActiveActions(cached);
+        const stale = readCache<HomeBundlePublic>(bundleCacheKey);
+        if (stale) applyBundle(stale);
+      } finally {
+        setIsLoadingRec(false);
       }
     };
 
-    const cachedClubs = clubsCacheKey ? readCache<string[]>(clubsCacheKey) : null;
-    if (cachedClubs) setJoinedClubs(cachedClubs);
-    const cachedActions = readCache<ClubActionLite[]>(actionsCacheKey);
-    if (cachedActions) setActiveActions(cachedActions);
+    const shouldWarmNow = shouldRunRefresh("home:initial-bundle", REFRESH_INTERVAL.USER_LIGHT_1H);
+    if (!cached || shouldWarmNow) void refreshBundle();
 
-    const shouldWarmNow = shouldRunRefresh("home:initial-clubs-actions", REFRESH_INTERVAL.USER_LIGHT_1H);
-    if (!cachedClubs || shouldWarmNow) void refreshMemberships();
-    if (!cachedActions || shouldWarmNow) void refreshActions();
-
-    if (DISABLE_HOME_FOCUS_REFRESH) return;
+    if (DISABLE_HOME_FOCUS_REFRESH) {
+      return undefined;
+    }
     const onFocusRefresh = () => {
       if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh("home:focus-clubs-actions", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
-      void refreshMemberships();
-      void refreshActions();
+      if (!shouldRunRefresh("home:focus-bundle", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      void refreshBundle();
     };
     const onVisibilityRefresh = () => {
       if (document.visibilityState !== "visible") return;
       onFocusRefresh();
     };
-    window.addEventListener('focus', onFocusRefresh);
-    document.addEventListener('visibilitychange', onVisibilityRefresh);
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
 
     return () => {
-      window.removeEventListener('focus', onFocusRefresh);
-      document.removeEventListener('visibilitychange', onVisibilityRefresh);
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
   }, [EMERGENCY_READ_FREEZE, DISABLE_HOME_FOCUS_REFRESH]);
 
@@ -211,63 +209,6 @@ export default function Home() {
     });
     return () => unsubscribe();
   }, []);
-
-  useEffect(() => {
-    if (EMERGENCY_READ_FREEZE) return;
-    const loadInitialData = async () => {
-      setIsLoadingRec(true);
-      try {
-        const daily = await fetchPublicDailyRecommendations();
-        setRecommendedRakija((daily.rakija as ProductLite | null) || null);
-        setRecommendedVino((daily.vino as ProductLite | null) || null);
-        writeCache(
-          "rakivinum_cache_home_recommendation_v1",
-          { rakija: (daily.rakija as ProductLite | null) || null, vino: (daily.vino as ProductLite | null) || null },
-          CACHE_TTL.HOME_RECOMMENDATIONS_6H,
-        );
-      } catch (e) {
-        console.error("Greška pri učitavanju Home podataka:", e);
-        if (isQuotaError(e)) setQuotaExceeded(true);
-        const cachedRec = readCache<{ rakija: ProductLite | null; vino: ProductLite | null }>("rakivinum_cache_home_recommendation_v1");
-        if (cachedRec) {
-          setRecommendedRakija(cachedRec.rakija || null);
-          setRecommendedVino(cachedRec.vino || null);
-        }
-      }
-      finally {
-        setIsLoadingRec(false);
-      }
-    };
-    void loadInitialData();
-  }, [EMERGENCY_READ_FREEZE]);
-
-  useEffect(() => {
-    if (EMERGENCY_READ_FREEZE) return;
-    const loadDistilleryMap = async () => {
-      const ids = Array.from(
-        new Set(
-          activeActions
-            .map((a) => String(a.distilleryId || "").trim())
-            .filter((id) => id.length > 0),
-        ),
-      );
-      if (ids.length === 0) return;
-      try {
-        const rows = await fetchPublicDistilleriesByIds(ids);
-        const map: Record<string, string> = {};
-        rows.forEach((d) => {
-          map[String(d.id)] = String(d.name || "");
-        });
-        setDistilleryMap((prev) => ({ ...prev, ...map }));
-        writeCache("rakivinum_cache_home_distillery_map_v1", { ...distilleryMap, ...map }, CACHE_TTL.HOME_DISTILLERY_MAP_6H);
-      } catch (err) {
-        console.error("Error loading distillery map for actions", err);
-        const cachedMap = readCache<Record<string, string>>("rakivinum_cache_home_distillery_map_v1");
-        if (cachedMap) setDistilleryMap(cachedMap);
-      }
-    };
-    void loadDistilleryMap();
-  }, [EMERGENCY_READ_FREEZE, activeActions]);
 
   useEffect(() => {
     const userStatsCacheKey = userId ? `rakivinum_cache_home_user_stats_${userId}_v1` : null;

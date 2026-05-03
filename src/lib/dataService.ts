@@ -1,7 +1,7 @@
 ﻿import { collection, doc, documentId, getCountFromServer, getDoc, getDocs, limit, orderBy, query, where } from "firebase/firestore";
 import { db } from "./firebase";
 import { isQuotaError, readCache, writeCache } from "./resilience";
-import { CACHE_TTL } from "./cachePolicy";
+import { CACHE_TTL, REFRESH_INTERVAL } from "./cachePolicy";
 import { meterDbRead, meterEdgeRequest } from "./requestMeter";
 
 type DistilleryPublic = { id: string; isArchived?: boolean; isVerified?: boolean; [key: string]: unknown };
@@ -29,6 +29,13 @@ type LabelViewPublic = {
 type DailyRecommendationsPublic = {
   rakija: ProductPublic | null;
   vino: ProductPublic | null;
+};
+
+export type HomeBundlePublic = {
+  memberships: ClubMembershipPublic[];
+  actions: ClubActionPublic[];
+  daily: DailyRecommendationsPublic;
+  distilleryNames: Record<string, string>;
 };
 
 const inFlight = new Map<string, Promise<unknown>>();
@@ -203,6 +210,47 @@ export async function fetchPublicDailyRecommendations(): Promise<DailyRecommenda
     const payload = { rakija, vino };
     writeCache(cacheKey, payload, CACHE_TTL.HOME_RECOMMENDATIONS_6H);
     return payload;
+  });
+}
+
+function parseHomeBundleJson(json: Record<string, unknown>): HomeBundlePublic {
+  const memberships = (Array.isArray(json.memberships) ? json.memberships : []) as ClubMembershipPublic[];
+  const actions = (Array.isArray(json.actions) ? json.actions : []) as ClubActionPublic[];
+  const dailyRaw = json.daily;
+  let daily: DailyRecommendationsPublic = { rakija: null, vino: null };
+  if (dailyRaw && typeof dailyRaw === "object" && !Array.isArray(dailyRaw)) {
+    const dr = dailyRaw as Record<string, unknown>;
+    const rak = dr.rakija;
+    const vin = dr.vino;
+    daily = {
+      rakija: rak && typeof rak === "object" ? (rak as ProductPublic) : null,
+      vino: vin && typeof vin === "object" ? (vin as ProductPublic) : null,
+    };
+  }
+  const dn = json.distilleryNames;
+  const distilleryNames =
+    dn && typeof dn === "object" && !Array.isArray(dn) ? (dn as Record<string, string>) : {};
+  return { memberships, actions, daily, distilleryNames };
+}
+
+/** Jedan edge poziv za Home: članstva + akcije + dnevna preporuka + imena destilerija (manje Firestore rundi na Workeru). */
+export async function fetchPublicHomeBundle(visitorId: string | null | undefined): Promise<HomeBundlePublic | null> {
+  const v = String(visitorId || "").trim();
+  const dedupeKey = `homeBundle:${v || "anon"}`;
+  const cacheKey = v ? `rakivinum_cache_home_bundle_${v}_v1` : `rakivinum_cache_home_bundle_anon_v1`;
+
+  return dedupe(dedupeKey, async () => {
+    const cached = readCache<HomeBundlePublic>(cacheKey);
+    if (cached) return cached;
+
+    const qs = v ? `?visitor=${encodeURIComponent(v)}` : "";
+    const json = await fetchEdgeRawJson(`/api/public/home-bundle${qs}`);
+    if (!json || typeof json !== "object") {
+      return readStaleCacheValue<HomeBundlePublic>(cacheKey);
+    }
+    const parsed = parseHomeBundleJson(json as Record<string, unknown>);
+    writeCache(cacheKey, parsed, REFRESH_INTERVAL.USER_LIGHT_1H);
+    return parsed;
   });
 }
 

@@ -105,7 +105,8 @@ function isEmergencyCacheOnlyPath(pathname: string): boolean {
     pathname === "/api/public/distilleries" ||
     pathname === "/api/public/ratings-feed" ||
     pathname === "/api/public/club-actions" ||
-    pathname === "/api/public/daily-recommendations"
+    pathname === "/api/public/daily-recommendations" ||
+    pathname === "/api/public/home-bundle"
   ) {
     return true;
   }
@@ -119,6 +120,14 @@ function isEmergencyCacheOnlyPath(pathname: string): boolean {
 }
 
 function emergencyEmptyPayload(pathname: string): string {
+  if (pathname === "/api/public/home-bundle") {
+    return JSON.stringify({
+      memberships: [],
+      actions: [],
+      daily: { rakija: null, vino: null },
+      distilleryNames: {},
+    });
+  }
   if (pathname === "/api/public/daily-recommendations") {
     return JSON.stringify({ rakija: null, vino: null });
   }
@@ -157,6 +166,11 @@ async function servePublicCached(
   }
   if (cacheUrl.pathname === "/api/public/product-lookup") {
     if (cacheUrl.searchParams.has("n")) allowedParams.set("n", String(cacheUrl.searchParams.get("n") || ""));
+  }
+  if (cacheUrl.pathname === "/api/public/home-bundle") {
+    if (cacheUrl.searchParams.has("visitor")) {
+      allowedParams.set("visitor", String(cacheUrl.searchParams.get("visitor") || ""));
+    }
   }
   cacheUrl.search = allowedParams.toString();
 
@@ -407,6 +421,26 @@ function isPublicProductRow(row: Record<string, unknown>): boolean {
   return (
     row.isApproved !== false && row.isArchivedByDistillery !== true && row.publicLabelDisabled !== true
   );
+}
+
+function dailyRecommendationsFromRows(rows: Record<string, unknown>[]): {
+  rakija: Record<string, unknown> | null;
+  vino: Record<string, unknown> | null;
+} {
+  const eligible = rows.filter((p) => isPublicProductRow(p));
+  const winePool = eligible.filter((row) => isWineProductRow(row));
+  const rakijaPool = eligible.filter((row) => !isWineProductRow(row));
+  const today = new Date().toISOString().slice(0, 10);
+  const pick = (pool: Record<string, unknown>[], seed: string): Record<string, unknown> | null => {
+    if (pool.length === 0) return null;
+    return pool[hashByDate(`${today}:${seed}`) % pool.length];
+  };
+  const rakija = pick(rakijaPool, "rakija");
+  const vino = pick(winePool, "vino");
+  return {
+    rakija: rakija ? toProductListItem(rakija) : null,
+    vino: vino ? toProductListItem(vino) : null,
+  };
 }
 
 function toNumberOrZero(value: unknown): number {
@@ -821,34 +855,71 @@ export default {
         });
       }
 
+      if (url.pathname === "/api/public/home-bundle") {
+        return servePublicCached(
+          request,
+          env,
+          ctx,
+          async () => {
+            const visitorRaw = String(url.searchParams.get("visitor") || "").trim();
+            let membershipItems: Record<string, unknown>[] = [];
+            if (visitorRaw) {
+              const mRows = await fetchCollectionWhereEquals(env, "club_memberships", "visitorId", visitorRaw, 24);
+              membershipItems = mRows.map((r) => toClubMembershipItem(r));
+            }
+
+            const clubRows = await fetchCollection(env, "club_actions", 22);
+            const actions = clubRows
+              .filter((r) => r.isActive === true)
+              .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+              .slice(0, 20)
+              .map((r) => toClubActionItem(r));
+
+            const productRows = await fetchCollection(env, "products", 16);
+            const daily = dailyRecommendationsFromRows(productRows);
+
+            const distilleryIds = Array.from(
+              new Set(
+                actions
+                  .map((a) => String((a as { distilleryId?: string }).distilleryId || "").trim())
+                  .filter((id) => id.length > 0),
+              ),
+            ).slice(0, 20);
+            const distilleryNames: Record<string, string> = {};
+            if (distilleryIds.length > 0) {
+              const dRows = await Promise.all(distilleryIds.map((id) => fetchDocumentById(env, "distilleries", id)));
+              dRows.forEach((d) => {
+                if (d && d.isArchived !== true && d.isVerified === true) {
+                  const id = asText(d.id) || "";
+                  if (id) distilleryNames[id] = asText(d.name) || "";
+                }
+              });
+            }
+
+            return new Response(
+              JSON.stringify({
+                memberships: membershipItems,
+                actions,
+                daily,
+                distilleryNames,
+              }),
+              { headers: jsonHeaders },
+            );
+          },
+          { memTtlMs: 900_000 },
+        );
+      }
+
       if (url.pathname === "/api/public/daily-recommendations") {
         return servePublicCached(
           request,
           env,
           ctx,
           async () => {
-          // listDocuments bills one read per returned doc; we only need a modest pool for date-seeded picks.
-          const rows = await fetchCollection(env, "products", 40);
-          const eligible = rows.filter(
-            (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
-          );
-          const winePool = eligible.filter((row) => isWineProductRow(row));
-          const rakijaPool = eligible.filter((row) => !isWineProductRow(row));
-          const today = new Date().toISOString().slice(0, 10);
-          const pick = (pool: Record<string, unknown>[], seed: string): Record<string, unknown> | null => {
-            if (pool.length === 0) return null;
-            return pool[hashByDate(`${today}:${seed}`) % pool.length];
-          };
-          const rakija = pick(rakijaPool, "rakija");
-          const vino = pick(winePool, "vino");
-          return new Response(
-            JSON.stringify({
-              rakija: rakija ? toProductListItem(rakija) : null,
-              vino: vino ? toProductListItem(vino) : null,
-            }),
-            { headers: jsonHeaders },
-          );
-        },
+            const rows = await fetchCollection(env, "products", 16);
+            const daily = dailyRecommendationsFromRows(rows);
+            return new Response(JSON.stringify(daily), { headers: jsonHeaders });
+          },
           { memTtlMs: 900_000 },
         );
       }

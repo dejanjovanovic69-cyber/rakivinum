@@ -51,6 +51,7 @@ $targets = @(
   @{ Name = "ratings-summary"; Url = "$BaseUrl/api/public/ratings-summary/$SampleProductId?_cb=$cb" },
   @{ Name = "product-ratings"; Url = "$BaseUrl/api/public/product-ratings/$SampleProductId?limit=5&_cb=$cb" },
   @{ Name = "club-actions"; Url = "$BaseUrl/api/public/club-actions?limit=5&_cb=$cb" },
+  @{ Name = "home-bundle"; Url = "$BaseUrl/api/public/home-bundle?_cb=$cb" },
   @{ Name = "community-links"; Url = "$BaseUrl/api/public/community-links?limit=10&_cb=$cb" },
   @{ Name = "products-by-distillery"; Url = "$BaseUrl/api/public/products-by-distillery/smoke-test?limit=5&_cb=$cb" },
   @{ Name = "club-actions-by-distillery"; Url = "$BaseUrl/api/public/club-actions-by-distillery/smoke-test?limit=5&_cb=$cb" },
