@@ -31,6 +31,8 @@ Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez 
 
 4. **Šta je „najbolje“ za korisnika.** Za normalno korišćenje aplikacije uvek **glavni domen** (npr. `rakivinum.com`). Worker URL koristiš za **smoke** (`/health`, `home-bundle`, itd.) ili za debag mreže — ne kao zamenik početne stranice u pregledaču.
 
+5. **Pun URL Workera.** Host mora biti `https://<ime-workera>.<subdomain-naloga>.workers.dev` (npr. `rakivinum-api.ldjs1969.workers.dev`). Adresa oblika `https://rakivinum-api.workers.dev/...` **nije** ispravna za ovaj nalog — pregledač daje *Server Not Found* (DNS), ne aplikacioni 404.
+
 ---
 
 ## Gde smo stigli (kratko)
