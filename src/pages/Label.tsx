@@ -50,6 +50,13 @@ type ProductData = {
   [key: string]: unknown;
 };
 
+/** `image` pa `bottleImageUrl` — usklađeno sa Home „preporuka dana“ (često bolji izvor u `image`). */
+function pickProductPrimaryImageUrl(p: Pick<ProductData, "image" | "bottleImageUrl">): string {
+  const a = String(p.image || "").trim();
+  const b = String(p.bottleImageUrl || "").trim();
+  return a || b || "https://picsum.photos/seed/rakivinum/800/1000";
+}
+
 type DistilleryData = {
   id: string;
   name?: string;
@@ -462,7 +469,7 @@ export default function Label() {
           id: productData.id,
           name: productData.name,
           type: productData.type || "Rakija",
-          image: productData.bottleImageUrl || productData.image,
+          image: pickProductPrimaryImageUrl(productData),
           timestamp: Date.now()
         });
         
@@ -959,7 +966,7 @@ export default function Label() {
         productId: productData?.id,
         distilleryId: productData?.distilleryId || distilleryData?.id || "unknown",
         productName: productData?.name || "Rakija",
-        productImage: productData?.bottleImageUrl || productData?.image || "https://picsum.photos/seed/rakivinum/800/1000",
+        productImage: productData ? pickProductPrimaryImageUrl(productData) : "https://picsum.photos/seed/rakivinum/800/1000",
         rating: avgRating,
         reviewText: reviewText.trim() || null,
         userLocation: sanitizePublicLocation(userLocation),
@@ -1137,8 +1144,7 @@ export default function Label() {
       : trialFrozen
         ? "Probni period proizvođača je istekao. Ostaju slika flaše, naziv i jačina; lokacija, proizvođač, opis i utisci vraćaju se nakon nastavka saradnje i sertifikacije."
         : "Proizvođač još nije javno sertifikovan u Rakivinum mreži. Do tada vidite sliku flaše, naziv i jačinu — bez identiteta proizvođača, lokacije, opisa i utisaka.";
-    const bottleSrc =
-      productData.bottleImageUrl || productData.image || "https://picsum.photos/seed/rakivinum/800/1000";
+    const bottleSrc = pickProductPrimaryImageUrl(productData);
     return (
       <div className="min-h-[100dvh] bg-bg-base relative flex flex-col p-6 pb-24 overflow-x-hidden">
         <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
@@ -1228,7 +1234,7 @@ export default function Label() {
              {/* Main Image in Premium Frame */}
              <div className="relative h-full w-full rounded-[48px] overflow-hidden border border-gold-500/70 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.28),0_30px_60px_-15px_rgba(0,0,0,0.8)] bg-black">
                 <img 
-                  src={productData.bottleImageUrl || productData.image || "https://picsum.photos/seed/rakivinum/800/1000"} 
+                  src={pickProductPrimaryImageUrl(productData)} 
                   alt={productData.name} 
                   className="h-full w-full object-contain object-center p-3 sm:p-4 media-crisp transition-transform duration-700 ease-out group-hover:scale-[1.03]"
                   referrerPolicy="no-referrer"

@@ -21,6 +21,16 @@ type ProductLite = {
   averageRating?: number;
 };
 
+/** Na početnoj mali tile: često je `image` bolji/konzistentniji od `bottleImageUrl` (stari base64 u boci, drugačiji crop). Isti red kao na Label hero kad nema eksplicitnog thumb polja. */
+function pickProductThumbSrc(p: Pick<ProductLite, "id" | "image" | "bottleImageUrl" | "type">): string {
+  const a = String(p.image || "").trim();
+  const b = String(p.bottleImageUrl || "").trim();
+  const primary = a || b;
+  if (primary) return primary;
+  const seed = encodeURIComponent(p.type || "rakivinum") + "-" + encodeURIComponent(p.id || "p");
+  return `https://picsum.photos/seed/${seed}/200/200`;
+}
+
 type DistilleryLite = {
   id: string;
   name?: string;
@@ -333,9 +343,14 @@ export default function Home() {
                   <div className="flex items-center gap-4">
                     <div className="w-16 h-16 rounded-xl overflow-hidden bg-black border border-white/10 shrink-0">
                       <img
-                        src={recommendedRakija.bottleImageUrl || recommendedRakija.image || `https://picsum.photos/seed/${recommendedRakija.id}/200/200`}
+                        src={pickProductThumbSrc(recommendedRakija)}
                         alt="Rakija dana"
                         className="h-full w-full object-contain object-center p-0.5 media-crisp"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const el = e.target as HTMLImageElement;
+                          el.src = `https://picsum.photos/seed/rakivinum-${encodeURIComponent(recommendedRakija.id)}/200/200`;
+                        }}
                       />
                     </div>
                     <div className="flex-1 min-w-0">
@@ -358,9 +373,14 @@ export default function Home() {
                   <div className="flex items-center gap-4">
                     <div className="w-16 h-16 rounded-xl overflow-hidden bg-black border border-white/10 shrink-0">
                       <img
-                        src={recommendedVino.bottleImageUrl || recommendedVino.image || `https://picsum.photos/seed/${recommendedVino.id}/200/200`}
+                        src={pickProductThumbSrc(recommendedVino)}
                         alt="Vino dana"
                         className="h-full w-full object-contain object-center p-0.5 media-crisp"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const el = e.target as HTMLImageElement;
+                          el.src = `https://picsum.photos/seed/rakivinum-${encodeURIComponent(recommendedVino.id)}/200/200`;
+                        }}
                       />
                     </div>
                     <div className="flex-1 min-w-0">
