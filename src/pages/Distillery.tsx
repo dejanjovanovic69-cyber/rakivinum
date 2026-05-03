@@ -801,22 +801,32 @@ export default function Distillery() {
         <div
           className="fixed inset-0 z-[120] bg-black/90 backdrop-blur-sm p-4 flex items-center justify-center"
           onClick={() => setActiveGalleryImage(null)}
+          role="presentation"
         >
           <button
             type="button"
-            onClick={() => setActiveGalleryImage(null)}
-            className="absolute top-4 right-4 w-10 h-10 rounded-xl bg-black/60 border border-white/20 text-white flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-black/80"
+            onClick={(e) => {
+              e.stopPropagation();
+              setActiveGalleryImage(null);
+            }}
+            className="absolute top-4 right-4 z-[121] w-10 h-10 rounded-xl bg-black/60 border border-white/20 text-white flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-black/80"
             aria-label="Zatvori uvećanu sliku"
           >
             <X className="w-5 h-5" />
           </button>
-          <img
-            src={activeGalleryImage}
-            alt="Uvećana slika destilerije"
-            className="max-w-full max-h-[88vh] object-contain rounded-2xl border border-white/15 shadow-2xl"
-            onClick={() => setActiveGalleryImage(null)}
-            referrerPolicy="no-referrer"
-          />
+          {/* Klik na samu sliku ne sme da zatvori modal (inače deluje kao „pukao“ lightbox). */}
+          <div
+            className="flex max-h-[90vh] max-w-[min(100vw-2rem,56rem)] items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+            role="presentation"
+          >
+            <img
+              src={activeGalleryImage}
+              alt="Uvećana slika destilerije"
+              className="max-h-[88vh] max-w-full object-contain rounded-2xl border border-white/15 shadow-2xl"
+              referrerPolicy="no-referrer"
+            />
+          </div>
         </div>
       )}
 
