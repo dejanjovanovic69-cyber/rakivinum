@@ -1,8 +1,11 @@
 const counters = new Map<string, number>();
 let lastFlushAt = Date.now();
+const edgeCounters = new Map<string, number>();
+let lastEdgeFlushAt = Date.now();
 
 /** Opt-in prod metering: set to "1" then reload (or use `__rakivinumDbReadsEnable()`). */
 export const RAKIVINUM_DEBUG_DB_READS_LS_KEY = "rakivinum_debug_db_reads";
+export const RAKIVINUM_DEBUG_EDGE_METER_LS_KEY = "rakivinum_debug_edge_meter";
 
 const LOG_PREFIX = "[rakivinum-db-reads]";
 
@@ -24,6 +27,16 @@ export function isDbReadMeteringEnabled(): boolean {
   }
 }
 
+/** Edge endpoint metering for Worker-first flows (status + cache source). */
+export function isEdgeMeteringEnabled(): boolean {
+  if (isDevEnv()) return true;
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(RAKIVINUM_DEBUG_EDGE_METER_LS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** Estimated client-side Firestore document reads (fallback paths + direct queries). Worker-side reads are not included. */
 export function getDbReadSnapshot(): { total: number; byLabel: Record<string, number> } | null {
   if (!isDbReadMeteringEnabled()) return null;
@@ -38,6 +51,41 @@ export function resetDbReadMeter(): void {
   if (!isDbReadMeteringEnabled()) return;
   counters.clear();
   lastFlushAt = Date.now();
+}
+
+export function getEdgeMeterSnapshot(): { total: number; byLabel: Record<string, number> } | null {
+  if (!isEdgeMeteringEnabled()) return null;
+  const byLabel = Object.fromEntries(
+    Array.from(edgeCounters.entries()).sort((a, b) => a[0].localeCompare(b[0])),
+  );
+  const total = Array.from(edgeCounters.values()).reduce((a, b) => a + b, 0);
+  return { total, byLabel };
+}
+
+export function resetEdgeMeter(): void {
+  if (!isEdgeMeteringEnabled()) return;
+  edgeCounters.clear();
+  lastEdgeFlushAt = Date.now();
+}
+
+export function meterEdgeRequest(path: string, status: number, cacheStatus: string | null): void {
+  if (!isEdgeMeteringEnabled()) return;
+  const endpoint = String(path || "unknown").split("?")[0];
+  const safeStatus = Number.isFinite(status) ? status : 0;
+  const cache = String(cacheStatus || "none").trim().toLowerCase() || "none";
+  const key = `${endpoint} | status:${safeStatus} | cache:${cache}`;
+  const prev = edgeCounters.get(key) ?? 0;
+  edgeCounters.set(key, prev + 1);
+
+  const now = Date.now();
+  if (now - lastEdgeFlushAt < 30_000) return;
+  lastEdgeFlushAt = now;
+  const rows = Array.from(edgeCounters.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 14)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(" | ");
+  if (rows) console.info(`[rakivinum-edge-meter] ${rows}`);
 }
 
 export function meterDbRead(label: string, amount = 1): void {
@@ -64,6 +112,10 @@ if (typeof window !== "undefined") {
     __rakivinumDbReadsReset?: () => void;
     __rakivinumDbReadsEnable?: () => void;
     __rakivinumDbReadsDisable?: () => void;
+    __rakivinumEdgeMeter?: () => void;
+    __rakivinumEdgeMeterReset?: () => void;
+    __rakivinumEdgeMeterEnable?: () => void;
+    __rakivinumEdgeMeterDisable?: () => void;
   };
 
   w.__rakivinumDbReadsEnable = () => {
@@ -84,6 +136,46 @@ if (typeof window !== "undefined") {
     } catch (e) {
       console.warn(`${LOG_PREFIX} could not disable`, e);
     }
+  };
+
+  w.__rakivinumEdgeMeterEnable = () => {
+    try {
+      localStorage.setItem(RAKIVINUM_DEBUG_EDGE_METER_LS_KEY, "1");
+      console.info("[rakivinum-edge-meter] flag set; reloading…");
+      location.reload();
+    } catch (e) {
+      console.warn("[rakivinum-edge-meter] could not enable", e);
+    }
+  };
+
+  w.__rakivinumEdgeMeterDisable = () => {
+    try {
+      localStorage.removeItem(RAKIVINUM_DEBUG_EDGE_METER_LS_KEY);
+      console.info("[rakivinum-edge-meter] flag cleared; reloading…");
+      location.reload();
+    } catch (e) {
+      console.warn("[rakivinum-edge-meter] could not disable", e);
+    }
+  };
+
+  w.__rakivinumEdgeMeter = () => {
+    if (!isEdgeMeteringEnabled()) {
+      console.info("[rakivinum-edge-meter] metering off. Run __rakivinumEdgeMeterEnable() then use Reset/snapshot.");
+      return;
+    }
+    const snap = getEdgeMeterSnapshot();
+    if (!snap) return;
+    console.info("[rakivinum-edge-meter] total requests", snap.total);
+    console.table(snap.byLabel);
+  };
+
+  w.__rakivinumEdgeMeterReset = () => {
+    if (!isEdgeMeteringEnabled()) {
+      console.info("[rakivinum-edge-meter] metering off — run __rakivinumEdgeMeterEnable() first.");
+      return;
+    }
+    resetEdgeMeter();
+    console.info("[rakivinum-edge-meter] meter cleared");
   };
 
   w.__rakivinumDbReads = () => {
@@ -112,5 +204,8 @@ if (typeof window !== "undefined") {
     console.info(
       `${LOG_PREFIX} prod metering ON (localStorage). Firestore usage in Firebase console includes Worker; this counter is browser SDK + fallbacks only.`,
     );
+  }
+  if (isEdgeMeteringEnabled() && !isDevEnv()) {
+    console.info("[rakivinum-edge-meter] prod metering ON (localStorage).");
   }
 }

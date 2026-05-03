@@ -1,5 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
-import { useQuery, useQueryClient, useIsFetching } from "@tanstack/react-query";
+import React, { useState, useRef, useEffect } from "react";
 import { ArrowLeft, Save, Loader2, CheckCircle, Database, Upload, ImageIcon, Trash2, Edit2, Search, ChevronDown, BookOpen, MapPin, Eye, Flag, ShieldAlert, AlertTriangle, Star, Mail, FileText, BarChart2, Building2, ClipboardCopy } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "../lib/firebase";
@@ -31,11 +30,10 @@ import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
-import { queryKeys } from "../lib/queryKeys";
-import { stableQueryOptions } from "../lib/queryDefaults";
+import { DISABLE_ONLINE_PRESENCE_TRACKING } from "../lib/presence";
 
 // Helper function to resize and compress image to base64
-const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality: number = 0.8): Promise<string> => {
+const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality: number = 0.6): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -159,31 +157,13 @@ type RatingRow = {
   createdAt?: { toDate?: () => Date; toMillis?: () => number; seconds?: number };
   [key: string]: unknown;
 };
-
-type AdminCoreBundle = {
-  distilleries: DistilleryListItem[];
-  eventProposals: EventProposalItem[];
-  communityLinks: CommunityLinkItem[];
-  communityEvents: CommunityEventItem[];
-  pendingProductApprovals: ProductListItem[];
-};
-
-type AdminModerationBundle = {
-  flaggedRatings: RatingRow[];
-  allRatings: RatingRow[];
-  blockedUsers: string[];
-};
-
-type AdminLicensingBundle = {
-  licenses: LicenseItem[];
-};
-
 type ClipNavigator = Navigator & { clipboard?: { read?: () => Promise<Array<{ types: string[]; getType: (t: string) => Promise<Blob> }>> } };
 type PdfLike = { internal?: { getNumberOfPages?: () => number } };
 type WithToDate = { toDate?: () => Date };
 const hasToDate = (value: unknown): value is WithToDate => !!value && typeof (value as WithToDate).toDate === "function";
 
 export default function Admin() {
+  const EMERGENCY_READ_FREEZE = false;
   const normalizeBarcode = (value: unknown) => String(value || "").replace(/\D/g, "");
   const navigate = useNavigate();
   const location = useLocation();
@@ -211,17 +191,17 @@ export default function Admin() {
       state: { adminLabelPreview: true, returnTo: adminReturnTo },
     });
   };
-  const ADMIN_DISTILLERIES_LIMIT = 500;
-  const ADMIN_EVENTS_LIMIT = 400;
-  const ADMIN_LINKS_LIMIT = 300;
-  const ADMIN_BLOCKED_USERS_LIMIT = 1000;
-  const ADMIN_LICENSES_LIMIT = 1200;
-  const ADMIN_EVENT_PROPOSALS_LIMIT = 400;
-  const ADMIN_PRODUCTS_ALL_LIMIT = 900;
-  const ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT = 450;
-  const ADMIN_RATINGS_PER_PRODUCT_LIMIT = 2500;
-  const ADMIN_FLAGGED_RATINGS_LIMIT = 500;
-  const ADMIN_PENDING_APPROVALS_LIMIT = 300;
+  const ADMIN_DISTILLERIES_LIMIT = 120;
+  const ADMIN_EVENTS_LIMIT = 80;
+  const ADMIN_LINKS_LIMIT = 80;
+  const ADMIN_BLOCKED_USERS_LIMIT = 80;
+  const ADMIN_LICENSES_LIMIT = 120;
+  const ADMIN_EVENT_PROPOSALS_LIMIT = 80;
+  const ADMIN_PRODUCTS_ALL_LIMIT = 50;
+  const ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT = 100;
+  const ADMIN_RATINGS_PER_PRODUCT_LIMIT = 50;
+  const ADMIN_FLAGGED_RATINGS_LIMIT = 60;
+  const ADMIN_PENDING_APPROVALS_LIMIT = 80;
   const [isSavingManual, setIsSavingManual] = useState(false);
   const [manualResult, setManualResult] = useState("");
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
@@ -244,6 +224,9 @@ export default function Admin() {
   const [modSearch, setModSearch] = useState("");
   const [licenses, setLicenses] = useState<LicenseItem[]>([]);
   const [pendingProductApprovals, setPendingProductApprovals] = useState<ProductListItem[]>([]);
+  /** Tab datasets loaded at least once — avoids refetch when switching away/back (e.g. empty list stays length 0). */
+  const [loadedDataTabs, setLoadedDataTabs] = useState<Set<AdminTab>>(() => new Set());
+  const adminProductsFetchKeyRef = useRef<string>("");
   const [isModerating, setIsModerating] = useState(false);
   const [isGeneratingLicense, setIsGeneratingLicense] = useState(false);
   const [onlineUsersCount, setOnlineUsersCount] = useState<number | null>(null);
@@ -263,218 +246,16 @@ export default function Admin() {
   const [confirmDeleteLicenseId, setConfirmDeleteLicenseId] = useState<string | null>(null);
   const [licenseLogSearch, setLicenseLogSearch] = useState("");
 
-  const queryClient = useQueryClient();
-  const adminQueriesFetching = useIsFetching({ queryKey: queryKeys.admin.scope() });
-
-  /** Refetch sve TanStack admin upite (core, moderation, licensing, products). */
-  const refreshAllAdminQueries = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.admin.scope() });
-  }, [queryClient]);
-
-  /** Patch every cached admin product list (all distillery / super “all” keys). */
-  const patchAllAdminProductCaches = useCallback(
-    (updater: (prev: ProductListItem[] | undefined) => ProductListItem[] | undefined) => {
-      queryClient.setQueriesData<ProductListItem[]>({ queryKey: queryKeys.admin.productsPrefix() }, updater);
-    },
-    [queryClient],
-  );
-
-  const adminCoreQuery = useQuery({
-    queryKey: queryKeys.admin.coreBundle(),
-    queryFn: async (): Promise<AdminCoreBundle> => {
-      const loadDistilleries = async (): Promise<DistilleryListItem[]> => {
-        try {
-          const snap = await getDocs(
-            query(collection(db, "distilleries"), limit(Math.min(20, ADMIN_DISTILLERIES_LIMIT))),
-          );
-          meterDbRead("admin:distilleries", snap.size);
-          const list: DistilleryListItem[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as DistilleryListItem) }));
-          list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
-          return list;
-        } catch (err) {
-          console.error("Greška pri učitavanju destilerija", err);
-          return [];
-        }
-      };
-
-      const loadPending = async (): Promise<ProductListItem[]> => {
-        try {
-          const q = query(
-            collection(db, "products"),
-            where("isApproved", "==", false),
-            limit(Math.min(20, ADMIN_PENDING_APPROVALS_LIMIT)),
-          );
-          const snap = await getDocs(q);
-          meterDbRead("admin:products_pending_approvals", snap.size);
-          const list: ProductListItem[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as ProductListItem) }));
-          list.sort((a, b) => {
-            const aTs = a.updatedAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0;
-            const bTs = b.updatedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0;
-            return bTs - aTs;
-          });
-          return list;
-        } catch (err) {
-          console.error("Greška pri učitavanju promena za odobrenje", err);
-          return [];
-        }
-      };
-
-      const loadEventProposals = async (): Promise<EventProposalItem[]> => {
-        try {
-          const snap = await getDocs(query(collection(db, "eventProposals"), limit(Math.min(20, ADMIN_EVENT_PROPOSALS_LIMIT))));
-          return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        } catch (err) {
-          console.error("Error fetching event proposals:", err);
-          return [];
-        }
-      };
-
-      const loadCommunityLinks = async (): Promise<CommunityLinkItem[]> => {
-        try {
-          const snap = await getDocs(query(collection(db, "community_links"), limit(Math.min(20, ADMIN_LINKS_LIMIT))));
-          const list: CommunityLinkItem[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as CommunityLinkItem) }));
-          list.sort((a, b) => (a.label || "").localeCompare(b.label || "", "sr"));
-          return list;
-        } catch (err) {
-          console.error("Greška pri učitavanju korisnih linkova:", err);
-          return [];
-        }
-      };
-
-      const loadCommunityEvents = async (): Promise<CommunityEventItem[]> => {
-        try {
-          const snap = await getDocs(query(collection(db, "community_events"), limit(Math.min(20, ADMIN_EVENTS_LIMIT))));
-          const list: CommunityEventItem[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as CommunityEventItem) }));
-          list.sort((a, b) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
-          return list;
-        } catch (err) {
-          console.error("Greška pri učitavanju događaja:", err);
-          return [];
-        }
-      };
-
-      const [distilleries, eventProposals, communityLinks, communityEvents, pendingProductApprovals] = await Promise.all([
-        loadDistilleries(),
-        loadEventProposals(),
-        loadCommunityLinks(),
-        loadCommunityEvents(),
-        loadPending(),
-      ]);
-
-      return {
-        distilleries,
-        eventProposals,
-        communityLinks,
-        communityEvents,
-        pendingProductApprovals,
-      };
-    },
-    ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
-  });
-
-  const adminModerationQuery = useQuery({
-    queryKey: queryKeys.admin.moderationBundle(),
-    queryFn: async (): Promise<AdminModerationBundle> => {
-      const loadFlaggedRatings = async (): Promise<RatingRow[]> => {
-        try {
-          const q = query(
-            collection(db, "ratings"),
-            where("isFlagged", "==", true),
-            limit(Math.min(20, ADMIN_FLAGGED_RATINGS_LIMIT)),
-          );
-          const snap = await getDocs(q);
-          return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        } catch (err) {
-          console.error("Error fetching flagged ratings:", err);
-          return [];
-        }
-      };
-
-      const loadRecentRatings = async (): Promise<RatingRow[]> => {
-        try {
-          const q = query(collection(db, "ratings"), limit(20));
-          const snap = await getDocs(q);
-          meterDbRead("admin:ratings_recent", snap.size);
-          return snap.docs
-            .map((d) => ({ id: d.id, ...d.data() } as RatingRow))
-            .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))
-            .slice(0, 100);
-        } catch (err) {
-          console.error("Error fetching ratings:", err);
-          return [];
-        }
-      };
-
-      const loadBlockedUsers = async (): Promise<string[]> => {
-        try {
-          const snap = await getDocs(query(collection(db, "blocked_users"), limit(Math.min(20, ADMIN_BLOCKED_USERS_LIMIT))));
-          return snap.docs.map((d) => d.id);
-        } catch (err) {
-          console.error("Error fetching blocked users:", err);
-          return [];
-        }
-      };
-
-      const [flaggedRatings, allRatings, blockedUsers] = await Promise.all([
-        loadFlaggedRatings(),
-        loadRecentRatings(),
-        loadBlockedUsers(),
-      ]);
-
-      return {
-        flaggedRatings,
-        allRatings,
-        blockedUsers,
-      };
-    },
-    ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
-  });
-
-  const adminLicensingQuery = useQuery({
-    queryKey: queryKeys.admin.licensingBundle(),
-    queryFn: async (): Promise<AdminLicensingBundle> => {
-      try {
-        const snap = await getDocs(query(collection(db, "licenses"), limit(Math.min(20, ADMIN_LICENSES_LIMIT))));
-        return { licenses: snap.docs.map((d) => ({ id: d.id, ...d.data() })) };
-      } catch (err) {
-        console.error("Error fetching licenses:", err);
-        return { licenses: [] };
-      }
-    },
-    ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
-  });
-
   useEffect(() => {
-    const d = adminCoreQuery.data;
-    if (!d) return;
-    setDistilleries(d.distilleries);
-    setSelectedDistilleryId((current) => {
-      if (current === "all") return current;
-      if (current && d.distilleries.some((x) => x.id === current)) return current;
-      return d.distilleries[0]?.id || "";
-    });
-    setEventProposals(d.eventProposals);
-    setCommunityLinks(d.communityLinks);
-    setCommunityEvents(d.communityEvents);
-    setPendingProductApprovals(d.pendingProductApprovals);
-  }, [adminCoreQuery.data]);
-
-  useEffect(() => {
-    const d = adminModerationQuery.data;
-    if (!d) return;
-    setFlaggedRatings(d.flaggedRatings);
-    setAllRatings(d.allRatings);
-    setBlockedUsers(d.blockedUsers);
-  }, [adminModerationQuery.data]);
-
-  useEffect(() => {
-    const d = adminLicensingQuery.data;
-    if (!d) return;
-    setLicenses(d.licenses);
-  }, [adminLicensingQuery.data]);
-
-  useEffect(() => {
+    if (EMERGENCY_READ_FREEZE) {
+      setOnlineUsersCount(null);
+      return;
+    }
     if (!isSuperAdminUser) {
+      setOnlineUsersCount(null);
+      return;
+    }
+    if (DISABLE_ONLINE_PRESENCE_TRACKING) {
       setOnlineUsersCount(null);
       return;
     }
@@ -487,7 +268,7 @@ export default function Admin() {
           collection(db, "online_presence"),
           where("isOnline", "==", true),
           where("lastSeenMs", ">=", thresholdMs),
-          limit(20),
+          limit(120),
         );
         const countSnap = await getCountFromServer(qPresence);
         meterDbRead("admin:online_presence_count", 1);
@@ -516,7 +297,7 @@ export default function Admin() {
       window.removeEventListener("focus", onTick);
       document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
-  }, [isSuperAdminUser]);
+  }, [isSuperAdminUser, EMERGENCY_READ_FREEZE]);
 
   const PRODUCT_TYPES = [
     "Šljivovica", "Dunjevača", "Kajsijevača", "Viljamovka", "Kruškovaca",
@@ -595,7 +376,7 @@ export default function Admin() {
       throw new Error("CLIPBOARD_IMAGE_MISSING");
     }
     const file = new File([imageBlob], "clipboard-image.png", { type: imageBlob.type || "image/png" });
-    return processImageToDataURL(file, 400, 400, 0.8);
+    return processImageToDataURL(file, 400, 400, 0.6);
   };
   const pasteImageFromClipboard = async (target: "product" | "distilleryLogo") => {
     try {
@@ -637,7 +418,7 @@ export default function Admin() {
   const handleGalleryFileSelect = async (index: number, file?: File) => {
     if (!file) return;
     try {
-      const base64 = await processImageToDataURL(file, 400, 400, 0.8);
+      const base64 = await processImageToDataURL(file, 400, 400, 0.6);
       setGallerySlot(index, base64);
       setManualResult(`Slika galerije #${index + 1} uspešno dodata.`);
     } catch (err) {
@@ -882,7 +663,7 @@ export default function Admin() {
           const file = items[i].getAsFile();
           if (file) {
             try {
-              const base64 = await processImageToDataURL(file, 400, 400, 0.8);
+              const base64 = await processImageToDataURL(file, 400, 400, 0.6);
               
               if (activeTab === 'distilleries' && editingDistilleryId) {
                 setDistilleryData(prev => ({ ...prev, logoUrl: base64 }));
@@ -912,10 +693,12 @@ export default function Admin() {
         approvedBy: auth.currentUser?.email,
         approvedAt: new Date().toISOString()
       });
-      queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
-        if (!prev) return prev;
-        return { ...prev, flaggedRatings: prev.flaggedRatings.filter((r) => r.id !== id) };
-      });
+      setFlaggedRatings((prev) => prev.filter((r) => r.id !== id));
+      setAllRatings((prev) =>
+        prev.map((r) =>
+          r.id === id ? { ...r, isFlagged: false, isAutoFlagged: false } : r,
+        ),
+      );
     } catch (err) {
       console.error(err);
     }
@@ -930,19 +713,13 @@ export default function Admin() {
 
       if (!productId) {
         await deleteDoc(ratingRef);
-        queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            flaggedRatings: prev.flaggedRatings.filter((r) => r.id !== id),
-            allRatings: prev.allRatings.filter((r) => r.id !== id),
-          };
-        });
+        setFlaggedRatings((prev) => prev.filter((r) => r.id !== id));
+        setAllRatings((prev) => prev.filter((r) => r.id !== id));
         return;
       }
 
       const allSnap = await getDocs(
-        query(collection(db, "ratings"), where("productId", "==", productId), limit(Math.min(20, ADMIN_RATINGS_PER_PRODUCT_LIMIT))),
+        query(collection(db, "ratings"), where("productId", "==", productId), limit(ADMIN_RATINGS_PER_PRODUCT_LIMIT)),
       );
       const remaining = allSnap.docs.filter((d) => d.id !== id);
       let sum = 0;
@@ -960,20 +737,13 @@ export default function Admin() {
       });
       await batch.commit();
 
-      queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          flaggedRatings: prev.flaggedRatings.filter((r) => r.id !== id),
-          allRatings: prev.allRatings.filter((r) => r.id !== id),
-        };
-      });
-      patchAllAdminProductCaches((prev) => {
-        if (!prev || !prev.some((p) => p.id === productId)) return prev;
-        return prev.map((p) =>
+      setFlaggedRatings((prev) => prev.filter((r) => r.id !== id));
+      setAllRatings((prev) => prev.filter((r) => r.id !== id));
+      setAdminProducts((prev) =>
+        prev.map((p) =>
           p.id === productId ? { ...p, averageRating: avg, ratingCount: count } : p,
-        );
-      });
+        ),
+      );
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju ocene ili ažuriranju proseka proizvoda.");
@@ -997,33 +767,128 @@ export default function Admin() {
     el.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const adminProductsQuery = useQuery({
-    queryKey: queryKeys.admin.products(selectedDistilleryId, isSuperAdminUser),
-    enabled: Boolean(selectedDistilleryId),
-    queryFn: async (): Promise<ProductListItem[]> => {
-      try {
-        if (!selectedDistilleryId) return [];
-        // Super admin vidi sve ako želi, ili filtrira po izabranoj destileriji
-        if (selectedDistilleryId === "all" && isSuperAdminUser) {
-          const snap = await getDocs(query(collection(db, "products"), limit(Math.min(20, ADMIN_PRODUCTS_ALL_LIMIT))));
-          meterDbRead("admin:products_all", snap.size);
-          return snap.docs.map((d) => ({ id: d.id, ...(d.data() as ProductListItem) }));
-        }
+  const fetchDistilleries = async () => {
+    try {
+      const snap = await getDocs(query(collection(db, 'distilleries'), limit(ADMIN_DISTILLERIES_LIMIT)));
+      meterDbRead("admin:distilleries", snap.size);
+      const list: DistilleryListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as DistilleryListItem) }));
+      list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
+      setDistilleries(list);
+      setSelectedDistilleryId((current) => {
+        if (current === "all") return current;
+        if (current && list.some((d) => d.id === current)) return current;
+        return list[0]?.id || "";
+      });
+    } catch (err) {
+      console.error("Greška pri učitavanju destilerija", err);
+    }
+  };
+
+  const fetchAdminProducts = async () => {
+    try {
+      if (!selectedDistilleryId) {
+        setAdminProducts([]);
+        return;
+      }
+      // Super admin vidi sve ako želi, ili filtrira po izabranoj destileriji
+      if (selectedDistilleryId === "all" && isSuperAdminUser) {
+        const snap = await getDocs(query(collection(db, "products"), limit(ADMIN_PRODUCTS_ALL_LIMIT)));
+        meterDbRead("admin:products_all", snap.size);
+        setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) })));
+      } else {
         const q = query(
           collection(db, "products"),
           where("distilleryId", "==", selectedDistilleryId),
-          limit(Math.min(20, ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT)),
+          limit(ADMIN_PRODUCTS_PER_DISTILLERY_LIMIT),
         );
         const snap = await getDocs(q);
         meterDbRead("admin:products_by_distillery", snap.size);
-        return snap.docs.map((d) => ({ id: d.id, ...(d.data() as ProductListItem) }));
-      } catch (err) {
-        console.error("Greška pri učitavanju proizvoda", err);
-        return [];
+        setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) })));
       }
-    },
-    ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
-  });
+    } catch (err) {
+      console.error("Greška pri učitavanju proizvoda", err);
+    }
+  };
+
+  const fetchPendingProductApprovals = async () => {
+    try {
+      const q = query(collection(db, "products"), where("isApproved", "==", false), limit(ADMIN_PENDING_APPROVALS_LIMIT));
+      const snap = await getDocs(q);
+      meterDbRead("admin:products_pending_approvals", snap.size);
+      const list: ProductListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) }));
+      list.sort((a, b) => {
+        const aTs = a.updatedAt?.toMillis?.() || a.createdAt?.toMillis?.() || 0;
+        const bTs = b.updatedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0;
+        return bTs - aTs;
+      });
+      setPendingProductApprovals(list);
+    } catch (err) {
+      console.error("Greška pri učitavanju promena za odobrenje", err);
+    }
+  };
+
+  const fetchEventProposals = async () => {
+    try {
+      const snap = await getDocs(query(collection(db, 'eventProposals'), limit(ADMIN_EVENT_PROPOSALS_LIMIT)));
+      setEventProposals(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error("Error fetching event proposals:", err);
+    }
+  };
+
+  const fetchCommunityLinks = async () => {
+    try {
+      const snap = await getDocs(query(collection(db, 'community_links'), limit(ADMIN_LINKS_LIMIT)));
+      const list: CommunityLinkItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityLinkItem) }));
+      list.sort((a, b) => (a.label || "").localeCompare(b.label || "", 'sr'));
+      setCommunityLinks(list);
+    } catch (err) {
+      console.error("Greška pri učitavanju korisnih linkova:", err);
+    }
+  };
+
+  const fetchCommunityEvents = async () => {
+    try {
+      const snap = await getDocs(query(collection(db, 'community_events'), limit(ADMIN_EVENTS_LIMIT)));
+      const list: CommunityEventItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityEventItem) }));
+      list.sort((a, b) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
+      setCommunityEvents(list);
+    } catch (err) {
+      console.error("Greška pri učitavanju događaja:", err);
+    }
+  };
+
+  const fetchFlaggedRatings = async () => {
+    try {
+      // Query for ratings where isFlagged is true OR it was auto-flagged
+      const q = query(collection(db, "ratings"), where("isFlagged", "==", true), limit(ADMIN_FLAGGED_RATINGS_LIMIT));
+      const snap = await getDocs(q);
+      meterDbRead("admin:ratings_flagged", snap.size);
+      setFlaggedRatings(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error("Error fetching flagged ratings:", err);
+    }
+  };
+
+  const fetchRecentRatings = async () => {
+    try {
+      const q = query(collection(db, "ratings"), orderBy("createdAt", "desc"), limit(40));
+      const snap = await getDocs(q);
+      meterDbRead("admin:ratings_recent", snap.size);
+      setAllRatings(snap.docs.map((d) => ({ id: d.id, ...d.data() } as RatingRow)));
+    } catch (err) {
+      console.error("Error fetching ratings:", err);
+    }
+  };
+
+  const fetchBlockedUsers = async () => {
+    try {
+      const snap = await getDocs(query(collection(db, 'blocked_users'), limit(ADMIN_BLOCKED_USERS_LIMIT)));
+      setBlockedUsers(snap.docs.map(d => d.id));
+    } catch (err) {
+      console.error("Error fetching blocked users:", err);
+    }
+  };
 
   const handleBlockUser = async (userId: string) => {
     if (!userId || userId === 'anonymous') {
@@ -1045,11 +910,7 @@ export default function Admin() {
       } catch (e) {
         console.warn("User doc update failed (might not exist)", e);
       }
-      queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
-        if (!prev) return prev;
-        if (prev.blockedUsers.includes(userId)) return prev;
-        return { ...prev, blockedUsers: [...prev.blockedUsers, userId] };
-      });
+      setBlockedUsers((prev) => (prev.includes(userId) ? prev : [...prev, userId]));
       alert("Korisnik uspešno blokiran.");
     } catch (err) {
       console.error(err);
@@ -1066,12 +927,18 @@ export default function Admin() {
       try {
         await updateDoc(doc(db, 'users', userId), { isBlocked: false });
       } catch (e) {}
-      queryClient.setQueryData<AdminModerationBundle>(queryKeys.admin.moderationBundle(), (prev) => {
-        if (!prev) return prev;
-        return { ...prev, blockedUsers: prev.blockedUsers.filter((uid) => uid !== userId) };
-      });
+      setBlockedUsers((prev) => prev.filter((uid) => uid !== userId));
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const fetchLicenses = async () => {
+    try {
+      const snap = await getDocs(query(collection(db, 'licenses'), limit(ADMIN_LICENSES_LIMIT)));
+      setLicenses(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error("Error fetching licenses:", err);
     }
   };
 
@@ -1082,26 +949,8 @@ export default function Admin() {
         approvedAt: serverTimestamp(),
         approvedBy: auth.currentUser?.email || "admin",
       });
-      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          pendingProductApprovals: prev.pendingProductApprovals.filter((p) => p.id !== productId),
-        };
-      });
-      patchAllAdminProductCaches((prev) => {
-        if (!prev || !prev.some((p) => p.id === productId)) return prev;
-        return prev.map((p) =>
-          p.id === productId
-            ? {
-                ...p,
-                isApproved: true,
-                approvedAt: Timestamp.now(),
-                approvedBy: auth.currentUser?.email || "admin",
-              }
-            : p,
-        );
-      });
+      setAdminProducts(prev => prev.map(p => p.id === productId ? { ...p, isApproved: true } : p));
+      setPendingProductApprovals(prev => prev.filter(p => p.id !== productId));
       alert("Proizvod odobren!");
     } catch (err) {
       console.error(err);
@@ -1296,8 +1145,6 @@ export default function Admin() {
       const expiry = batchEndDate ? Timestamp.fromDate(new Date(batchEndDate)) : Timestamp.fromMillis(Date.now() + 365 * 24 * 60 * 60 * 1000);
       
       const count = batchCount || 1;
-      const newLicenseRows: LicenseItem[] = [];
-      const startTsForCache = batchStartDate ? Timestamp.fromDate(new Date(batchStartDate)) : Timestamp.now();
 
       for (let i = 0; i < count; i++) {
         const token = 'lic_' + Math.random().toString(36).substr(2, 9).toUpperCase() + Date.now().toString().slice(-4);
@@ -1315,19 +1162,6 @@ export default function Admin() {
         };
         await setDoc(doc(db, 'licenses', token), payload);
         generatedTokens.push(token);
-        newLicenseRows.push({
-          id: token,
-          token,
-          type: "limited",
-          maxDevices: 3,
-          activatedDevices: [],
-          isUsed: false,
-          clientName: batchDistillery,
-          createdAt: startTsForCache,
-          startDate: startTsForCache,
-          expiresAt: expiry,
-          comment: `Paket za ${batchDistillery} (${i + 1}/${count})`,
-        });
       }
       
       const { copied, openedMail } = await sendLicenseEmailDraft(batchDistillery, batchEmail, generatedTokens);
@@ -1349,10 +1183,7 @@ export default function Admin() {
       // We will clear the count to 1 just in case
       setBatchCount(1);
       setBatchEmail("");
-      queryClient.setQueryData<AdminLicensingBundle>(queryKeys.admin.licensingBundle(), (prev) => {
-        if (!prev) return prev;
-        return { licenses: [...newLicenseRows, ...prev.licenses] };
-      });
+      fetchLicenses();
     } catch (err: unknown) {
       console.error(err);
       alert("Greška pri generisanju licenci: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
@@ -1365,21 +1196,11 @@ export default function Admin() {
     const newLimit = prompt("Unesite novi limit uređaja:", String(currentLimit + 2));
     if (newLimit && !isNaN(Number(newLimit))) {
       try {
-        const comment = `Limit povećan na ${newLimit} (${new Date().toLocaleDateString()})`;
         await updateDoc(doc(db, 'licenses', licId), {
           maxDevices: Number(newLimit),
-          comment,
+          comment: `Limit povećan na ${newLimit} (${new Date().toLocaleDateString()})`
         });
-        queryClient.setQueryData<AdminLicensingBundle>(queryKeys.admin.licensingBundle(), (prev) => {
-          if (!prev) return prev;
-          return {
-            licenses: prev.licenses.map((l) =>
-              l.id === licId || l.token === licId
-                ? { ...l, maxDevices: Number(newLimit), comment }
-                : l,
-            ),
-          };
-        });
+        fetchLicenses();
       } catch (err) {
         console.error(err);
       }
@@ -1387,8 +1208,55 @@ export default function Admin() {
   };
 
   useEffect(() => {
-    setAdminProducts(adminProductsQuery.data ?? []);
-  }, [adminProductsQuery.data]);
+    if (EMERGENCY_READ_FREEZE) return;
+    // Emergency read-safety: do not hydrate every admin dataset on initial mount.
+    // Load only distilleries first; other datasets are fetched lazily by active tab.
+    fetchDistilleries();
+  }, [EMERGENCY_READ_FREEZE]);
+
+  useEffect(() => {
+    if (EMERGENCY_READ_FREEZE) return;
+
+    if (activeTab === "distilleries") {
+      if (selectedDistilleryId) {
+        const productsFetchKey =
+          selectedDistilleryId === "all" && isSuperAdminUser
+            ? "products:all"
+            : `products:${selectedDistilleryId}`;
+        if (adminProductsFetchKeyRef.current !== productsFetchKey) {
+          adminProductsFetchKeyRef.current = productsFetchKey;
+          void fetchAdminProducts();
+        }
+      } else {
+        adminProductsFetchKeyRef.current = "";
+      }
+      return;
+    }
+
+    if (loadedDataTabs.has(activeTab)) return;
+
+    if (activeTab === "approvals") {
+      void (async () => {
+        await fetchPendingProductApprovals();
+        setLoadedDataTabs((prev) => new Set(prev).add("approvals"));
+      })();
+    } else if (activeTab === "events") {
+      void (async () => {
+        await Promise.all([fetchEventProposals(), fetchCommunityLinks(), fetchCommunityEvents()]);
+        setLoadedDataTabs((prev) => new Set(prev).add("events"));
+      })();
+    } else if (activeTab === "moderation") {
+      void (async () => {
+        await Promise.all([fetchFlaggedRatings(), fetchRecentRatings(), fetchBlockedUsers()]);
+        setLoadedDataTabs((prev) => new Set(prev).add("moderation"));
+      })();
+    } else if (activeTab === "licensing") {
+      void (async () => {
+        await fetchLicenses();
+        setLoadedDataTabs((prev) => new Set(prev).add("licensing"));
+      })();
+    }
+  }, [activeTab, selectedDistilleryId, EMERGENCY_READ_FREEZE, loadedDataTabs, isSuperAdminUser]);
 
   const handleSaveCommunityLink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1405,32 +1273,17 @@ export default function Admin() {
           url,
           updatedAt: serverTimestamp()
         });
-        queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            communityLinks: prev.communityLinks.map((l) =>
-              l.id === editingLinkId ? { ...l, label, url } : l,
-            ),
-          };
-        });
       } else {
-        const ref = await addDoc(collection(db, 'community_links'), {
+        await addDoc(collection(db, 'community_links'), {
           label,
           url,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
-        queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            communityLinks: [{ id: ref.id, label, url }, ...prev.communityLinks],
-          };
-        });
       }
       setLinkForm({ label: "", url: "" });
       setEditingLinkId(null);
+      fetchCommunityLinks();
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju linka.");
@@ -1445,10 +1298,7 @@ export default function Admin() {
         setEditingLinkId(null);
         setLinkForm({ label: "", url: "" });
       }
-      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-        if (!prev) return prev;
-        return { ...prev, communityLinks: prev.communityLinks.filter((l) => l.id !== id) };
-      });
+      fetchCommunityLinks();
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju linka.");
@@ -1475,48 +1325,15 @@ export default function Admin() {
       };
       if (editingEventId) {
         await updateDoc(doc(db, 'community_events', editingEventId), payload);
-        queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            communityEvents: prev.communityEvents.map((ev) =>
-              ev.id === editingEventId
-                ? {
-                    ...ev,
-                    title,
-                    eventDate,
-                    location: eventForm.location.trim(),
-                    description: eventForm.description.trim(),
-                    websiteUrl: eventForm.websiteUrl.trim(),
-                    mapsUrl: eventForm.mapsUrl.trim(),
-                    link: eventForm.websiteUrl.trim() || ev.link,
-                  }
-                : ev,
-            ),
-          };
-        });
       } else {
-        const ref = await addDoc(collection(db, 'community_events'), {
+        await addDoc(collection(db, 'community_events'), {
           ...payload,
           createdAt: serverTimestamp()
-        });
-        queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-          if (!prev) return prev;
-          const row: CommunityEventItem = {
-            id: ref.id,
-            title,
-            eventDate,
-            location: eventForm.location.trim(),
-            description: eventForm.description.trim(),
-            websiteUrl: eventForm.websiteUrl.trim(),
-            mapsUrl: eventForm.mapsUrl.trim(),
-            link: eventForm.websiteUrl.trim() || undefined,
-          };
-          return { ...prev, communityEvents: [row, ...prev.communityEvents] };
         });
       }
       setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       setEditingEventId(null);
+      fetchCommunityEvents();
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju događaja.");
@@ -1531,10 +1348,7 @@ export default function Admin() {
         setEditingEventId(null);
         setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       }
-      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-        if (!prev) return prev;
-        return { ...prev, communityEvents: prev.communityEvents.filter((ev) => ev.id !== id) };
-      });
+      setCommunityEvents((prev) => prev.filter((ev) => ev.id !== id));
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju događaja.");
@@ -1579,26 +1393,8 @@ export default function Admin() {
           cursor = last;
         }
       }
-      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-        if (!prev) return prev;
-        let pending = prev.pendingProductApprovals;
-        if (nextVerified) {
-          pending = pending.filter((p) => p.distilleryId !== id);
-        }
-        return {
-          ...prev,
-          distilleries: prev.distilleries.map((d) => (d.id === id ? { ...d, isVerified: nextVerified } : d)),
-          pendingProductApprovals: pending,
-        };
-      });
-      if (nextVerified) {
-        patchAllAdminProductCaches((prev) => {
-          if (!prev) return prev;
-          return prev.map((p) =>
-            p.distilleryId === id && p.isApproved === false ? { ...p, isApproved: true } : p,
-          );
-        });
-      }
+      fetchDistilleries();
+      fetchAdminProducts();
     } catch (err) {
       console.error("Greška pri promeni statusa:", err);
       alert("Niste ovlašćeni za ovu akciju.");
@@ -1658,43 +1454,13 @@ export default function Admin() {
          : Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
 
        if (editingDistilleryId) {
-         const eid = editingDistilleryId;
          const updatePayload: Record<string, unknown> = { ...basePayload };
          if (trialDateStr) {
            updatePayload.trialEndsAt = trialEndsAtTs;
          }
-         await updateDoc(doc(db, 'distilleries', eid), updatePayload);
+         await updateDoc(doc(db, 'distilleries', editingDistilleryId), updatePayload);
          setManualResult("Destilerija uspešno izmenjena!");
          setEditingDistilleryId(null);
-         queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-           if (!prev) return prev;
-           const distilleries = prev.distilleries
-             .map((d) => {
-               if (d.id !== eid) return d;
-               const next: DistilleryListItem = {
-                 ...d,
-                 name: (distilleryData.name || "").trim(),
-                 region: (distilleryData.region || "Srbija").trim(),
-                 logoUrl: (distilleryData.logoUrl || "").trim() || "https://picsum.photos/seed/dist/200/200",
-                 pib: (distilleryData.pib || "").trim(),
-                 location: {
-                   address: (distilleryData.address || "").trim(),
-                   city: (distilleryData.city || "").trim(),
-                 },
-                 galleryImages,
-               };
-               if (distilleryData.website?.trim()) next.website = distilleryData.website.trim();
-               if (distilleryData.mapsUrl?.trim()) next.mapsUrl = distilleryData.mapsUrl.trim();
-               else delete next.mapsUrl;
-               if (distilleryData.email?.trim()) next.email = distilleryData.email.trim();
-               else delete next.email;
-               if (distilleryData.description?.trim()) next.description = distilleryData.description.trim();
-               if (trialDateStr) next.trialEndsAt = trialEndsAtTs;
-               return next;
-             })
-             .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
-           return { ...prev, distilleries };
-         });
        } else {
          const dId = doc(collection(db, "distilleries")).id;
          await setDoc(doc(db, "distilleries", dId), {
@@ -1706,37 +1472,16 @@ export default function Admin() {
          setManualResult("Destilerija uspešno dodata!");
         setSelectedDistilleryId(dId);
         setActiveTab("distilleries");
-         queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-           if (!prev) return prev;
-           const newRow: DistilleryListItem = {
-             id: dId,
-             name: (distilleryData.name || "").trim(),
-             region: (distilleryData.region || "Srbija").trim(),
-             logoUrl: (distilleryData.logoUrl || "").trim() || "https://picsum.photos/seed/dist/200/200",
-             pib: (distilleryData.pib || "").trim(),
-             location: {
-               address: (distilleryData.address || "").trim(),
-               city: (distilleryData.city || "").trim(),
-             },
-             galleryImages,
-             isVerified: false,
-             trialEndsAt: trialEndsAtTs,
-             createdAt: Timestamp.now(),
-           };
-           if (distilleryData.website?.trim()) newRow.website = distilleryData.website.trim();
-           if (distilleryData.mapsUrl?.trim()) newRow.mapsUrl = distilleryData.mapsUrl.trim();
-           if (distilleryData.email?.trim()) newRow.email = distilleryData.email.trim();
-           if (distilleryData.description?.trim()) newRow.description = distilleryData.description.trim();
-           const distilleries = [...prev.distilleries, newRow].sort((a, b) =>
-             String(a.name || "").localeCompare(String(b.name || ""), "sr"),
-           );
-           return { ...prev, distilleries };
-         });
        }
 
        clearTimeout(timeout);
       setDistilleryData({ id: "", name: "", region: "Beograd i okolina", website: "", email: "", description: "", logoUrl: "", pib: "", address: "", city: "", mapsUrl: "", trialEndsAt: "" });
        clearGallerySlots();
+       try {
+         await fetchDistilleries();
+       } catch (e) {
+         console.warn("Refresh list failed", e);
+       }
     } catch (err: unknown) {
        clearTimeout(timeout);
        console.error("Distillery Save Error:", err);
@@ -1784,46 +1529,24 @@ export default function Admin() {
   const handleDeleteDistillery = async (id: string) => {
     setIsSavingManual(true);
     try {
-      // 1. Delete associated products in bounded pages (orderBy + cursor — same pattern as archive toggle).
+      // 1. Delete associated products in bounded pages (avoids unbounded reads).
       const pageSize = 450;
-      let cursor: QueryDocumentSnapshot | null = null;
-      for (;;) {
+      let more = true;
+      while (more) {
         const snap = await getDocs(
-          cursor
-            ? query(
-                collection(db, "products"),
-                where("distilleryId", "==", id),
-                orderBy(documentId()),
-                startAfter(cursor),
-                limit(pageSize),
-              )
-            : query(
-                collection(db, "products"),
-                where("distilleryId", "==", id),
-                orderBy(documentId()),
-                limit(pageSize),
-              ),
+          query(collection(db, "products"), where("distilleryId", "==", id), limit(pageSize)),
         );
         if (snap.empty) break;
         await Promise.all(snap.docs.map((d) => deleteDoc(doc(db, "products", d.id))));
-        const last = snap.docs[snap.docs.length - 1];
-        if (!last || snap.docs.length < pageSize) break;
-        cursor = last;
+        more = snap.docs.length >= pageSize;
       }
 
       // 2. Delete Distillery
       await deleteDoc(doc(db, 'distilleries', id));
       
       setDistilleryToDelete(null);
-      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          distilleries: prev.distilleries.filter((d) => d.id !== id),
-          pendingProductApprovals: prev.pendingProductApprovals.filter((p) => p.distilleryId !== id),
-        };
-      });
-      patchAllAdminProductCaches((prev) => (prev ? prev.filter((p) => p.distilleryId !== id) : prev));
+      fetchDistilleries();
+      fetchAdminProducts();
       setManualResult("Destilerija i sve njene rakije su uspešno obrisane.");
     } catch (err: unknown) {
       console.error(err);
@@ -1884,29 +1607,8 @@ export default function Admin() {
       }
 
       setManualResult(nextArchived ? "Destilerija je arhivirana." : "Destilerija je vraćena iz arhive.");
-      queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          distilleries: prev.distilleries.map((d) =>
-            d.id === dist.id
-              ? {
-                  ...d,
-                  isArchived: nextArchived,
-                  archivedAt: nextArchived ? Timestamp.now() : null,
-                  archivedBy: nextArchived ? (auth.currentUser?.email || "admin") : null,
-                  restoredAt: !nextArchived ? Timestamp.now() : null,
-                }
-              : d,
-          ),
-        };
-      });
-      patchAllAdminProductCaches((prev) => {
-        if (!prev) return prev;
-        return prev.map((p) =>
-          p.distilleryId === dist.id ? { ...p, isArchivedByDistillery: nextArchived } : p,
-        );
-      });
+      fetchDistilleries();
+      fetchAdminProducts();
     } catch (err: unknown) {
       console.error(err);
       setManualResult("Greška pri arhiviranju: " + ((err as { message?: string } | null)?.message || "Nepoznata greška."));
@@ -1946,15 +1648,6 @@ export default function Admin() {
         await updateDoc(doc(db, 'products', editingProductId), updateData);
         setManualResult("Rakija uspešno izmenjena!");
         setEditingProductId(null);
-        queryClient.setQueryData<ProductListItem[]>(
-          queryKeys.admin.products(selectedDistilleryId, isSuperAdminUser),
-          (prev) => {
-            if (!prev) return prev;
-            return prev.map((p) =>
-              p.id === editingProductId ? ({ ...p, ...updateData, id: editingProductId } as ProductListItem) : p,
-            );
-          },
-        );
       } else {
         if (!selectedDistilleryId || selectedDistilleryId === 'all') {
           setManualResult("Greška: Morate izabrati konkretnu destileriju za dodavanje rakije.");
@@ -1982,33 +1675,11 @@ export default function Admin() {
           addData.barcodeNormalized = normalizeBarcode(rawBarcode);
         }
 
-        const ref = await addDoc(collection(db, 'products'), addData);
+        await addDoc(collection(db, 'products'), addData);
         setManualResult("Nova rakija uspešno dodata u bazu!");
-        const added: ProductListItem = {
-          id: ref.id,
-          distilleryId: selectedDistilleryId,
-          name: formData.name.trim(),
-          type: formData.type.trim(),
-          alcoholPercentage: Number(formData.alcoholPercentage),
-          bottleImageUrl: formData.bottleImageUrl.trim() || "https://picsum.photos/seed/rakija/800/1000",
-          isApproved: true,
-          publicLabelDisabled: false,
-          isArchivedByDistillery: false,
-          averageRating: 0,
-          scanCount: 0,
-        };
-        if (formData.description.trim()) added.description = formData.description.trim();
-        if (formData.barcode.trim()) {
-          const rb = formData.barcode.trim();
-          added.barcode = rb;
-          added.barcodeNormalized = normalizeBarcode(rb);
-        }
-        queryClient.setQueryData<ProductListItem[]>(
-          queryKeys.admin.products(selectedDistilleryId, isSuperAdminUser),
-          (prev) => (prev ? [added, ...prev] : [added]),
-        );
       }
       setFormData({ name: "", type: "", description: "", alcoholPercentage: 40, bottleImageUrl: "", barcode: "" });
+      fetchAdminProducts();
     } catch (error: unknown) {
       setManualResult("Greška pri unosu: " + ((error as { message?: string } | null)?.message || "Nepoznata greška."));
     } finally {
@@ -2020,10 +1691,7 @@ export default function Admin() {
     try {
       await deleteDoc(doc(db, 'products', id));
       setProductToDelete(null);
-      queryClient.setQueryData<ProductListItem[]>(
-        queryKeys.admin.products(selectedDistilleryId, isSuperAdminUser),
-        (prev) => (prev ? prev.filter((p) => p.id !== id) : prev),
-      );
+      fetchAdminProducts();
     } catch(err) {
       console.error(err);
       setManualResult("Greška pri brisanju: Nemate dozvolu.");
@@ -2101,24 +1769,6 @@ export default function Admin() {
             <span className="whitespace-nowrap">{label}</span>
           </button>
         ))}
-      </div>
-
-      <div className="relative z-10 mb-4 flex justify-end">
-        <button
-          type="button"
-          disabled={adminQueriesFetching > 0}
-          onClick={() => void refreshAllAdminQueries()}
-          className="inline-flex items-center justify-center gap-2 min-w-[10.5rem] px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          {adminQueriesFetching > 0 ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
-              Učitavanje…
-            </>
-          ) : (
-            "Osveži podatke"
-          )}
-        </button>
       </div>
 
       {(activeTab === 'approvals' || activeTab === 'distilleries' || activeTab === 'licensing') && (
@@ -2360,7 +2010,7 @@ export default function Admin() {
               onChange={async (e) => {
                 if (e.target.files && e.target.files[0]) {
                   try {
-                    const base64 = await processImageToDataURL(e.target.files[0], 400, 400, 0.8);
+                    const base64 = await processImageToDataURL(e.target.files[0], 400, 400, 0.6);
                     setFormData({ ...formData, bottleImageUrl: base64 });
                   } catch (err) {
                     console.error('Image selection failed', err);
@@ -2385,7 +2035,7 @@ export default function Admin() {
                     const file = items[i].getAsFile();
                     if (file) {
                       try {
-                        const base64 = await processImageToDataURL(file, 400, 400, 0.8);
+                        const base64 = await processImageToDataURL(file, 400, 400, 0.6);
                         setFormData({ ...formData, bottleImageUrl: base64 });
                       } catch (err) {
                         console.error('Image paste failed', err);
@@ -2516,14 +2166,22 @@ export default function Admin() {
       {activeTab === 'approvals' && (
       <div className="relative z-10 space-y-4 animate-in fade-in duration-200">
         <div className="bg-bg-card border border-border-subtle rounded-[24px] p-6 shadow-xl space-y-4">
-          <div>
-            <h2 className="font-bold text-lg text-white flex items-center gap-2">
-              <CheckCircle className="w-5 h-5 text-gold-500" />
-              Promene za odobrenje ({selectedPendingApprovals.length})
-            </h2>
-            <p className="text-sm text-text-secondary">
-              Ovde su novi ili izmenjeni artikli koji čekaju odobrenje za trenutno aktivnu destileriju.
-            </p>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-bold text-lg text-white flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-gold-500" />
+                Promene za odobrenje ({selectedPendingApprovals.length})
+              </h2>
+              <p className="text-sm text-text-secondary">
+                Ovde su novi ili izmenjeni artikli koji čekaju odobrenje za trenutno aktivnu destileriju.
+              </p>
+            </div>
+            <button
+              onClick={() => fetchPendingProductApprovals()}
+              className="px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase"
+            >
+              Osveži
+            </button>
           </div>
 
           <div className="space-y-3">
@@ -2692,7 +2350,7 @@ export default function Admin() {
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (file) {
-                          const base64 = await processImageToDataURL(file, 400, 400, 0.8);
+                          const base64 = await processImageToDataURL(file, 400, 400, 0.6);
                           setDistilleryData({...distilleryData, logoUrl: base64});
                         }
                       }}
@@ -3203,13 +2861,7 @@ export default function Admin() {
                       onClick={async () => {
                         if (window.confirm("Obriši ovaj predlog?")) {
                           await deleteDoc(doc(db, 'eventProposals', ev.id));
-                          queryClient.setQueryData<AdminCoreBundle>(queryKeys.admin.coreBundle(), (prev) => {
-                            if (!prev) return prev;
-                            return {
-                              ...prev,
-                              eventProposals: prev.eventProposals.filter((p) => p.id !== ev.id),
-                            };
-                          });
+                          fetchEventProposals();
                         }
                       }}
                       className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors shrink-0"
@@ -3644,13 +3296,7 @@ export default function Admin() {
                            try {
                              await deleteDoc(doc(db, 'licenses', lic.id));
                              setConfirmDeleteLicenseId(null);
-                             queryClient.setQueryData<AdminLicensingBundle>(queryKeys.admin.licensingBundle(), (prev) => {
-                               if (!prev) return prev;
-                               const lid = lic.id;
-                               return {
-                                 licenses: prev.licenses.filter((l) => l.id !== lid && l.token !== lid),
-                               };
-                             });
+                             fetchLicenses();
                           } catch (e: unknown) {
                             alert("Greška pri brisanju: " + ((e as { message?: string } | null)?.message || "Nepoznata greška"));
                            }

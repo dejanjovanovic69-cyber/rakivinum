@@ -6,7 +6,12 @@ import {
   indexedDBLocalPersistence,
   browserPopupRedirectResolver,
 } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import {
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "firebase/firestore";
 
 // Import the Firebase configuration
 import firebaseConfig from "../../firebase-applet-config.json";
@@ -23,7 +28,22 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
 
 // Initialize Firebase SDK
 export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, FIRESTORE_DATABASE_ID);
+export const db = (() => {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
+      },
+      FIRESTORE_DATABASE_ID,
+    );
+  } catch (e) {
+    console.warn("[Rakivinum] Firestore persistent cache fallback:", e);
+    return getFirestore(app, FIRESTORE_DATABASE_ID);
+  }
+})();
 export const auth = initializeAuth(app, {
   persistence: [
     indexedDBLocalPersistence,

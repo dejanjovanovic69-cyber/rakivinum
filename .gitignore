@@ -1,6 +1,4 @@
 .firebase/
-.wrangler/
-gen-lang-client-*.json
 node_modules/
 build/
 dist/
@@ -12,3 +10,6 @@ coverage/
 backups/
 playwright-report/
 test-results/
+.wrangler/
+gen-lang-client-*.json
+*-firebase-adminsdk-*.json

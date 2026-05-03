@@ -1,6 +1,5 @@
 import { Settings, Moon, Bell, Shield, Wallet, Book, LogOut, Database, BarChart3, ShieldAlert, X, Bookmark, QrCode, Award, Lock, Users, Globe } from "lucide-react";
-import React, { useEffect, useState, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import React, { useEffect, useState } from "react";
 import { app, auth, db } from "../lib/firebase";
 import { getFirebaseRedirectResultOnce } from "../lib/firebaseRedirectResult";
 import { collection, query, where, getDocs, limit, updateDoc, doc, serverTimestamp } from "firebase/firestore";
@@ -18,11 +17,9 @@ import {
 import { useNavigate } from "react-router-dom";
 import { isSuperuserEmail } from "../lib/authz";
 import { normalizeLicenseToken } from "../lib/extractActivateToken";
+import { shouldRunRefresh } from "../lib/refreshGate";
 import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { fetchCommunityLinks, fetchPublicClubMembershipsByVisitorId, fetchPublicDistilleriesByIds } from "../lib/dataService";
-import { stableQueryOptions } from "../lib/queryDefaults";
-import { queryKeys } from "../lib/queryKeys";
-import { consumeReadBudget } from "../lib/readBudget";
 import {
   ACHIEVEMENT_EVENT_NAME,
   BADGE_DEFS,
@@ -139,6 +136,7 @@ function BadgeCatalogRow({
 let menuRedirectAuthErrorShown = false;
 
 export default function Menu() {
+  const EMERGENCY_READ_FREEZE = false;
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -149,8 +147,11 @@ export default function Menu() {
   const [guideTab, setGuideTab] = useState<"guide" | "badges">("guide");
   const [pendingRatingsCount, setPendingRatingsCount] = useState(0);
   const [achievementSummary, setAchievementSummary] = useState(() => getAchievementSummary());
-  const [readBudgetCooling, setReadBudgetCooling] = useState(false);
-  const visitorId = localStorage.getItem("rakivinum_visitor_id");
+  /** Klubovi vezani za uređaj (visitorId) — važi i za gosta i za prijavljenog korisnika. */
+  const [joinedClubsMenu, setJoinedClubsMenu] = useState<{ id: string; name: string }[]>([]);
+  const [joinedClubsMenuReady, setJoinedClubsMenuReady] = useState(false);
+  const [helpLinks, setHelpLinks] = useState<{ id: string; label: string; url: string }[]>([]);
+  const [helpLinksReady, setHelpLinksReady] = useState(false);
   const navigate = useNavigate();
   const getFnErrorCode = (err: unknown) => String((err as { code?: unknown } | null)?.code || "");
 
@@ -169,8 +170,6 @@ export default function Menu() {
       console.warn("Failed to update last app access", e);
     }
   };
-
-  const showDomainErrorRef = useRef<(raw?: string) => void>(() => {});
 
   useEffect(() => {
     // Keep auth session persistent across reloads and redirects
@@ -191,7 +190,7 @@ export default function Menu() {
         if (menuRedirectAuthErrorShown) return;
         menuRedirectAuthErrorShown = true;
         if (error.code === 'auth/unauthorized-domain') {
-          showDomainErrorRef.current(error.message);
+          showDomainError(error.message);
         } else {
           alert(`Greška prijave (${error.code || "unknown"}): ${error.message || "Pokušajte ponovo."}`);
         }
@@ -199,6 +198,10 @@ export default function Menu() {
 
     const unsub = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
+      if (EMERGENCY_READ_FREEZE) {
+        setDistilleryId(null);
+        return;
+      }
       if (currentUser) {
         localStorage.setItem("rakivinum_last_login_email", currentUser.email || "");
       } else {
@@ -267,30 +270,37 @@ export default function Menu() {
       }
     });
     return unsub;
-  }, []);
+  }, [EMERGENCY_READ_FREEZE]);
 
-  const helpLinksQuery = useQuery<{ id: string; label: string; url: string }[]>({
-    queryKey: queryKeys.menu.helpLinks(),
-    queryFn: async () => {
-      const budget = consumeReadBudget("menu", 1);
-      if (!budget.allowed) {
-        setReadBudgetCooling(true);
-        return [];
+  useEffect(() => {
+    let mounted = true;
+    const loadHelpLinks = async () => {
+      try {
+        const rows = await fetchCommunityLinks({
+          limitCount: 80,
+          cacheKey: "rakivinum_cache_menu_help_links_v1",
+          ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
+        });
+        if (mounted) {
+          setHelpLinks(
+            rows.map((x) => ({
+              id: String(x.id),
+              label: String(x.label || "Link"),
+              url: String(x.url),
+            })),
+          );
+        }
+      } catch {
+        if (mounted) setHelpLinks([]);
+      } finally {
+        if (mounted) setHelpLinksReady(true);
       }
-      const rows = await fetchCommunityLinks({
-        limitCount: 80,
-        cacheKey: "rakivinum_cache_menu_help_links_v1",
-        ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
-      });
-      return rows.map((x) => ({
-        id: String(x.id),
-        label: String(x.label || "Link"),
-        url: String(x.url),
-      }));
-    },
-    initialData: [],
-    ...stableQueryOptions(CACHE_TTL.COMMUNITY_EVENTS_6H),
-  });
+    };
+    void loadHelpLinks();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     const syncAchievements = () => setAchievementSummary(getAchievementSummary());
@@ -305,68 +315,79 @@ export default function Menu() {
     };
   }, []);
 
-  const joinedClubsQuery = useQuery<{ id: string; name: string }[]>({
-    queryKey: queryKeys.menu.joinedClubs(visitorId),
-    enabled: Boolean(visitorId),
-    queryFn: async () => {
-      if (!visitorId) return [];
-      const budget = consumeReadBudget("menu", 2);
-      if (!budget.allowed) {
-        setReadBudgetCooling(true);
-        return [];
-      }
-      const storageKey = `clubs_${visitorId}`;
-      const mergeIdsFromFirestore = (firestoreIds: string[]) => {
-        let localJoined: string[] = [];
-        try {
-          const parsed = JSON.parse(localStorage.getItem(storageKey) || "[]");
-          localJoined = Array.isArray(parsed) ? parsed.filter((x: unknown) => typeof x === "string") : [];
-        } catch {
-          localJoined = [];
-        }
-        return Array.from(new Set([...firestoreIds, ...localJoined])).filter(Boolean);
-      };
+  useEffect(() => {
+    const visitorId = localStorage.getItem("rakivinum_visitor_id");
+    if (!visitorId) {
+      setJoinedClubsMenu([]);
+      setJoinedClubsMenuReady(true);
+      return;
+    }
 
-      let merged: string[] = [];
+    const storageKey = `clubs_${visitorId}`;
+
+    const mergeIdsFromFirestore = (firestoreIds: string[]) => {
+      let localJoined: string[] = [];
+      try {
+        const parsed = JSON.parse(localStorage.getItem(storageKey) || "[]");
+        localJoined = Array.isArray(parsed) ? parsed.filter((x: unknown) => typeof x === "string") : [];
+      } catch {
+        localJoined = [];
+      }
+      return Array.from(new Set([...firestoreIds, ...localJoined])).filter(Boolean);
+    };
+
+    const resolveClubRows = async (ids: string[]) => {
+      const distilleryRows = await fetchPublicDistilleriesByIds(ids);
+      const byId = new Map<string, DistilleryOwnershipRow & { name?: string }>(
+        distilleryRows.map((row) => [String(row.id), row as DistilleryOwnershipRow & { name?: string }]),
+      );
+
+      const rows = ids
+        .map((id) => {
+          const data = byId.get(String(id));
+          if (!data || data.isArchived) return null;
+          const name = String(data.name || "").trim() || "Klub";
+          return { id, name };
+        })
+        .filter((r): r is { id: string; name: string } => r !== null);
+
+      setJoinedClubsMenu(rows);
+      setJoinedClubsMenuReady(true);
+    };
+
+    const refreshJoinedClubs = async () => {
       try {
         const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);
         const fromFs = memberships
           .map((m) => m.distilleryId)
           .filter((x): x is string => typeof x === "string" && x.length > 0);
-        merged = mergeIdsFromFirestore(fromFs);
+        const merged = mergeIdsFromFirestore(fromFs);
+        await resolveClubRows(merged);
       } catch (err) {
         console.warn("Menu: club_memberships refresh", err);
-        merged = mergeIdsFromFirestore([]);
+        const merged = mergeIdsFromFirestore([]);
+        await resolveClubRows(merged);
       }
+    };
 
-      const distilleryRows = await fetchPublicDistilleriesByIds(merged);
-      const byId = new Map<string, DistilleryOwnershipRow & { name?: string }>(
-        distilleryRows.map((row) => [String(row.id), row as DistilleryOwnershipRow & { name?: string }]),
-      );
+    void refreshJoinedClubs();
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!shouldRunRefresh("menu:focus-joined-clubs", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      void refreshJoinedClubs();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
 
-      return merged
-        .map((clubId) => {
-          const data = byId.get(String(clubId));
-          if (!data || data.isArchived) return null;
-          const name = String(data.name || "").trim() || "Klub";
-          return { id: clubId, name };
-        })
-        .filter((row): row is { id: string; name: string } => row !== null);
-    },
-    initialData: [],
-    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
-  });
-
-  const joinedClubsMenu = joinedClubsQuery.data || [];
-  const joinedClubsMenuReady = !joinedClubsQuery.isFetching;
-  const helpLinks = helpLinksQuery.data || [];
-  const helpLinksReady = !helpLinksQuery.isFetching;
-
-  useEffect(() => {
-    if (!readBudgetCooling) return;
-    const timer = window.setTimeout(() => setReadBudgetCooling(false), 15_000);
-    return () => window.clearTimeout(timer);
-  }, [readBudgetCooling]);
+    return () => {
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
+    };
+  }, []);
 
   useEffect(() => {
     const syncPendingCount = () => {
@@ -413,13 +434,6 @@ export default function Menu() {
       window.removeEventListener("rakivinum_pending_ratings_changed", syncPendingCount as EventListener);
     };
   }, []);
-
-  const googleProvider = () => {
-    const provider = new GoogleAuthProvider();
-    auth.languageCode = 'sr';
-    provider.setCustomParameters({ prompt: 'select_account' });
-    return provider;
-  };
 
   const showDomainError = (rawError?: string) => {
     const currentDomain = window.location.hostname;
@@ -479,7 +493,13 @@ export default function Menu() {
       )
     });
   };
-  showDomainErrorRef.current = showDomainError;
+
+  const googleProvider = () => {
+    const provider = new GoogleAuthProvider();
+    auth.languageCode = 'sr';
+    provider.setCustomParameters({ prompt: 'select_account' });
+    return provider;
+  };
 
   /**
    * Uvek prvo popup: na mobilnom Chrome-u redirect često ostavi korisnika kao „gost“ posle Google-a,
@@ -966,13 +986,6 @@ export default function Menu() {
         </div>
       ) : (
         <div className="mb-2 h-16 rounded-2xl border border-white/5 bg-bg-card/20 animate-pulse" aria-hidden />
-      )}
-      {readBudgetCooling && (
-        <div className="empty-state card-elevated rounded-[20px] px-4 py-3 text-center mb-2">
-          <p className="text-xs text-text-secondary leading-relaxed">
-            Privremena zaštita od prevelikog učitavanja je aktivna. Prikazujemo minimalan skup podataka.
-          </p>
-        </div>
       )}
 
       <div className="space-y-6">

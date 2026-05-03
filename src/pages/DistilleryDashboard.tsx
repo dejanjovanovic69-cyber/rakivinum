@@ -1,8 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "../lib/firebase";
-import { onAuthStateChanged, type User } from "firebase/auth";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
 import { collection, query, where, getDocs, orderBy, Timestamp, addDoc, serverTimestamp, doc, updateDoc, getCountFromServer, limit } from "firebase/firestore";
 import { QRCodeCanvas } from "qrcode.react";
@@ -60,10 +58,8 @@ import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { readCache, writeCache } from "../lib/resilience";
 import { meterDbRead } from "../lib/requestMeter";
-import { stableQueryOptions } from "../lib/queryDefaults";
-import { queryKeys } from "../lib/queryKeys";
 
-const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality = 0.82): Promise<string> => {
+const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality = 0.6): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -102,6 +98,7 @@ const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, 
 };
 
 export default function DistilleryDashboard() {
+  const EMERGENCY_READ_FREEZE = false;
   type DashboardDistillery = {
     id: string;
     name?: string;
@@ -127,6 +124,7 @@ export default function DistilleryDashboard() {
     updatedAt?: { toDate?: () => Date } | string | number | Date;
     scanCount?: number;
     ratingCount?: number;
+    averageRating?: number;
     publicLabelDisabled?: boolean;
     [key: string]: string | number | boolean | Date | { toDate?: () => Date } | undefined;
   };
@@ -167,6 +165,7 @@ export default function DistilleryDashboard() {
     }
     navigate("/menu", { replace: true });
   };
+  const [loading, setLoading] = useState(true);
   const [qrModalProduct, setQrModalProduct] = useState<DashboardProduct | null>(null);
   const [isDistilleryQrOpen, setIsDistilleryQrOpen] = useState(false);
   const qrRef = useRef<HTMLCanvasElement>(null);
@@ -189,203 +188,8 @@ export default function DistilleryDashboard() {
   const [isEditDistilleryModalOpen, setIsEditDistilleryModalOpen] = useState(false);
   const [showAllProducts, setShowAllProducts] = useState(false);
   const [activeDashboardTab, setActiveDashboardTab] = useState('analitika');
-
-  const [authUser, setAuthUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      setAuthUser(u);
-      setAuthReady(true);
-    });
-    return unsub;
-  }, []);
-
-  type DashboardCorePayload = {
-    distillery: DashboardDistillery | null;
-    products: DashboardProduct[];
-    ratings: DashboardRating[];
-    scans: DashboardScan[];
-  };
-
-  const dashboardCoreQuery = useQuery<DashboardCorePayload>({
-    queryKey: queryKeys.distilleryDashboard.core(authUser?.uid ?? "guest"),
-    enabled: authReady && Boolean(authUser),
-    queryFn: async (): Promise<DashboardCorePayload> => {
-      const user = authUser!;
-      let distData: DashboardDistillery | null = null;
-
-      const dq = query(collection(db, "distilleries"), where("ownerId", "==", user.uid), limit(5));
-      const dSnap = await getDocs(dq);
-
-      if (!dSnap.empty) {
-        const first = dSnap.docs[0];
-        const raw = first.data() as DashboardDistillery;
-        if (!raw?.isArchived) {
-          distData = { id: first.id, ...raw };
-        }
-      } else if (user.email) {
-        const eq = query(collection(db, "distilleries"), where("email", "==", user.email), limit(5));
-        const eSnap = await getDocs(eq);
-        if (!eSnap.empty) {
-          const first = eSnap.docs[0];
-          const raw = first.data() as DashboardDistillery;
-          if (!raw?.isArchived) {
-            distData = { id: first.id, ...raw };
-            const owner = raw?.ownerId;
-            if (!owner || owner !== user.uid) {
-              try {
-                await updateDoc(doc(db, "distilleries", first.id), { ownerId: user.uid });
-                distData = { ...distData, ownerId: user.uid };
-              } catch (e) {
-                console.warn("Could not sync distillery ownerId from email match", e);
-              }
-            }
-          }
-        }
-      }
-
-      if (!distData) {
-        return { distillery: null, products: [], ratings: [], scans: [] };
-      }
-
-      try {
-        await updateDoc(doc(db, "distilleries", distData.id), {
-          lastAppAccessAt: serverTimestamp(),
-          lastAppAccessByUid: user.uid,
-          lastAppAccessByEmail: (user.email || "").toLowerCase(),
-        });
-      } catch (e) {
-        console.warn("Could not update last app access from dashboard", e);
-      }
-
-      const pq = query(collection(db, "products"), where("distilleryId", "==", distData.id), limit(20));
-      const pSnap = await getDocs(pq);
-      const pData = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as DashboardProduct[];
-
-      const pIds = pData.map((p) => p.id);
-      let rData: DashboardRating[] = [];
-      let sData: DashboardScan[] = [];
-
-      for (let i = 0; i < pIds.length; i += 10) {
-        const chunk = pIds.slice(i, i + 10);
-        if (chunk.length > 0) {
-          const rq = query(collection(db, "ratings"), where("productId", "in", chunk), limit(20));
-          const rs = await getDocs(rq);
-          rData = [...rData, ...rs.docs.map((d) => ({ id: d.id, ...d.data() }))] as DashboardRating[];
-
-          const sq = query(collection(db, "scans"), where("productId", "in", chunk), limit(20));
-          const ss = await getDocs(sq);
-          sData = [...sData, ...ss.docs.map((d) => ({ id: d.id, ...d.data() }))] as DashboardScan[];
-        }
-      }
-
-      return { distillery: distData, products: pData, ratings: rData, scans: sData };
-    },
-    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
-  });
-
-  const loading = !authReady || (!!authUser && dashboardCoreQuery.isPending);
-
-  const queryClient = useQueryClient();
-  const invalidateDashboardReads = useCallback((opts?: { productId?: string | null }) => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.distilleryDashboard.scope() });
-    const did = distillery?.id;
-    if (did) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.profile(did) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.products(did) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.memberCount(did) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.distillery.membershipPrefix(did) });
-    }
-    void queryClient.invalidateQueries({ queryKey: queryKeys.distilleries.scope() });
-    const pid = opts?.productId;
-    if (pid) {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.label.page(pid) });
-    }
-  }, [queryClient, distillery?.id]);
-
-  useEffect(() => {
-    if (!authReady) return;
-    if (!authUser) {
-      setDistillery(null);
-      setProducts([]);
-      setRatings([]);
-      setScans([]);
-      return;
-    }
-    if (dashboardCoreQuery.isPending) return;
-    if (dashboardCoreQuery.isError) {
-      console.error("Dashboard init error", dashboardCoreQuery.error);
-      setDistillery(null);
-      setProducts([]);
-      setRatings([]);
-      setScans([]);
-      return;
-    }
-    const payload = dashboardCoreQuery.data;
-    if (!payload) return;
-    setDistillery(payload.distillery);
-    setProducts(payload.products);
-    setRatings(payload.ratings);
-    setScans(payload.scans);
-  }, [
-    authReady,
-    authUser,
-    dashboardCoreQuery.isPending,
-    dashboardCoreQuery.isError,
-    dashboardCoreQuery.data,
-    dashboardCoreQuery.error,
-  ]);
-
-  const actionsCacheKey = distillery?.id ? `rakivinum_cache_dist_dashboard_actions_${distillery.id}_v1` : "";
-  const memberCountCacheKey = distillery?.id ? `rakivinum_cache_dist_dashboard_member_count_${distillery.id}_v1` : "";
-  const clubActionsQuery = useQuery<Array<{ id: string; [key: string]: unknown }>>({
-    queryKey: queryKeys.distilleryDashboard.clubActions(distillery?.id ?? "missing"),
-    enabled: Boolean(distillery?.id),
-    queryFn: async () => {
-      if (!distillery?.id) return [];
-      if (!shouldRunRefresh(`dist-dashboard:${distillery.id}:club-panel`, REFRESH_INTERVAL.USER_LIGHT_1H)) {
-        return readCache<Array<{ id: string; [key: string]: unknown }>>(actionsCacheKey) || [];
-      }
-      const qActions = query(
-        collection(db, "club_actions"),
-        where("distilleryId", "==", distillery.id),
-        orderBy("createdAt", "desc"),
-        limit(20),
-      );
-      const actionsSnap = await getDocs(qActions);
-      meterDbRead("distDashboard:club_actions", actionsSnap.size);
-      const nextActions = actionsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      writeCache(actionsCacheKey, nextActions, REFRESH_INTERVAL.USER_LIGHT_1H);
-      return nextActions;
-    },
-    initialData: distillery?.id ? (readCache<Array<{ id: string; [key: string]: unknown }>>(actionsCacheKey) || []) : [],
-    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
-  });
-  const clubMembersCountQuery = useQuery<number>({
-    queryKey: queryKeys.distilleryDashboard.clubMembersCount(distillery?.id ?? "missing"),
-    enabled: Boolean(distillery?.id),
-    queryFn: async () => {
-      if (!distillery?.id) return 0;
-      if (!shouldRunRefresh(`dist-dashboard:${distillery.id}:club-panel`, REFRESH_INTERVAL.USER_LIGHT_1H)) {
-        return readCache<number>(memberCountCacheKey) ?? 0;
-      }
-      const qMembers = query(
-        collection(db, "club_memberships"),
-        where("distilleryId", "==", distillery.id),
-      );
-      const countSnap = await getCountFromServer(qMembers);
-      meterDbRead("distDashboard:club_memberships_count", 1);
-      const nextCount = countSnap.data().count;
-      writeCache(memberCountCacheKey, nextCount, REFRESH_INTERVAL.USER_LIGHT_1H);
-      return nextCount;
-    },
-    initialData: distillery?.id ? (readCache<number>(memberCountCacheKey) ?? 0) : 0,
-    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
-  });
-  const clubActions = clubActionsQuery.data || [];
-  const clubMembersCount: number | "-" = distillery?.id
-    ? (clubMembersCountQuery.data ?? 0)
-    : "-";
+  const [clubActions, setClubActions] = useState<Array<{ id: string; [key: string]: unknown }>>([]);
+  const [clubMembersCount, setClubMembersCount] = useState<number | "-">("-");
   const toDateSafe = (value: unknown): Date => {
     if (value && typeof (value as { toDate?: () => Date }).toDate === "function") {
       const d = (value as { toDate?: () => Date }).toDate?.();
@@ -397,6 +201,81 @@ export default function DistilleryDashboard() {
   };
 
   const distilleryUrl = distillery ? `${window.location.origin}/distillery/${distillery.id}` : '';
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!distillery?.id) return;
+    const actionsCacheKey = `rakivinum_cache_dist_dashboard_actions_${distillery.id}_v1`;
+    const memberCountCacheKey = `rakivinum_cache_dist_dashboard_member_count_${distillery.id}_v1`;
+
+    const refreshClubPanel = async () => {
+      if (!shouldRunRefresh(`dist-dashboard:${distillery.id}:club-panel`, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      try {
+        const qActions = query(
+          collection(db, 'club_actions'),
+          where('distilleryId', '==', distillery.id),
+          orderBy('createdAt', 'desc'),
+          limit(40),
+        );
+        const actionsSnap = await getDocs(qActions);
+        meterDbRead("distDashboard:club_actions", actionsSnap.size);
+        const nextActions = actionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (!cancelled) {
+          setClubActions(nextActions);
+        }
+        writeCache(actionsCacheKey, nextActions, REFRESH_INTERVAL.USER_LIGHT_1H);
+      } catch (err) {
+        console.error("Error fetching actions", err);
+        if (!cancelled) {
+          const cachedActions = readCache<Array<{ id: string; [key: string]: unknown }>>(actionsCacheKey);
+          if (cachedActions) setClubActions(cachedActions);
+        }
+      }
+
+      try {
+        const qMembers = query(
+          collection(db, 'club_memberships'),
+          where('distilleryId', '==', distillery.id),
+        );
+        const countSnap = await getCountFromServer(qMembers);
+        meterDbRead("distDashboard:club_memberships_count", 1);
+        const nextCount = countSnap.data().count;
+        if (!cancelled) setClubMembersCount(nextCount);
+        writeCache(memberCountCacheKey, nextCount, REFRESH_INTERVAL.USER_LIGHT_1H);
+      } catch (err) {
+        console.error("Error fetching members", err);
+        if (!cancelled) {
+          const cachedCount = readCache<number>(memberCountCacheKey);
+          if (typeof cachedCount === "number") setClubMembersCount(cachedCount);
+        }
+      }
+    };
+
+    console.log("Fetching data for distillery:", distillery.id);
+    const cachedActions = readCache<Array<{ id: string; [key: string]: unknown }>>(actionsCacheKey);
+    const cachedCount = readCache<number>(memberCountCacheKey);
+    if (cachedActions) setClubActions(cachedActions);
+    if (typeof cachedCount === "number") setClubMembersCount(cachedCount);
+    if (!cachedActions || typeof cachedCount !== "number" || shouldRunRefresh(`dist-dashboard:${distillery.id}:initial-club-panel`, REFRESH_INTERVAL.USER_LIGHT_1H)) {
+      void refreshClubPanel();
+    }
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshClubPanel();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
+    };
+  }, [distillery?.id]);
 
   const trialEndKey = parseTrialEndDate(distillery?.trialEndsAt)?.getTime() ?? 0;
   useEffect(() => {
@@ -416,7 +295,157 @@ export default function DistilleryDashboard() {
       setIsAnalyticsModalOpen(false);
       setActiveDashboardTab("proizvodi");
     }
-  }, [distillery, distillery?.id, distillery?.isVerified, trialEndKey]);
+  }, [distillery?.id, distillery?.isVerified, trialEndKey]);
+
+  useEffect(() => {
+    if (EMERGENCY_READ_FREEZE) {
+      setLoading(false);
+      return;
+    }
+    // Sajam / gužva: stalni ručni refresh ovog ekrana i dalje troši Firestore read-ove kad istekne keš; podaci su i inače ograničeni feed + agregat sa proizvoda.
+    const initData = async () => {
+      setLoading(true);
+      try {
+        const user = auth.currentUser;
+        if (!user) {
+           setLoading(false);
+           return;
+        }
+
+        // Fetch User's Distillery (by UID or Email)
+        const dq = query(collection(db, "distilleries"), where("ownerId", "==", user.uid), limit(5));
+        const dSnap = await getDocs(dq);
+        
+        let distData = null;
+        if (!dSnap.empty) {
+           const first = dSnap.docs[0];
+           const raw = first.data() as DashboardDistillery;
+           if (!raw?.isArchived) {
+             distData = { id: first.id, ...raw };
+           }
+        } else if (user.email) {
+           // Try by email
+           const eq = query(collection(db, "distilleries"), where("email", "==", user.email), limit(5));
+           const eSnap = await getDocs(eq);
+           if (!eSnap.empty) {
+             const first = eSnap.docs[0];
+             const raw = first.data() as DashboardDistillery;
+             if (!raw?.isArchived) {
+               distData = { id: first.id, ...raw };
+               const owner = raw?.ownerId;
+               if (!owner || owner !== user.uid) {
+                 try {
+                   await updateDoc(doc(db, "distilleries", first.id), { ownerId: user.uid });
+                   distData = { ...distData, ownerId: user.uid };
+                 } catch (e) {
+                   console.warn("Could not sync distillery ownerId from email match", e);
+                 }
+               }
+             }
+           }
+        }
+
+        // No fallback: dashboard access is strictly for linked, active distilleries only.
+
+        if (distData) {
+           setDistillery(distData);
+           try {
+             const sessionKey = `logged_access_${distData.id}`;
+             if (!sessionStorage.getItem(sessionKey)) {
+               await updateDoc(doc(db, 'distilleries', distData.id), {
+                 lastAppAccessAt: serverTimestamp(),
+                 lastAppAccessByUid: user.uid,
+                 lastAppAccessByEmail: (user.email || "").toLowerCase(),
+               });
+               sessionStorage.setItem(sessionKey, "true");
+             }
+           } catch (e) {
+             console.warn("Could not update last app access from dashboard", e);
+           }
+
+           // Fetch Products
+           const pq = query(collection(db, "products"), where("distilleryId", "==", distData.id), limit(80));
+           const pSnap = await getDocs(pq);
+           const pData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+           meterDbRead("distDashboard:products", pSnap.size);
+           setProducts(pData);
+
+           // Live feed only: bounded reads (avoid client-side aggregation of hundreds of docs).
+           try {
+             const rQ = query(
+               collection(db, "ratings"),
+               where("distilleryId", "==", distData.id),
+               orderBy("createdAt", "desc"),
+               limit(15),
+             );
+             const rSnap = await getDocs(rQ);
+             meterDbRead("distDashboard:ratings_feed", rSnap.size);
+             const rData = rSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as DashboardRating[];
+             setRatings(rData);
+           } catch (e) {
+             console.warn("Feed ocena (orderBy) nije uspeo — probam bez sortiranja (čeka se indeks?):", e);
+             try {
+               const rFb = query(
+                 collection(db, "ratings"),
+                 where("distilleryId", "==", distData.id),
+                 limit(15),
+               );
+               const rSnap2 = await getDocs(rFb);
+               meterDbRead("distDashboard:ratings_feed_fallback", rSnap2.size);
+               setRatings(rSnap2.docs.map((d) => ({ id: d.id, ...d.data() })) as DashboardRating[]);
+             } catch (e2) {
+               console.warn("Greška pri učitavanju ocena (dashboard feed):", e2);
+               setRatings([]);
+             }
+           }
+
+           try {
+             const sQ = query(
+               collection(db, "scans"),
+               where("distilleryId", "==", distData.id),
+               orderBy("timestamp", "desc"),
+               limit(15),
+             );
+             const sSnap = await getDocs(sQ);
+             meterDbRead("distDashboard:scans_feed", sSnap.size);
+             const sData = sSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as DashboardScan[];
+             setScans(sData);
+           } catch (e) {
+             console.warn("Feed skenova (orderBy) nije uspeo — probam bez sortiranja:", e);
+             try {
+               const sFb = query(
+                 collection(db, "scans"),
+                 where("distilleryId", "==", distData.id),
+                 limit(15),
+               );
+               const sSnap2 = await getDocs(sFb);
+               meterDbRead("distDashboard:scans_feed_fallback", sSnap2.size);
+               setScans(sSnap2.docs.map((d) => ({ id: d.id, ...d.data() })) as DashboardScan[]);
+             } catch (e2) {
+               console.warn("Greška pri učitavanju skenova (dashboard feed):", e2);
+               setScans([]);
+             }
+           }
+        }
+
+      } catch (err) {
+        console.error("Dashboard init error", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Use onAuthStateChanged to ensure auth is ready
+    const unsub = auth.onAuthStateChanged(user => {
+       if (user) {
+         initData();
+       } else {
+         setLoading(false);
+       }
+    });
+
+    return () => unsub();
+  }, [EMERGENCY_READ_FREEZE]);
 
   useEffect(() => {
      // Apply Time Filter
@@ -635,20 +664,39 @@ export default function DistilleryDashboard() {
   const [isNfcInfoOpen, setIsNfcInfoOpen] = useState(false);
   const [isGeneratingCert, setIsGeneratingCert] = useState(false);
 
-  // Dynamic calculated stats based on `filteredRatings`
-  const currentAvgRating = filteredRatings.length > 0 
-      ? (filteredRatings.reduce((acc, r) => acc + r.rating, 0) / filteredRatings.length).toFixed(1)
-      : "0.0";
-  
-  // Sort products by ratings count for Top Products
-  const sortedProducts = [...products].map(p => {
-    const pRatings = filteredRatings.filter(r => r.productId === p.id);
-    return {
-      ...p,
-      ratingCount: pRatings.length,
-      avgRating: pRatings.length > 0 ? (pRatings.reduce((acc, r) => acc + r.rating, 0) / pRatings.length).toFixed(1) : "0.0"
+  // KPI prosek i ukupne interakcije iz denormalizovanih polja na proizvodima (0 dodatnih čitanja).
+  const productAggregates = useMemo(() => {
+    let totalRatingSum = 0;
+    let totalRatingsCount = 0;
+    let totalScansCount = 0;
+    for (const p of products) {
+      totalScansCount += Number(p.scanCount) || 0;
+      const rc = Number(p.ratingCount) || 0;
+      const ar = Number(p.averageRating);
+      if (rc > 0 && Number.isFinite(ar)) {
+        totalRatingsCount += rc;
+        totalRatingSum += ar * rc;
+      }
     }
-  }).sort((a,b) => b.ratingCount - a.ratingCount);
+    return {
+      totalInteractions: totalScansCount + totalRatingsCount,
+      currentAvgRating: totalRatingsCount > 0 ? (totalRatingSum / totalRatingsCount).toFixed(1) : "0.0",
+      totalScansCount,
+      totalRatingsCount,
+    };
+  }, [products]);
+
+  const { totalInteractions, currentAvgRating } = productAggregates;
+
+  // Sort products by ratingCount from product documents (ne iz feed-a od 15 ocena).
+  const sortedProducts = [...products]
+    .map((p) => {
+      const rc = Number(p.ratingCount) || 0;
+      const ar = Number(p.averageRating);
+      const avgDisplay = rc > 0 && Number.isFinite(ar) ? ar.toFixed(1) : "0.0";
+      return { ...p, ratingCount: rc, avgRating: avgDisplay };
+    })
+    .sort((a, b) => b.ratingCount - a.ratingCount);
 
   const displayedProducts = showAllProducts ? sortedProducts : sortedProducts.slice(0, 3);
 
@@ -838,12 +886,15 @@ export default function DistilleryDashboard() {
   };
   const loyaltyRanking = computeLoyaltyRanking();
 
-  // Compute Conversion Stats
+  // Conversion KPI iz agregata proizvoda; uniqueUsers i dalje iz malog feed uzorka.
   const conversionStats = {
-    scans: filteredScans.length,
-    ratings: filteredRatings.length,
-    rate: filteredScans.length > 0 ? Math.round((filteredRatings.length / filteredScans.length) * 100) : 0,
-    uniqueUsers: new Set([...filteredScans, ...filteredRatings].map(i => i.userEmail || i.userId)).size
+    scans: productAggregates.totalScansCount,
+    ratings: productAggregates.totalRatingsCount,
+    rate:
+      productAggregates.totalScansCount > 0
+        ? Math.round((productAggregates.totalRatingsCount / productAggregates.totalScansCount) * 100)
+        : 0,
+    uniqueUsers: new Set([...filteredScans, ...filteredRatings].map((i) => i.userEmail || i.userId)).size,
   };
 
   if (loading) {
@@ -1021,7 +1072,7 @@ export default function DistilleryDashboard() {
         <div className="bg-bg-card border border-border-subtle p-4 rounded-3xl space-y-3 relative overflow-hidden group">
           <p className="text-[9px] font-black text-text-secondary uppercase tracking-widest">Interakcije</p>
           <div className="flex items-end gap-2">
-            <span className="text-xl font-bold">{filteredRatings.length + filteredScans.length}</span>
+            <span className="text-xl font-bold">{totalInteractions}</span>
           </div>
         </div>
 
@@ -1824,7 +1875,6 @@ export default function DistilleryDashboard() {
         onClose={() => setIsAddProductModalOpen(false)} 
         distilleryId={distillery?.id || ''}
         locked={postTrialFrozen}
-        onSuccess={(productId) => invalidateDashboardReads(productId ? { productId } : undefined)}
       />
 
       {/* Detailed Analytics Modal */}
@@ -1842,7 +1892,7 @@ export default function DistilleryDashboard() {
         product={editingProduct}
         minimalEdit={postTrialFrozen}
         onSave={() => {
-           invalidateDashboardReads({ productId: editingProduct?.id });
+           // Refresh logic if needed, but onSnapshot should handle it
            alert("Izmene su sačuvane i poslate na ponovno odobrenje!");
         }}
       />
@@ -1853,7 +1903,6 @@ export default function DistilleryDashboard() {
         onClose={() => setIsEditDistilleryModalOpen(false)}
         distillery={distillery}
         readOnly={postTrialFrozen}
-        onSaved={invalidateDashboardReads}
       />
 
       {/* QR Export Modal */}
@@ -1955,7 +2004,6 @@ export default function DistilleryDashboard() {
         isOpen={isClubModalOpen} 
         onClose={() => setIsClubModalOpen(false)} 
         distilleryId={distillery?.id || ''}
-        onSuccess={invalidateDashboardReads}
       />
 
       {/* NFC / Smart Table Talker Instructions Modal */}
@@ -2038,17 +2086,7 @@ export default function DistilleryDashboard() {
 }
 
 // Sub-component for Club Creation Flow
-function ClubSetupModal({
-  isOpen,
-  onClose,
-  distilleryId,
-  onSuccess,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  distilleryId: string;
-  onSuccess?: () => void;
-}) {
+function ClubSetupModal({ isOpen, onClose, distilleryId }: { isOpen: boolean, onClose: () => void, distilleryId: string }) {
   const [step, setStep] = useState(1);
   const [isSaving, setIsSaving] = useState(false);
   const [actionData, setActionData] = useState({
@@ -2090,7 +2128,6 @@ function ClubSetupModal({
         endsAt: endsAt
       });
       alert(`Akcija uspešno kreirana! Traje ${actionData.durationDays} dana. Gosti moraju ispoštovati zlatno pravilo ocena.`);
-      onSuccess?.();
       onClose();
       setStep(1);
     } catch (err) {
@@ -2256,19 +2293,7 @@ function ClubSetupModal({
   );
 }
 
-function AddProductModal({
-  isOpen,
-  onClose,
-  distilleryId,
-  locked,
-  onSuccess,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  distilleryId: string;
-  locked?: boolean;
-  onSuccess?: (productId: string) => void;
-}) {
+function AddProductModal({ isOpen, onClose, distilleryId, locked }: { isOpen: boolean, onClose: () => void, distilleryId: string, locked?: boolean }) {
   const normalizeBarcode = (value: unknown) => String(value || "").replace(/\D/g, "");
   const [formData, setFormData] = useState({
     name: "",
@@ -2319,9 +2344,8 @@ function AddProductModal({
         averageRating: 0
       };
 
-      const ref = await addDoc(collection(db, "products"), docData);
+      await addDoc(collection(db, 'products'), docData);
       alert("Piće je uspešno uneto i poslato administratoru na odobrenje!");
-      onSuccess?.(ref.id);
       onClose();
     } catch (err: unknown) {
       console.error(err);
@@ -2390,7 +2414,7 @@ function AddProductModal({
                         alert("Slika je prevelika za obradu na telefonu (preko 15MB).");
                         return;
                       }
-                      const optimized = await processImageToDataURL(file, 1400, 1400, 0.82);
+                      const optimized = await processImageToDataURL(file, 400, 400, 0.6);
                       setFormData({...formData, bottleImageUrl: optimized});
                      }
                    }} 
@@ -2571,7 +2595,7 @@ function EditProductModal({
                           alert("Slika je prevelika za obradu na telefonu (preko 15MB).");
                           return;
                         }
-                        const optimized = await processImageToDataURL(file, 1400, 1400, 0.82);
+                        const optimized = await processImageToDataURL(file, 400, 400, 0.6);
                         setFormData({...formData, bottleImageUrl: optimized});
                       }
                   }} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
@@ -2602,11 +2626,9 @@ function EditDistilleryModal({
   onClose,
   distillery,
   readOnly,
-  onSaved,
 }: {
   isOpen: boolean;
   onClose: () => void;
-  onSaved?: () => void;
   distillery: {
     id: string;
     name?: string;
@@ -2702,7 +2724,6 @@ function EditDistilleryModal({
               updatedAt: serverTimestamp()
             });
             alert("Profil uspešno ažuriran!");
-            onSaved?.();
             onClose();
           } catch (err: unknown) {
             alert("Greška: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
@@ -2725,7 +2746,7 @@ function EditDistilleryModal({
                           alert("Slika je prevelika za obradu na telefonu (preko 15MB).");
                           return;
                         }
-                        const optimized = await processImageToDataURL(file, 1200, 1200, 0.82);
+                        const optimized = await processImageToDataURL(file, 400, 400, 0.6);
                         setFormData({...formData, logoUrl: optimized});
                       }
                   }} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
@@ -2802,7 +2823,7 @@ function EditDistilleryModal({
                       alert("Slika je prevelika za obradu na telefonu (preko 15MB).");
                       return;
                     }
-                    const optimized = await processImageToDataURL(file, 1600, 1600, 0.8);
+                    const optimized = await processImageToDataURL(file, 400, 400, 0.6);
                     const prev = Array.isArray(formData.galleryImages) ? formData.galleryImages : [];
                     const next = [...prev, optimized].slice(0, 8);
                     setFormData({...formData, galleryImages: next});

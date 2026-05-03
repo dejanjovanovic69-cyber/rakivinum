@@ -5,12 +5,13 @@ compatibility_date = "2026-04-25"
 [observability]
 enabled = true
 
+[[kv_namespaces]]
+binding = "FIRESTORE_CACHE"
+id = "2443f1a11ddf4ea49e78bc46bfd39293"
+
 # Postavi ove varijable kroz:
 # `wrangler secret put FIREBASE_PROJECT_ID`
 # `wrangler secret put FIRESTORE_DATABASE_ID`
 # `wrangler secret put GCP_CLIENT_EMAIL`
 # `wrangler secret put GCP_PRIVATE_KEY`
-[[kv_namespaces]]
-binding = "FIRESTORE_CACHE"
-id = "2443f1a11ddf4ea49e78bc46bfd39293"
-preview_id = "4f9dbf5a82a9406eb903994a49b8baed"
+

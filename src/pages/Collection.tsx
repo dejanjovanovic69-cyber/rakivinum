@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Bookmark, Trash2, ChevronRight, Info, Star } from "lucide-react";
 import { auth, db } from "../lib/firebase";
@@ -9,9 +8,7 @@ import { getOrCreateVisitorId } from "../lib/visitorIdentity";
 import { readCache, writeCache } from "../lib/resilience";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
-import { useCachedFetch } from "../hooks/useCachedFetch";
-import { stableQueryOptions } from "../lib/queryDefaults";
-import { queryKeys } from "../lib/queryKeys";
+import { fetchPublicProductsByIds } from "../lib/dataService";
 
 type PendingQueueItem = { id: string };
 type AuthUserLite = { uid: string } | null;
@@ -31,31 +28,13 @@ type CollectionProduct = {
   alcoholPercentage?: number;
 };
 type CollectionItem = SavedListItem & { product: CollectionProduct };
-type ProductsResponse = { items: CollectionProduct[] };
+type HomeUserStatsCache = { savedCount: number | "-"; topRating: number | null; lastSavedProduct: CollectionProduct | null };
 
 export default function Collection() {
-  const queryClient = useQueryClient();
+  const EMERGENCY_READ_FREEZE = false;
   const [items, setItems] = useState<CollectionItem[]>([]);
+  const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<AuthUserLite>(null);
-  const edgeBase = String(import.meta.env.VITE_EDGE_API_BASE || "").trim().replace(/\/$/, "");
-  const productsEndpoint = `${edgeBase}/api/public/products?limit=500`;
-  const { data: productsData, loading: productsLoading } = useCachedFetch<ProductsResponse>(
-    productsEndpoint,
-    {
-      parser: (raw) => {
-        const payload = (raw || {}) as { items?: CollectionProduct[] };
-        return { items: Array.isArray(payload.items) ? payload.items : [] };
-      },
-    },
-  );
-  const productsById = useMemo(() => {
-    const map = new Map<string, CollectionProduct>();
-    (productsData?.items || []).forEach((p) => {
-      const id = String(p?.id || "").trim();
-      if (id) map.set(id, p);
-    });
-    return map;
-  }, [productsData]);
   const navigate = useNavigate();
   const location = useLocation();
   const goBackSafe = () => {
@@ -82,6 +61,41 @@ export default function Collection() {
       state: { returnTo: returnToCollection },
     });
   };
+  const getCollectionCacheKey = (uid: string | null) => {
+    const identityKey = uid || `guest:${getOrCreateVisitorId()}`;
+    return `rakivinum_cache_collection_items_${identityKey}_v1`;
+  };
+  const getHomeUserStatsCacheKey = (uid: string) => `rakivinum_cache_home_user_stats_${uid}_v1`;
+  const writeHomeStatsCacheFromItems = (uid: string | null, nextItems: CollectionItem[]) => {
+    if (!uid) return;
+    const key = getHomeUserStatsCacheKey(uid);
+    const prev = readCache<HomeUserStatsCache>(key);
+    const payload: HomeUserStatsCache = {
+      savedCount: nextItems.length,
+      topRating: prev?.topRating ?? null,
+      lastSavedProduct: nextItems[0]?.product || null,
+    };
+    writeCache(key, payload, REFRESH_INTERVAL.USER_LIGHT_1H);
+  };
+  const formatSavedAt = (createdAt: unknown): string => {
+    if (!createdAt) return "Lokalni unos";
+    if (typeof createdAt === "object" && createdAt !== null) {
+      const maybeSeconds = Number((createdAt as { seconds?: unknown }).seconds);
+      if (Number.isFinite(maybeSeconds) && maybeSeconds > 0) {
+        return `Sačuvano: ${new Date(maybeSeconds * 1000).toLocaleDateString("sr-RS")}`;
+      }
+      const maybeToDate = (createdAt as { toDate?: () => Date }).toDate;
+      if (typeof maybeToDate === "function") {
+        const d = maybeToDate();
+        if (d instanceof Date && Number.isFinite(d.getTime())) {
+          return `Sačuvano: ${d.toLocaleDateString("sr-RS")}`;
+        }
+      }
+    }
+    const d = new Date(createdAt as string | number | Date);
+    if (Number.isFinite(d.getTime())) return `Sačuvano: ${d.toLocaleDateString("sr-RS")}`;
+    return "Sačuvano nedavno";
+  };
 
   const removePendingRatingEntry = (productId: string) => {
     try {
@@ -106,32 +120,40 @@ export default function Collection() {
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
+      if (!u) {
+        setLoading(false);
+      }
     });
     return unsub;
   }, []);
 
-  const collectionQuery = useQuery<CollectionItem[]>({
-    queryKey: queryKeys.collection.items(user?.uid ?? "guest", productsById.size),
-    enabled: !productsLoading,
-    queryFn: async () => {
-      const identityKey = user?.uid || `guest:${getOrCreateVisitorId()}`;
-      const cacheKey = `rakivinum_cache_collection_items_${identityKey}_v1`;
+  useEffect(() => {
+    const fetchCollection = async () => {
+      setLoading(true);
+      if (EMERGENCY_READ_FREEZE) {
+        setItems([]);
+        setLoading(false);
+        return;
+      }
+      const cacheKey = getCollectionCacheKey(user?.uid || null);
       const cachedItems = readCache<CollectionItem[]>(cacheKey);
       if (cachedItems) {
-        return cachedItems;
+        setItems(cachedItems);
+        setLoading(false);
+        return;
       }
-
+      
       let savedList: SavedListItem[] = [];
-
+      
       if (user) {
         const colRef = collection(db, "users", user.uid, "savedItems");
-        const snapshot = await getDocs(query(colRef, orderBy("createdAt", "desc"), limit(20)));
+        const snapshot = await getDocs(query(colRef, orderBy("createdAt", "desc"), limit(40)));
         meterDbRead("collection:user_saved_items", snapshot.size);
-        savedList = snapshot.docs.map((d) => ({ id: d.id, productId: d.data().productId, createdAt: d.data().createdAt }));
+        savedList = snapshot.docs.map(d => ({ id: d.id, productId: d.data().productId, createdAt: d.data().createdAt }));
       } else {
         const visitorId = getOrCreateVisitorId();
         const guestSnap = await getDocs(
-          query(collection(db, "guest_saved_items"), where("visitorId", "==", visitorId), limit(20)),
+          query(collection(db, "guest_saved_items"), where("visitorId", "==", visitorId), limit(40)),
         );
         meterDbRead("collection:guest_saved_items", guestSnap.size);
         const remoteGuestList = guestSnap.docs.map((d) => ({
@@ -140,7 +162,7 @@ export default function Collection() {
           isGuest: true,
           createdAt: d.data().createdAt,
         }));
-        const historyStr = localStorage.getItem("rakivinum_guest_collection") || "[]";
+        const historyStr = localStorage.getItem('rakivinum_guest_collection') || '[]';
         let localGuestList: SavedListItem[] = [];
         try {
           const guestIds = JSON.parse(historyStr);
@@ -159,48 +181,54 @@ export default function Collection() {
           if (!item?.productId) return;
           byProduct.set(String(item.productId), item);
         });
-        savedList = Array.from(byProduct.values());
+        savedList = Array.from(byProduct.values()).slice(0, 40);
       }
 
       if (savedList.length === 0) {
+        setItems([]);
         writeCache(cacheKey, [], REFRESH_INTERVAL.USER_LIGHT_1H);
-        return [];
+        writeHomeStatsCacheFromItems(user?.uid || null, []);
+        setLoading(false);
+        return;
       }
+      
+      try {
+        const allProducts = await fetchPublicProductsByIds(savedList.map((saved) => String(saved.productId || "")));
 
-      const nextItems = savedList
-        .map((saved) => {
-          const product = productsById.get(saved.productId);
-          if (product) return { ...saved, product };
-          return null;
-        })
-        .filter((i): i is CollectionItem => i !== null);
-      writeCache(cacheKey, nextItems, REFRESH_INTERVAL.USER_LIGHT_1H);
-      return nextItems;
-    },
-    initialData: [],
-    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
-  });
+        const productsMap = new Map<string, CollectionProduct>();
+        allProducts.forEach((p) => productsMap.set(String(p.id), p as CollectionProduct));
 
-  useEffect(() => {
-    if (collectionQuery.data) setItems(collectionQuery.data);
-  }, [collectionQuery.data]);
+        const nextItems = savedList
+          .map((saved) => {
+            const pub = productsMap.get(String(saved.productId));
+            if (pub) return { ...saved, product: pub };
+            return null;
+          })
+          .filter((i): i is CollectionItem => i !== null);
 
-  const loading = productsLoading || collectionQuery.isFetching;
+        setItems(nextItems);
+        writeCache(cacheKey, nextItems, REFRESH_INTERVAL.USER_LIGHT_1H);
+        writeHomeStatsCacheFromItems(user?.uid || null, nextItems);
+      } catch (err) {
+        console.error("Greška pri učitavanju proizvoda kolekcije", err);
+        setItems([]);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-  const patchCollectionCacheAfterRemove = (removedItemId: string) => {
-    const uidKey = user?.uid ?? "guest";
-    const qk = queryKeys.collection.items(uidKey, productsById.size);
-    queryClient.setQueryData<CollectionItem[]>(qk, (prev) => {
-      const next = (prev ?? []).filter((i) => i.id !== removedItemId);
-      const identityKey = user?.uid || `guest:${getOrCreateVisitorId()}`;
-      writeCache(`rakivinum_cache_collection_items_${identityKey}_v1`, next, REFRESH_INTERVAL.USER_LIGHT_1H);
-      return next;
-    });
-  };
+    fetchCollection();
+  }, [user, EMERGENCY_READ_FREEZE]);
 
   const removeItem = async (e: React.MouseEvent, item: CollectionItem) => {
     e.stopPropagation();
-    
+    const previousItems = items;
+    const cacheKey = getCollectionCacheKey(user?.uid || null);
+    const nextItems = previousItems.filter((i) => i.id !== item.id);
+    setItems(nextItems);
+    writeCache(cacheKey, nextItems, REFRESH_INTERVAL.USER_LIGHT_1H);
+    writeHomeStatsCacheFromItems(user?.uid || null, nextItems);
+
     if (item.isGuest) {
       const visitorId = getOrCreateVisitorId();
       const historyStr = localStorage.getItem('rakivinum_guest_collection') || '[]';
@@ -210,17 +238,27 @@ export default function Collection() {
         localStorage.setItem('rakivinum_guest_collection', JSON.stringify(collection));
         await deleteDoc(doc(db, "guest_saved_items", `${visitorId}_${item.productId}`));
         removePendingRatingEntry(item.productId);
-        patchCollectionCacheAfterRemove(item.id);
-      } catch (e) {}
+      } catch (e) {
+        setItems(previousItems);
+        writeCache(cacheKey, previousItems, REFRESH_INTERVAL.USER_LIGHT_1H);
+        writeHomeStatsCacheFromItems(user?.uid || null, previousItems);
+      }
       return;
     }
 
-    if (!user) return;
+    if (!user) {
+      setItems(previousItems);
+      writeCache(cacheKey, previousItems, REFRESH_INTERVAL.USER_LIGHT_1H);
+      writeHomeStatsCacheFromItems(user?.uid || null, previousItems);
+      return;
+    }
     try {
       await deleteDoc(doc(db, 'users', user.uid, 'savedItems', item.id));
       removePendingRatingEntry(item.productId);
-      patchCollectionCacheAfterRemove(item.id);
     } catch (err) {
+      setItems(previousItems);
+      writeCache(cacheKey, previousItems, REFRESH_INTERVAL.USER_LIGHT_1H);
+      writeHomeStatsCacheFromItems(user?.uid || null, previousItems);
       console.error("Error removing item:", err);
     }
   };
@@ -385,7 +423,7 @@ export default function Collection() {
                      </div>
                      <span className="w-1 h-1 rounded-full bg-white/20 hidden sm:inline" aria-hidden />
                      <p className="ui-caption w-full sm:w-auto text-center sm:text-left sm:truncate font-medium text-text-secondary/90">
-                        {item.createdAt ? `Sačuvano: ${new Date(item.createdAt?.seconds * 1000).toLocaleDateString('sr-RS')}` : 'Lokalni unos'}
+                        {formatSavedAt(item.createdAt)}
                      </p>
                   </div>
                 </div>

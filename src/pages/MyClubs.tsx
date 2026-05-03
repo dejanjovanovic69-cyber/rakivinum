@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { db } from "../lib/firebase";
-import { doc, deleteDoc } from "firebase/firestore";
+import { collection, query, where, getDocs, doc, deleteDoc, limit } from "firebase/firestore";
 import { ArrowLeft, Gift, ShieldX, Loader2, Star, CheckCircle2, ChevronRight, Users } from "lucide-react";
 import { cn } from "../lib/utils";
 import {
@@ -10,11 +9,6 @@ import {
   fetchPublicClubMembershipsByVisitorId,
   fetchPublicDistilleriesByIds,
 } from "../lib/dataService";
-import { REFRESH_INTERVAL } from "../lib/cachePolicy";
-import { stableQueryOptions } from "../lib/queryDefaults";
-import { queryKeys } from "../lib/queryKeys";
-import { invalidateAfterClubMembershipChange } from "../lib/invalidateClubCaches";
-import { consumeReadBudget } from "../lib/readBudget";
 
 type ClubTarget = { label: string; current: number; target: number };
 type ClubAction = {
@@ -59,7 +53,7 @@ function safeCount(value: unknown): number {
 }
 
 export default function MyClubs() {
-  const queryClient = useQueryClient();
+  const EMERGENCY_READ_FREEZE = false;
   const navigate = useNavigate();
   const location = useLocation();
   const goBackSafe = () => {
@@ -75,117 +69,148 @@ export default function MyClubs() {
     }
     navigate("/", { replace: true });
   };
-  const [clubs, setClubs] = useState<ClubRow[] | null>(null);
-  const [readBudgetCooling, setReadBudgetCooling] = useState(false);
+  const [clubs, setClubs] = useState<ClubRow[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const visitorId = localStorage.getItem('rakivinum_visitor_id');
 
-  const clubsQuery = useQuery<ClubRow[]>({
-    queryKey: queryKeys.myClubs.list(visitorId),
-    enabled: Boolean(visitorId),
-    queryFn: async () => {
-      if (!visitorId) return [];
-      const budget = consumeReadBudget("my-clubs", 2);
-      if (!budget.allowed) {
-        setReadBudgetCooling(true);
-        return [];
-      }
-      // Quota-safe mode: avoid expensive direct Firestore reads on each open.
-      // Progress still renders, but starts from 0 until dedicated aggregate endpoint is added.
-      const scansByDistillery = new Map<string, number>();
-      const ratingsByDistillery = new Map<string, number>();
-
-      const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);
-      const joinedClubsIds = memberships.map((m) => m.distilleryId).filter((x): x is string => typeof x === "string" && x.length > 0);
-
-      // Secondary fallback to local storage
-      const storageKey = `clubs_${visitorId}`;
-      const localJoined = JSON.parse(localStorage.getItem(storageKey) || "[]");
-      const allIds = Array.from(new Set([...joinedClubsIds, ...localJoined]));
-      if (allIds.length === 0) return [];
-
-      const clubsData: ClubRow[] = [];
-      const distilleryRows = await fetchPublicDistilleriesByIds(allIds);
-      const distilleryById = new Map<string, Record<string, unknown>>(
-        distilleryRows.map((row) => [String(row.id), row as Record<string, unknown>]),
-      );
-
-      for (const id of allIds) {
-        const distillery = distilleryById.get(id);
-        if (!distillery) continue;
-
-        const actionRows = await fetchPublicClubActionsForDistillery(id, 60);
-        const actions: ClubAction[] = actionRows.map((row) => ({ id: row.id, ...(row as object) } as ClubAction));
-
-        // Calculate Progress for each action
-        const currentScans = scansByDistillery.get(id) || 0;
-        const currentRatings = ratingsByDistillery.get(id) || 0;
-        const actionsWithProgress = actions.map((action) => {
-          let progress = 0;
-          let targets: ClubTarget[] = [];
-
-          if (action.condition === "combined_automated") {
-            const scanProgress = Math.min(currentScans / (action.targetScans || 1), 1);
-            const ratingProgress = Math.min(currentRatings / (action.targetRatings || 1), 1);
-            progress = ((scanProgress + ratingProgress) / 2) * 100;
-            targets = [
-              { label: "Skenovi", current: currentScans, target: action.targetScans || 1 },
-              { label: "Ocene", current: currentRatings, target: action.targetRatings || 1 },
-            ];
-          } else if (action.condition === "3_scans") {
-            progress = (currentScans / (action.targetValue || 3)) * 100;
-            targets = [{ label: "Skenovi", current: currentScans, target: action.targetValue || 3 }];
-          } else if (action.condition === "high_rating") {
-            progress = (currentRatings / (action.targetValue || 1)) * 100;
-            targets = [{ label: "Ocene", current: currentRatings, target: action.targetValue || 1 }];
-          }
-
-          return {
-            ...action,
-            progress: Math.min(progress, 100),
-            targets,
-          };
-        });
-
-        const distilleryIdStr = String((distillery as { id?: unknown }).id ?? id);
-        clubsData.push({
-          ...(distillery as Record<string, unknown>),
-          id: distilleryIdStr,
-          name: safeReactText((distillery as { name?: unknown })?.name) || "Destilerija",
-          logoUrl: typeof (distillery as { logoUrl?: unknown })?.logoUrl === "string" ? String((distillery as { logoUrl?: unknown }).logoUrl) : "",
-          actions: actionsWithProgress.map((a) => ({
-            ...a,
-            title: safeReactText(a?.title) || "Akcija",
-            conditionLabel: safeReactText(a?.conditionLabel),
-            rewardValue: safeReactText(a?.rewardValue),
-            progress: Math.max(0, Math.min(100, safeCount(a?.progress))),
-            targets: Array.isArray(a?.targets)
-              ? a.targets.map((t: { label?: unknown; current?: unknown; target?: unknown }) => ({
-                  label: safeReactText(t?.label) || "Cilj",
-                  current: safeCount(t?.current),
-                  target: Math.max(1, safeCount(t?.target)),
-                }))
-              : [],
-          })),
-        } as ClubRow);
-      }
-
-      return clubsData;
-    },
-    initialData: [],
-    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
-  });
-
-  const effectiveClubs = clubs ?? clubsQuery.data ?? [];
-  const isLoading = Boolean(visitorId) && clubs === null && clubsQuery.isFetching;
-
   useEffect(() => {
-    if (!readBudgetCooling) return;
-    const timer = window.setTimeout(() => setReadBudgetCooling(false), 15_000);
-    return () => window.clearTimeout(timer);
-  }, [readBudgetCooling]);
+    if (!visitorId) {
+      setIsLoading(false);
+      return;
+    }
+
+    const fetchClubs = async () => {
+      setIsLoading(true);
+      try {
+        // Read visitor progress once, then reuse per-club to avoid N x Firestore queries.
+        const scansByDistillery = new Map<string, number>();
+        const ratingsByDistillery = new Map<string, number>();
+        if (!EMERGENCY_READ_FREEZE) {
+          const [scansSnap, ratingsSnap] = await Promise.all([
+            getDocs(
+              query(
+                collection(db, "scans"),
+                where("visitorId", "==", visitorId),
+                limit(120),
+              ),
+            ),
+            getDocs(
+              query(
+                collection(db, "ratings"),
+                where("visitorId", "==", visitorId),
+                where("rating", ">=", 4.5),
+                limit(120),
+              ),
+            ),
+          ]);
+          scansSnap.forEach((d) => {
+            const row = d.data() as { distilleryId?: unknown };
+            const distilleryId = String(row?.distilleryId || "").trim();
+            if (!distilleryId) return;
+            scansByDistillery.set(distilleryId, (scansByDistillery.get(distilleryId) || 0) + 1);
+          });
+          ratingsSnap.forEach((d) => {
+            const row = d.data() as { distilleryId?: unknown };
+            const distilleryId = String(row?.distilleryId || "").trim();
+            if (!distilleryId) return;
+            ratingsByDistillery.set(distilleryId, (ratingsByDistillery.get(distilleryId) || 0) + 1);
+          });
+        }
+
+        const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);
+        const joinedClubsIds = memberships.map((m) => m.distilleryId).filter((x): x is string => typeof x === "string" && x.length > 0);
+        
+        // Secondary fallback to local storage
+        const storageKey = `clubs_${visitorId}`;
+        const localJoined = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        const allIds = Array.from(new Set([...joinedClubsIds, ...localJoined]));
+
+        if (allIds.length === 0) {
+          setClubs([]);
+          setIsLoading(false);
+          return;
+        }
+
+        const clubsData: ClubRow[] = [];
+
+        const distilleryRows = await fetchPublicDistilleriesByIds(allIds);
+        const distilleryById = new Map<string, Record<string, unknown>>(
+          distilleryRows.map((row) => [String(row.id), row as Record<string, unknown>]),
+        );
+
+        for (const id of allIds) {
+          const distillery = distilleryById.get(id);
+          if (!distillery) continue;
+
+          const actionRows = await fetchPublicClubActionsForDistillery(id, 60);
+          const actions: ClubAction[] = actionRows.map((row) => ({ id: row.id, ...(row as object) } as ClubAction));
+
+          // Calculate Progress for each action
+          const currentScans = scansByDistillery.get(id) || 0;
+          const currentRatings = ratingsByDistillery.get(id) || 0;
+          const actionsWithProgress = actions.map((action) => {
+
+            let progress = 0;
+            let targets: ClubTarget[] = [];
+            
+            if (action.condition === 'combined_automated') {
+              const scanProgress = Math.min(currentScans / (action.targetScans || 1), 1);
+              const ratingProgress = Math.min(currentRatings / (action.targetRatings || 1), 1);
+              progress = ((scanProgress + ratingProgress) / 2) * 100;
+              targets = [
+                { label: 'Skenovi', current: currentScans, target: action.targetScans },
+                { label: 'Ocene', current: currentRatings, target: action.targetRatings }
+              ];
+            } else if (action.condition === '3_scans') {
+              progress = (currentScans / (action.targetValue || 3)) * 100;
+              targets = [{ label: 'Skenovi', current: currentScans, target: action.targetValue || 3 }];
+            } else if (action.condition === 'high_rating') {
+              progress = (currentRatings / (action.targetValue || 1)) * 100;
+              targets = [{ label: 'Ocene', current: currentRatings, target: action.targetValue || 1 }];
+            }
+
+            return {
+              ...action,
+              progress: Math.min(progress, 100),
+              targets,
+            };
+          });
+
+          const distilleryIdStr = String((distillery as { id?: unknown }).id ?? id);
+          clubsData.push({
+            ...(distillery as Record<string, unknown>),
+            id: distilleryIdStr,
+            name: safeReactText((distillery as { name?: unknown })?.name) || "Destilerija",
+            logoUrl: typeof (distillery as { logoUrl?: unknown })?.logoUrl === "string" ? String((distillery as { logoUrl?: unknown }).logoUrl) : "",
+            actions: actionsWithProgress.map((a) => ({
+              ...a,
+              title: safeReactText(a?.title) || "Akcija",
+              conditionLabel: safeReactText(a?.conditionLabel),
+              rewardValue: safeReactText(a?.rewardValue),
+              progress: Math.max(0, Math.min(100, safeCount(a?.progress))),
+              targets: Array.isArray(a?.targets)
+                ? a.targets.map((t: { label?: unknown; current?: unknown; target?: unknown }) => ({
+                    label: safeReactText(t?.label) || "Cilj",
+                    current: safeCount(t?.current),
+                    target: Math.max(1, safeCount(t?.target)),
+                  }))
+                : [],
+            })),
+          } as ClubRow);
+        }
+
+        setClubs(clubsData);
+      } catch (err) {
+        console.error("Error fetching clubs", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchClubs();
+  }, [visitorId, EMERGENCY_READ_FREEZE]);
 
   const leaveClub = async (distilleryId: string) => {
-    if (!visitorId) return;
     if (!confirm("Da li ste sigurni da želite da napustite ovaj klub? Sav vaš napredak ka nagradama u ovom klubu će biti izgubljen.")) return;
 
     try {
@@ -195,9 +220,7 @@ export default function MyClubs() {
       joined = joined.filter((id: string) => id !== distilleryId);
       localStorage.setItem(storageKey, JSON.stringify(joined));
 
-      const leaveBudget = consumeReadBudget("my-clubs", 1);
-      const memberships = leaveBudget.allowed ? await fetchPublicClubMembershipsByVisitorId(visitorId, 80) : [];
-      if (!leaveBudget.allowed) setReadBudgetCooling(true);
+      const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
       for (const m of memberships) {
         if (m.distilleryId === distilleryId && m.id) {
           await deleteDoc(doc(db, "club_memberships", m.id));
@@ -206,7 +229,6 @@ export default function MyClubs() {
 
       // Update State
       setClubs(prev => prev.filter(c => c.id !== distilleryId));
-      invalidateAfterClubMembershipChange(queryClient, visitorId, distilleryId);
       alert("Uspešno ste napustili klub.");
     } catch (e) {
       console.error("Error leaving club", e);
@@ -275,14 +297,7 @@ export default function MyClubs() {
       </div>
 
       <div className="px-6 space-y-8">
-        {readBudgetCooling && (
-          <div className="empty-state card-elevated rounded-[20px] px-4 py-3 text-center">
-            <p className="text-xs text-text-secondary leading-relaxed">
-              Privremena zaštita od prevelikog učitavanja je aktivna. Prikazujemo samo dostupne keširane podatke.
-            </p>
-          </div>
-        )}
-        {effectiveClubs.length === 0 ? (
+        {clubs.length === 0 ? (
           <div className="empty-state card-elevated max-w-md mx-auto py-12 px-8 text-center space-y-6 rounded-[32px]">
             <div className="w-20 h-20 bg-gold-500/10 rounded-full flex items-center justify-center mx-auto border border-gold-500/20">
               <Gift className="w-10 h-10 text-gold-500/50" aria-hidden />
@@ -298,7 +313,7 @@ export default function MyClubs() {
             </button>
           </div>
         ) : (
-          effectiveClubs.map((club) => (
+          clubs.map((club) => (
             <div key={club.id} className="card-soft card-elevated border border-white/10 rounded-[32px] overflow-hidden group">
                {/* Club Branding */}
                <div className="p-6 flex items-center justify-between border-b border-white/5">

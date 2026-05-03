@@ -1,5 +1,4 @@
-﻿import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+﻿import { useState, useEffect, useMemo } from "react";
 import { useParams, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -34,9 +33,6 @@ import {
   fetchPublicProductRatings,
   fetchPublicScanClustersByProductId,
 } from "../lib/dataService";
-import { REFRESH_INTERVAL } from "../lib/cachePolicy";
-import { stableQueryOptions } from "../lib/queryDefaults";
-import { queryKeys } from "../lib/queryKeys";
 
 type RatingDoc = {
   rating: number;
@@ -58,9 +54,6 @@ const RADAR_LABELS: { key: keyof NonNullable<RatingDoc["sensoryScores"]>; subjec
   { key: "finish", subject: "Aftertaste" },
   { key: "harmony", subject: "Harmonija" },
 ];
-
-const EMPTY_ANALYTICS_RATINGS: RatingDoc[] = [];
-const EMPTY_SCAN_CLUSTERS: { region: string; val: number }[] = [];
 
 function formatRelativeSr(date: Date): string {
   const diff = Date.now() - date.getTime();
@@ -90,67 +83,84 @@ export default function ProductAnalytics() {
     }
     navigate("/admin", { replace: true });
   };
-  const missingId = !id;
-  const analyticsQuery = useQuery<{
-    product: {
-      name: string;
-      scanCount?: number;
-      averageRating?: number;
-      ratingCount?: number;
-    } | null;
-    ratings: RatingDoc[];
-    scanClusters: { region: string; val: number }[];
-  }>({
-    queryKey: queryKeys.productAnalytics.byProductId(id ?? "missing"),
-    enabled: Boolean(id),
-    queryFn: async () => {
-      if (!id) return { product: null, ratings: [], scanClusters: [] };
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [product, setProduct] = useState<{
+    name: string;
+    scanCount?: number;
+    averageRating?: number;
+    ratingCount?: number;
+  } | null>(null);
+  const [ratings, setRatings] = useState<RatingDoc[]>([]);
+  const [scanClusters, setScanClusters] = useState<{ region: string; val: number }[]>([]);
 
-      const row = await fetchScannerProductById(id);
-      const summary = await fetchPublicProductRatingSummary(id);
-      if (!row) return { product: null, ratings: [], scanClusters: [] };
+  useEffect(() => {
+    if (!id) {
+      setLoading(false);
+      setError("Nedostaje ID proizvoda.");
+      return;
+    }
 
-      const pdata = row as Record<string, unknown>;
-      const product = {
-        name: (pdata.name as string) || "Proizvod",
-        scanCount: Number(summary?.scanCount ?? pdata.scanCount) || 0,
-        averageRating:
-          typeof summary?.averageRating === "number"
-            ? summary.averageRating
-            : typeof pdata.averageRating === "number"
-              ? pdata.averageRating
-              : undefined,
-        ratingCount:
-          typeof summary?.ratingCount === "number"
-            ? summary.ratingCount
-            : typeof pdata.ratingCount === "number"
-              ? pdata.ratingCount
-              : undefined,
-      };
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const row = await fetchScannerProductById(id);
+        const summary = await fetchPublicProductRatingSummary(id);
+        if (cancelled) return;
 
-      const list = await fetchPublicProductRatings(id, 200);
-      const ratings: RatingDoc[] = list.map((r) => ({
-        rating: typeof r.rating === "number" ? r.rating : Number(r.rating) || 0,
-        reviewText: (r.reviewText ?? r.comment ?? null) as string | null | undefined,
-        createdAt: r.createdAt as RatingDoc["createdAt"],
-        sensoryScores: r.sensoryScores as RatingDoc["sensoryScores"],
-      }));
-      const scanClusters = await fetchPublicScanClustersByProductId(id, 5);
-      return { product, ratings, scanClusters };
-    },
-    initialData: { product: null, ratings: [], scanClusters: [] },
-    ...stableQueryOptions(REFRESH_INTERVAL.USER_LIGHT_1H),
-  });
+        if (!row) {
+          setProduct(null);
+          setError("Proizvod nije pronađen.");
+          setLoading(false);
+          return;
+        }
+        const pdata = row as Record<string, unknown>;
+        setProduct({
+          name: (pdata.name as string) || "Proizvod",
+          scanCount: Number(summary?.scanCount ?? pdata.scanCount) || 0,
+          averageRating:
+            typeof summary?.averageRating === "number"
+              ? summary.averageRating
+              : typeof pdata.averageRating === "number"
+                ? pdata.averageRating
+                : undefined,
+          ratingCount:
+            typeof summary?.ratingCount === "number"
+              ? summary.ratingCount
+              : typeof pdata.ratingCount === "number"
+                ? pdata.ratingCount
+                : undefined,
+        });
 
-  const loading = !missingId && analyticsQuery.isFetching && !analyticsQuery.data?.product;
-  const error = missingId
-    ? "Nedostaje ID proizvoda."
-    : analyticsQuery.error
-      ? "Greška pri učitavanju podataka."
-      : null;
-  const product = analyticsQuery.data?.product ?? null;
-  const ratings = analyticsQuery.data?.ratings ?? EMPTY_ANALYTICS_RATINGS;
-  const scanClusters = analyticsQuery.data?.scanClusters ?? EMPTY_SCAN_CLUSTERS;
+        if (cancelled) return;
+        const list = await fetchPublicProductRatings(id, 200);
+        if (cancelled) return;
+        setRatings(
+          list.map((r) => ({
+            rating: typeof r.rating === "number" ? r.rating : Number(r.rating) || 0,
+            reviewText: (r.reviewText ?? r.comment ?? null) as string | null | undefined,
+            createdAt: r.createdAt as RatingDoc["createdAt"],
+            sensoryScores: r.sensoryScores as RatingDoc["sensoryScores"],
+          })),
+        );
+
+        const top = await fetchPublicScanClustersByProductId(id, 5);
+        if (cancelled) return;
+        setScanClusters(top);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) setError("Greška pri učitavanju podataka.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   const radarData = useMemo(() => {
     const withS = ratings.filter(

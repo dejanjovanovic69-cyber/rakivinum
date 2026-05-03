@@ -3,9 +3,8 @@
 ## Polazna tačka
 
 1. Prvo pročitaj **`docs/STATUS-ZADATAKA.md`** — tu je trenutno stanje deploy-a, Worker ruta i šta je već urađeno.
-2. Za **izolaciju od javnog prod-a** (preview, Access, sandbox) vidi **`docs/RADNI-TOK-STAGING.md`**.
-3. Za detalje Firestore read migracija vidi **`docs/FIRESTORE-READ-AUDIT.md`**.
-4. Na samom početku proveri stanje grane: `git status -sb`.
+2. Za detalje Firestore read migracija vidi **`docs/FIRESTORE-READ-AUDIT.md`**.
+3. Na samom početku proveri stanje grane: `git status -sb`.
 
 ## Kako da radiš autonomno (bez stalnog „nastavi“)
 
@@ -24,7 +23,7 @@
 - `npm run lint`
 - `npm run build`
 - Ako menjaš **rute / layout / javne stranice**: `npm run test:e2e` (Playwright smoke; prvi put `npx playwright install chromium`). Detalji: `docs/QA-E2E.md`.
-- Ako diraš Worker ili edge ponašanje: `npm run cf:smoke:edge` (podrazumevani `-BaseUrl` je u `scripts/smoke-edge.ps1`; opcioni argumenti npr. `npm run cf:smoke:edge -- -SampleVisitorId "…"` — vidi `docs/QA-E2E.md`).
+- Ako diraš Worker ili edge ponašanje: `npm run cf:smoke:edge` (zahteva `VITE_EDGE_API_BASE` u okruženju skripte ako je tako podešeno).
 - Ako je završen veći paket izmena, obavezno osveži `docs/STATUS-ZADATAKA.md` (kratak “Poslednji zapis” + šta je sledeće).
 
 ## Deploy

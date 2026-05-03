@@ -1,9 +1,9 @@
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { ArrowLeft, Star, MapPin, Share2, BookmarkPlus, Hexagon, X, Loader2, CheckCircle, Dna, ShieldCheck, FileText, Download, Gift } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getFunctions, httpsCallable } from "firebase/functions";
 import { app, auth, db } from "../lib/firebase";
-import { doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, getDocs, Timestamp, limit } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, getDocs, Timestamp, limit, runTransaction } from "firebase/firestore";
 import { analyzeReviewText } from "../lib/reviewTextPolicy";
 import { isPostTrialFrozen } from "../lib/distilleryTrial";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
@@ -11,10 +11,9 @@ import { getNextBadgeProgress, recordRatingAchievement } from "../lib/achievemen
 import { isSuperuserEmail } from "../lib/authz";
 import { buildStableVisitorSeed, getOrCreateVisitorId } from "../lib/visitorIdentity";
 import { logProductScan } from "../lib/logProductScan";
-import { fetchPublicDistilleryById, fetchPublicProductRatings, fetchScannerProductById } from "../lib/dataService";
-import { CACHE_TTL } from "../lib/cachePolicy";
-import { stableQueryOptions } from "../lib/queryDefaults";
-import { queryKeys } from "../lib/queryKeys";
+import { readCache, writeCache } from "../lib/resilience";
+import { REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { fetchPublicLabelView } from "../lib/dataService";
 import { 
   RadarChart, 
   PolarGrid, 
@@ -77,6 +76,11 @@ type ReviewData = {
 type PendingQueueItem = { id: string };
 type SensoryKey = "aroma" | "taste" | "color" | "finish" | "harmony";
 type RatedTodayError = Error & { code?: string };
+type HomeUserStatsCache = {
+  savedCount: number | "-";
+  topRating: number | null;
+  lastSavedProduct: ProductData | null;
+};
 
 function toCreatedAtMs(value: ReviewData["createdAt"]): number {
   if (!value) return 0;
@@ -100,73 +104,16 @@ function toCreatedAtMs(value: ReviewData["createdAt"]): number {
   return 0;
 }
 
-type LabelPagePayload = {
-  labelAccessDenied: "archived" | "qr_disabled" | null;
-  productData: ProductData | null;
-  distilleryData: DistilleryData | null;
-  reviews: ReviewData[];
-  labelQuotaBlocked: boolean;
-};
-
-const EMPTY_LABEL_PAYLOAD: LabelPagePayload = {
-  labelAccessDenied: null,
-  productData: null,
-  distilleryData: null,
-  reviews: [],
-  labelQuotaBlocked: false,
-};
-
-function getRatedCheckCacheKey(actorKey: string, ymd: string) {
-  return `rakivinum_rated_check_${actorKey}_${ymd}`;
-}
-
-function readRatedCheckCache(actorKey: string, ymd: string): boolean | null {
-  try {
-    const raw = sessionStorage.getItem(getRatedCheckCacheKey(actorKey, ymd));
-    if (raw === "1") return true;
-    if (raw === "0") return false;
-  } catch {
-    // ignore session cache read errors
-  }
-  return null;
-}
-
-function writeRatedCheckCache(actorKey: string, ymd: string, value: boolean) {
-  try {
-    sessionStorage.setItem(getRatedCheckCacheKey(actorKey, ymd), value ? "1" : "0");
-  } catch {
-    // ignore session cache write errors
-  }
-}
-
-function getSavedStateCacheKey(productId: string, uid: string | null, visitorId: string | null) {
-  return `rakivinum_saved_state_${uid ? `u:${uid}` : `v:${visitorId || "anon"}`}_${productId}`;
-}
-
-function readSavedStateCache(productId: string, uid: string | null, visitorId: string | null): boolean | null {
-  try {
-    const raw = localStorage.getItem(getSavedStateCacheKey(productId, uid, visitorId));
-    if (raw === "1") return true;
-    if (raw === "0") return false;
-  } catch {
-    // ignore local cache read errors
-  }
-  return null;
-}
-
-function writeSavedStateCache(productId: string, uid: string | null, visitorId: string | null, value: boolean) {
-  try {
-    localStorage.setItem(getSavedStateCacheKey(productId, uid, visitorId), value ? "1" : "0");
-  } catch {
-    // ignore local cache write errors
-  }
-}
-
 export default function Label() {
   const { id } = useParams();
-  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
+  const DISABLE_LABEL_OPEN_SCAN_LOG =
+    String(import.meta.env.VITE_DISABLE_SCAN_LOG_WRITE || "").trim() === "1" ||
+    (typeof window !== "undefined" && localStorage.getItem("rakivinum_disable_scan_log_write") === "1");
+  const DISABLE_CLIENT_RATING_FALLBACK =
+    String(import.meta.env.VITE_DISABLE_CLIENT_RATING_FALLBACK || "").trim() === "1" ||
+    (typeof window !== "undefined" && localStorage.getItem("rakivinum_disable_client_rating_fallback") === "1");
   const normalizeReturnPath = (raw: string | null | undefined): string | null => {
     if (!raw) return null;
     const trimmed = raw.trim();
@@ -209,125 +156,11 @@ export default function Label() {
   const [productData, setProductData] = useState<ProductData | null>(null);
   const isAdminTester = isSuperuserEmail(auth.currentUser?.email);
   const [distilleryData, setDistilleryData] = useState<DistilleryData | null>(null);
+  const [isLoadingProduct, setIsLoadingProduct] = useState(true);
   const [labelAccessDenied, setLabelAccessDenied] = useState<"archived" | "qr_disabled" | null>(null);
   const [labelQuotaBlocked, setLabelQuotaBlocked] = useState(false);
   const [reviews, setReviews] = useState<ReviewData[]>([]);
-
-  const labelPageQuery = useQuery<LabelPagePayload>({
-    queryKey: queryKeys.label.page(id ?? "missing"),
-    enabled: Boolean(id),
-    queryFn: async (): Promise<LabelPagePayload> => {
-      if (!id) return EMPTY_LABEL_PAYLOAD;
-
-      try {
-        const row = await fetchScannerProductById(id);
-        let labelAccessDenied: "archived" | "qr_disabled" | null = null;
-        let productData: ProductData | null = null;
-        let distilleryData: DistilleryData | null = null;
-
-        if (!row) {
-          // fall through to reviews only (isto kao raniji useEffect)
-        } else {
-          const pData = row as ProductData;
-          if (pData.publicLabelDisabled === true) {
-            return {
-              labelAccessDenied: "qr_disabled",
-              productData: null,
-              distilleryData: null,
-              reviews: [],
-              labelQuotaBlocked: false,
-            };
-          }
-          if (pData.isArchivedByDistillery) {
-            return {
-              labelAccessDenied: "archived",
-              productData: null,
-              distilleryData: null,
-              reviews: [],
-              labelQuotaBlocked: false,
-            };
-          }
-          if (pData.isApproved === false) {
-            labelAccessDenied = null;
-          } else {
-            labelAccessDenied = null;
-            productData = pData;
-            if (pData.distilleryId) {
-              try {
-                const distRow = await fetchPublicDistilleryById(pData.distilleryId);
-                distilleryData = (distRow as DistilleryData) || null;
-              } catch (distErr) {
-                console.warn("Label: distillery fetch", distErr);
-                distilleryData = null;
-              }
-            }
-          }
-        }
-
-        let reviewsOut: ReviewData[] = [];
-        let quotaBlocked = false;
-        try {
-          const reviewRows = await fetchPublicProductRatings(id, 120);
-          reviewsOut = reviewRows
-            .map((reviewDoc) => ({ ...(reviewDoc as ReviewData) }))
-            .filter((review) => !review.isFlagged)
-            .sort((a, b) => toCreatedAtMs(b.createdAt) - toCreatedAtMs(a.createdAt));
-        } catch (revErr) {
-          console.error("Label: reviews fetch", revErr);
-          const e = revErr as { code?: unknown; message?: unknown } | null;
-          const code = String(e?.code || "").toLowerCase();
-          const msg = String(e?.message || "").toLowerCase();
-          if (code.includes("resource-exhausted") || msg.includes("quota")) {
-            quotaBlocked = true;
-          }
-        }
-
-        return {
-          labelAccessDenied,
-          productData,
-          distilleryData,
-          reviews: reviewsOut,
-          labelQuotaBlocked: quotaBlocked,
-        };
-      } catch (err) {
-        console.error("Error fetching product data", err);
-        const e = err as { code?: unknown; message?: unknown } | null;
-        const code = String(e?.code || "").toLowerCase();
-        const msg = String(e?.message || "").toLowerCase();
-        const blocked = code.includes("resource-exhausted") || msg.includes("quota");
-        return { ...EMPTY_LABEL_PAYLOAD, labelQuotaBlocked: blocked };
-      }
-    },
-    ...stableQueryOptions(CACHE_TTL.PUBLIC_BY_ID_1H),
-  });
-
-  const isLoadingProduct = Boolean(id) && labelPageQuery.isPending;
-  const isLoadingReviews = Boolean(id) && labelPageQuery.isPending;
-
-  useEffect(() => {
-    if (!id) {
-      setLabelAccessDenied(null);
-      setProductData(null);
-      setDistilleryData(null);
-      setReviews([]);
-      setLabelQuotaBlocked(false);
-      return;
-    }
-    if (labelPageQuery.isPending) {
-      setLabelAccessDenied(null);
-      setProductData(null);
-      setDistilleryData(null);
-      setReviews([]);
-      setLabelQuotaBlocked(false);
-      return;
-    }
-    const payload = labelPageQuery.data ?? EMPTY_LABEL_PAYLOAD;
-    setLabelAccessDenied(payload.labelAccessDenied);
-    setProductData(payload.productData);
-    setDistilleryData(payload.distilleryData);
-    setReviews(payload.reviews);
-    setLabelQuotaBlocked(payload.labelQuotaBlocked);
-  }, [id, labelPageQuery.isPending, labelPageQuery.data]);
+  const [isLoadingReviews, setIsLoadingReviews] = useState(false);
 
   // Auto-open rating samo za punu javnu etiketu (sertifikovan proizvođač); modal postoji samo u tom grananju UI-a.
   useEffect(() => {
@@ -390,7 +223,6 @@ export default function Label() {
   const [reviewText, setReviewText] = useState("");
   const [userLocation, setUserLocation] = useState("");
   const [isSubmittingRating, setIsSubmittingRating] = useState(false);
-  const lastRatingSubmitAtRef = useRef(0);
   const [hasRatedToday, setHasRatedToday] = useState(false);
   const [showIntegrityNotice, setShowIntegrityNotice] = useState(false);
   const [ratingSuccess, setRatingSuccess] = useState<{
@@ -428,6 +260,43 @@ export default function Label() {
     return country || "Srbija";
   };
   const ensureVisitorId = () => getOrCreateVisitorId();
+  const getRatedCheckCacheKey = (actorKey: string, ymd: string) => `rakivinum_rated_check_${actorKey}_${ymd}`;
+  const readRatedCheckCache = (actorKey: string, ymd: string): boolean | null => {
+    try {
+      const raw = sessionStorage.getItem(getRatedCheckCacheKey(actorKey, ymd));
+      if (raw === "1") return true;
+      if (raw === "0") return false;
+    } catch {
+      // ignore session cache read errors
+    }
+    return null;
+  };
+  const writeRatedCheckCache = (actorKey: string, ymd: string, value: boolean) => {
+    try {
+      sessionStorage.setItem(getRatedCheckCacheKey(actorKey, ymd), value ? "1" : "0");
+    } catch {
+      // ignore session cache write errors
+    }
+  };
+  const getSavedStateCacheKey = (productId: string, uid: string | null, visitorId: string | null) =>
+    `rakivinum_saved_state_${uid ? `u:${uid}` : `v:${visitorId || "anon"}`}_${productId}`;
+  const readSavedStateCache = (productId: string, uid: string | null, visitorId: string | null): boolean | null => {
+    try {
+      const raw = localStorage.getItem(getSavedStateCacheKey(productId, uid, visitorId));
+      if (raw === "1") return true;
+      if (raw === "0") return false;
+    } catch {
+      // ignore local cache read errors
+    }
+    return null;
+  };
+  const writeSavedStateCache = (productId: string, uid: string | null, visitorId: string | null, value: boolean) => {
+    try {
+      localStorage.setItem(getSavedStateCacheKey(productId, uid, visitorId), value ? "1" : "0");
+    } catch {
+      // ignore local cache write errors
+    }
+  };
 
   // Membership & Visitor Info
   useEffect(() => {
@@ -488,9 +357,83 @@ export default function Label() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!id) {
+      setIsLoadingProduct(false);
+      setProductData(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingProduct(true);
+    setLabelQuotaBlocked(false);
+    const loadLabelData = async () => {
+      try {
+        const view = await fetchPublicLabelView(id || "");
+        if (cancelled) return;
+        if (!view.product) {
+          setLabelAccessDenied(null);
+          setProductData(null);
+          setDistilleryData(null);
+        } else {
+          const pData = view.product as ProductData;
+          if (pData.publicLabelDisabled === true) {
+            setLabelAccessDenied("qr_disabled");
+            setProductData(null);
+            setDistilleryData(null);
+            setIsLoadingProduct(false);
+            return;
+          }
+          if (pData.isArchivedByDistillery) {
+            setLabelAccessDenied("archived");
+            setProductData(null);
+            setDistilleryData(null);
+            setIsLoadingProduct(false);
+            return;
+          }
+          if (pData.isApproved === false) {
+            setLabelAccessDenied(null);
+            setProductData(null);
+            setDistilleryData(null);
+          } else {
+            setLabelAccessDenied(null);
+            setProductData(pData);
+            setDistilleryData((view.distillery as DistilleryData) || null);
+          }
+        }
+
+        setIsLoadingReviews(true);
+        const reviewsData: ReviewData[] = view.reviews
+          .map((reviewDoc) => ({ ...(reviewDoc as ReviewData) }))
+          .filter((review) => !review.isFlagged)
+          .sort((a, b) => toCreatedAtMs(b.createdAt) - toCreatedAtMs(a.createdAt));
+        setReviews(reviewsData);
+      } catch (err) {
+        console.error("Error fetching product data", err);
+        const e = err as { code?: unknown; message?: unknown } | null;
+        const code = String(e?.code || "").toLowerCase();
+        const msg = String(e?.message || "").toLowerCase();
+        if (code.includes("resource-exhausted") || msg.includes("quota")) {
+          setLabelQuotaBlocked(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingProduct(false);
+          setIsLoadingReviews(false);
+        }
+      }
+    };
+    void loadLabelData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
   /** Direktan ulazak na etiketu (QR URL u browseru) — beleži sken i scanCount. Preskoči ako je iz in-app skenera (već logovano) ili admin pregled. */
   useEffect(() => {
     if (!productData?.id || labelAccessDenied) return;
+    if (DISABLE_LABEL_OPEN_SCAN_LOG) return;
     const navState = location.state as { fromInAppScanner?: boolean; adminLabelPreview?: boolean } | null;
     if (navState?.adminLabelPreview || navState?.fromInAppScanner) return;
 
@@ -501,7 +444,7 @@ export default function Label() {
     sessionStorage.setItem(guardKey, String(Date.now()));
 
     void logProductScan(pid, productData, "label_open");
-  }, [productData, labelAccessDenied, location.state]);
+  }, [productData?.id, labelAccessDenied, location.state, DISABLE_LABEL_OPEN_SCAN_LOG]);
 
   // Save to History (LocalStorage for anonymous continuity)
   useEffect(() => {
@@ -582,7 +525,7 @@ export default function Label() {
     };
 
     void checkSaved();
-  }, [productData?.id]);
+  }, [productData?.id, auth.currentUser?.uid]);
 
   useEffect(() => {
     const checkPreviousRating = async () => {
@@ -590,8 +533,6 @@ export default function Label() {
       
       try {
         const now = new Date();
-        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const startTs = Timestamp.fromDate(startOfToday);
         const visitorId = ensureVisitorId();
         const ymd = now.toISOString().slice(0, 10);
         if (!isAdminTester && visitorId && localStorage.getItem(`rakivinum_rated_day_${visitorId}`) === ymd) {
@@ -612,32 +553,11 @@ export default function Label() {
           }
         }
 
-        // Zlatno pravilo: jedan dan, jedan glas (jedna ocena dnevno po korisniku/gostu, bilo koje piće)
-        let q;
-        if (auth.currentUser?.uid) {
-          q = query(
-            collection(db, 'ratings'),
-            where('userId', '==', auth.currentUser.uid),
-            where('createdAt', '>=', startTs),
-            limit(1)
-          );
-        } else if (visitorId) {
-          q = query(
-            collection(db, 'ratings'),
-            where('visitorId', '==', visitorId),
-            where('createdAt', '>=', startTs),
-            limit(1)
-          );
-        } else {
-          return;
-        }
-
-        const querySnapshot = await getDocs(q);
+        // Cache-only guard to avoid per-open Firestore reads on label route.
+        // Definitive enforcement still happens in submitRating transaction.
         if (!isAdminTester) {
-          const hasToday = !querySnapshot.empty;
-          setHasRatedToday(hasToday);
-          const actorKey = auth.currentUser?.uid ? `u:${auth.currentUser.uid}` : visitorId ? `v:${visitorId}` : "";
-          if (actorKey) writeRatedCheckCache(actorKey, ymd, hasToday);
+          setHasRatedToday(false);
+          if (actorKey) writeRatedCheckCache(actorKey, ymd, false);
         }
       } catch (error) {
         console.error("Greška pri proveri prethodnih ocena:", error);
@@ -677,7 +597,6 @@ export default function Label() {
             createdAt: serverTimestamp(),
           }, { merge: true });
         }
-        void queryClient.invalidateQueries({ queryKey: queryKeys.collection.scope() });
         alert(saved ? "Uklonjeno iz lokalne arhive." : "Sačuvano u lokalnu arhivu na ovom uređaju!");
       } catch (e) {
         console.error("Error updating guest collection", e);
@@ -698,8 +617,6 @@ export default function Label() {
         });
         writeSavedStateCache(productData.id, auth.currentUser.uid, null, true);
       }
-      setSaved(!saved);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.collection.scope() });
     } catch (error) {
        console.error("Error saving/removing bottle", error);
     } finally {
@@ -735,7 +652,6 @@ export default function Label() {
         }
         setSaved(true);
         writeSavedStateCache(productData.id, null, visitorId, true);
-        void queryClient.invalidateQueries({ queryKey: queryKeys.collection.scope() });
       } catch (e) {
         console.error("Error ensuring guest collection", e);
       }
@@ -750,7 +666,6 @@ export default function Label() {
       }, { merge: true });
       setSaved(true);
       writeSavedStateCache(productData.id, auth.currentUser.uid, null, true);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.collection.scope() });
     } catch (error) {
       console.error("Error ensuring saved item", error);
     }
@@ -785,6 +700,103 @@ export default function Label() {
       console.error("Error scheduling next-day rating", e);
       alert("Sačuvano u kolekciju, ali podsetnik nije uspešno upisan.");
     }
+  };
+
+  const submitRatingFallbackClient = async (payload: {
+    productId: string;
+    distilleryId: string;
+    productName: string;
+    productImage: string;
+    rating: number;
+    reviewText: string | null;
+    userLocation: string | null;
+    visitorId: string;
+  }) => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startTs = Timestamp.fromDate(startOfToday);
+
+    let existingQuery;
+    if (auth.currentUser?.uid) {
+      existingQuery = query(
+        collection(db, 'ratings'),
+        where('userId', '==', auth.currentUser.uid),
+        where('createdAt', '>=', startTs),
+        limit(1)
+      );
+    } else {
+      existingQuery = query(
+        collection(db, 'ratings'),
+        where('visitorId', '==', payload.visitorId),
+        where('createdAt', '>=', startTs),
+        limit(1)
+      );
+    }
+    const existing = await getDocs(existingQuery);
+    if (!isAdminTester && !existing.empty) {
+      const err: RatedTodayError = new Error("Već postoji jedna ocena za danas.");
+      err.code = "already-exists";
+      throw err;
+    }
+
+    const productRef = doc(db, 'products', payload.productId);
+    const ratingRef = doc(collection(db, 'ratings'));
+
+    const txResult = await runTransaction(db, async (tx) => {
+      const productSnap = await tx.get(productRef);
+      const txProductData: Partial<ProductData> = productSnap.exists() ? (productSnap.data() as ProductData) : {};
+      const ratingCount = Number(txProductData.ratingCount || 0);
+      const avgRating = Number(txProductData.averageRating || 0);
+      const newRatingCount = ratingCount + 1;
+      const newAverageRating = ((avgRating * ratingCount) + payload.rating) / newRatingCount;
+
+      tx.set(ratingRef, {
+        productId: payload.productId,
+        distilleryId: payload.distilleryId,
+        productName: payload.productName,
+        productImage: payload.productImage,
+        rating: payload.rating,
+        reviewText: payload.reviewText,
+        userLocation: payload.userLocation,
+        userName: "Gost",
+        userId: auth.currentUser?.uid || null,
+        visitorId: payload.visitorId || null,
+        createdAt: serverTimestamp(),
+        isFlagged: false,
+        isAutoFlagged: false,
+        flagReason: null,
+      });
+
+      if (productSnap.exists()) {
+        tx.update(productRef, {
+          averageRating: newAverageRating,
+          ratingCount: newRatingCount,
+        });
+      }
+
+      return { averageRating: newAverageRating, ratingCount: newRatingCount };
+    });
+
+    return txResult;
+  };
+
+  const updateHomeStatsTopRatingCache = (rating: number) => {
+    if (!Number.isFinite(rating)) return;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const cacheKey = `rakivinum_cache_home_user_stats_${uid}_v1`;
+    const prev = readCache<HomeUserStatsCache>(cacheKey);
+    const prevTop = typeof prev?.topRating === "number" && Number.isFinite(prev.topRating) ? prev.topRating : null;
+    const nextTop = prevTop === null ? rating : Math.max(prevTop, rating);
+    writeCache(
+      cacheKey,
+      {
+        savedCount: prev?.savedCount ?? "-",
+        topRating: nextTop,
+        lastSavedProduct: prev?.lastSavedProduct ?? null,
+      },
+      REFRESH_INTERVAL.USER_LIGHT_1H,
+    );
   };
 
   const handleShare = async () => {
@@ -923,9 +935,6 @@ export default function Label() {
       alert("Ocene i utisci na javnoj etiketi dostupni su samo za sertifikovane proizvođače.");
       return;
     }
-    if (isSubmittingRating) return;
-    if (Date.now() - lastRatingSubmitAtRef.current < 2500) return;
-    lastRatingSubmitAtRef.current = Date.now();
     if (hasRatedToday && !isAdminTester) {
       setIsRatingModalOpen(false);
       setShowIntegrityNotice(true);
@@ -945,8 +954,7 @@ export default function Label() {
       
       const visitorId = ensureVisitorId();
 
-      const edgeBase = String(import.meta.env.VITE_EDGE_API_BASE || "").trim().replace(/\/$/, "");
-      const submitUrl = edgeBase ? `${edgeBase}/api/submit` : "/api/submit";
+      const useSecureRatingFn = String(import.meta.env.VITE_USE_SECURE_RATING_FUNCTION || "") === "1";
       const submitPayload = {
         productId: productData?.id,
         distilleryId: productData?.distilleryId || distilleryData?.id || "unknown",
@@ -958,24 +966,44 @@ export default function Label() {
         visitorId: visitorId || null,
         userAgent: navigator.userAgent,
         clientFingerprint: buildStableVisitorSeed(),
-        website: "",
       };
 
-      const submitRes = await fetch(submitUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json" },
-        body: JSON.stringify(submitPayload),
-      });
-      const secure = (await submitRes.json()) as {
-        averageRating?: number;
-        ratingCount?: number;
-        suspiciousSource?: boolean;
-        error?: string;
-      };
-      if (!submitRes.ok) {
-        const err: RatedTodayError = new Error(String(secure?.error || "submit_failed"));
-        err.code = String(secure?.error || submitRes.status);
-        throw err;
+      let secure: { averageRating?: number; ratingCount?: number; suspiciousSource?: boolean } = {};
+      try {
+        if (!useSecureRatingFn) {
+          throw Object.assign(new Error("submitRatingSecure disabled"), { code: "functions/not-found" });
+        }
+        const fn = getFunctions(app, "us-central1");
+        const submitRatingSecure = httpsCallable(fn, "submitRatingSecure");
+        const result = await submitRatingSecure(submitPayload);
+        secure = result.data as { averageRating?: number; ratingCount?: number; suspiciousSource?: boolean };
+      } catch (callableErr: unknown) {
+        const callableCode = String((callableErr as { code?: unknown } | null)?.code || "");
+        const infraFailure = ["not-found", "unimplemented", "unavailable", "internal", "deadline-exceeded", "cancelled", "unknown"]
+          .some((c) => callableCode.includes(c));
+        if (!infraFailure) throw callableErr;
+        if (DISABLE_CLIENT_RATING_FALLBACK) {
+          const overloaded = new Error("Rating service temporarily unavailable");
+          (overloaded as { code?: string }).code = "service-overloaded";
+          throw overloaded;
+        }
+
+        // Fallback path for environments where callable isn't reachable yet.
+        const fallback = await submitRatingFallbackClient({
+          productId: submitPayload.productId,
+          distilleryId: submitPayload.distilleryId,
+          productName: submitPayload.productName,
+          productImage: submitPayload.productImage,
+          rating: submitPayload.rating,
+          reviewText: submitPayload.reviewText,
+          userLocation: submitPayload.userLocation,
+          visitorId: visitorId || ensureVisitorId(),
+        });
+        secure = {
+          averageRating: fallback.averageRating,
+          ratingCount: fallback.ratingCount,
+          suspiciousSource: false,
+        };
       }
 
       // Mark as rated today locally (global: jedan glas dnevno)
@@ -1011,6 +1039,7 @@ export default function Label() {
       if (typeof secure.averageRating === "number" && typeof secure.ratingCount === "number") {
         setProductData(prev => prev ? ({ ...prev, averageRating: secure.averageRating, ratingCount: secure.ratingCount }) : null);
       }
+      updateHomeStatsTopRatingCache(avgRating);
 
       setIsRatingModalOpen(false);
       setUserRating(0);
@@ -1040,6 +1069,8 @@ export default function Label() {
         alert("Već ste ocenili danas. Pravilo je 1 proizvod dnevno, sledeća ocena je moguća sutra.");
       } else if (code.includes("permission-denied")) {
         alert("Ocena trenutno nije dozvoljena sa ovog izvora. Ako mislite da je greška, javite se administratoru.");
+      } else if (code.includes("service-overloaded")) {
+        alert("Sistem je trenutno preopterećen. Pokušajte ponovo za nekoliko minuta.");
       } else if (message.toLowerCase().includes("identifikator posetioca")) {
         alert("Nedostaje identifikator uređaja. Osvežite stranicu i pokušajte ponovo.");
       } else {
@@ -1360,7 +1391,7 @@ export default function Label() {
              {/* subtle background glow inside radar container */}
              <div className="absolute inset-0 bg-gold-500/5 blur-3xl pointer-events-none" />
              
-             <ResponsiveContainer width="100%" height="100%">
+             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
                <RadarChart 
                 cx="50%" 
                 cy="50%" 

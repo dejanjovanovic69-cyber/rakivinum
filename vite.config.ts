@@ -6,6 +6,16 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  // Production default: no online_presence writes (sajam / free-tier). Dev: presence on unless set to "1".
+  // After event: add VITE_DISABLE_ONLINE_PRESENCE=0 to .env.production.local (not committed) to re-enable.
+  const viteDisableOnlinePresence =
+    env.VITE_DISABLE_ONLINE_PRESENCE === "0"
+      ? "0"
+      : env.VITE_DISABLE_ONLINE_PRESENCE === "1"
+        ? "1"
+        : mode === "production"
+          ? "1"
+          : "0";
   return {
     plugins: [
       react(), 
@@ -28,28 +38,14 @@ export default defineConfig(({mode}) => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB limit
-          // Do not serve stale SPA shell for Community (query deep-links share pathname `/community`).
-          // Deny navigateFallback for the whole `/community` subtree so Workbox never hijacks with precached `index.html`.
-          navigateFallbackDenylist: [/^\/__\//, /^\/firebase-auth/, /^\/community(\/.*)?$/],
-          runtimeCaching: [
-            {
-              urlPattern: ({ request, url }) =>
-                request.mode === 'navigate' && /^\/community(\/.*)?$/.test(url.pathname),
-              handler: 'NetworkFirst',
-              options: {
-                cacheName: 'community-navigation',
-                networkTimeoutSeconds: 3,
-                cacheableResponse: {
-                  statuses: [0, 200],
-                },
-              },
-            },
-          ],
+          // Do not hijack Firebase / Google auth return navigations with cached index.html
+          navigateFallbackDenylist: [/^\/__\//, /^\/firebase-auth/],
         }
       })
     ],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      'import.meta.env.VITE_DISABLE_ONLINE_PRESENCE': JSON.stringify(viteDisableOnlinePresence),
     },
     resolve: {
       alias: {

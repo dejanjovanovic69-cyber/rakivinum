@@ -1,15 +1,11 @@
 import { QrCode, Camera, Loader2, MapPin, Search, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { fetchPublicProductByBarcodeLookup, fetchPublicProducts, fetchScannerProductById } from "../lib/dataService";
+import { fetchPublicProductByBarcodeLookup, fetchScannerProductById } from "../lib/dataService";
 import { extractActivateTokenFromInput } from '../lib/extractActivateToken';
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { BarcodeFormat, DecodeHintType, NotFoundException } from "@zxing/library";
 import { logProductScan } from "../lib/logProductScan";
-import { CACHE_TTL } from "../lib/cachePolicy";
-import { stableQueryOptions } from "../lib/queryDefaults";
-import { queryKeys } from "../lib/queryKeys";
 
 type PendingRatingEntry = {
   id: string;
@@ -37,7 +33,9 @@ type BarcodeDetectorStatic = {
 };
 
 export default function Scanner() {
-  const queryClient = useQueryClient();
+  const SCAN_UNLOCK_DELAY_MS = 1500;
+  const NOT_FOUND_COOLDOWN_MS = 20_000;
+  const MAX_NOT_FOUND_KEYS = 120;
   const navigate = useNavigate();
   const location = useLocation();
   const [isScanning, setIsScanning] = useState(false);
@@ -50,6 +48,18 @@ export default function Scanner() {
   const detectLoopRef = useRef<number | null>(null);
   const lastDetectAtRef = useRef(0);
   const scanLockRef = useRef(false);
+  const scanInFlightRef = useRef(false);
+  const notFoundCooldownRef = useRef<Map<string, number>>(new Map());
+  const isMountedRef = useRef(true);
+  const safeSetIsScanning = (value: boolean) => {
+    if (isMountedRef.current) setIsScanning(value);
+  };
+  const safeSetError = (value: string | null) => {
+    if (isMountedRef.current) setError(value);
+  };
+  const safeSetScannerHint = (value: string | null) => {
+    if (isMountedRef.current) setScannerHint(value);
+  };
   const normalizeBarcode = (value: unknown) => String(value || "").replace(/\D/g, "");
   const looksLikeProductId = (value: string): boolean => /^[A-Za-z0-9_-]{8,64}$/.test(String(value || "").trim());
   const safeText = (value: unknown): string => {
@@ -63,8 +73,6 @@ export default function Scanner() {
     }
     return "";
   };
-  const handleScanSuccessRef = useRef<(scannedText: string) => Promise<void>>(async () => {});
-
   const updatePendingQueue = (entry: PendingRatingEntry) => {
     localStorage.setItem('rakivinum_pending_rating', JSON.stringify(entry));
     try {
@@ -78,23 +86,26 @@ export default function Scanner() {
       localStorage.setItem('rakivinum_pending_ratings', JSON.stringify(withoutSame.slice(0, 20)));
       window.dispatchEvent(new Event('rakivinum_pending_ratings_changed'));
     } catch (e) {
-      console.error("Failed to update pending ratings queue", e);
+      const message = String((e as Error)?.message || "");
+      if (message.toLowerCase().includes("quota")) return;
+      console.warn("Pending ratings queue update skipped", e);
     }
   };
 
 
   useEffect(() => {
+    isMountedRef.current = true;
     const checkBarcodeSupport = async () => {
       try {
         const detector = (window as unknown as { BarcodeDetector?: BarcodeDetectorStatic }).BarcodeDetector;
         if (!detector?.getSupportedFormats) {
-          setScannerHint("Vaš browser može biti ograničen za klasične barkodove. QR obično radi pouzdano.");
+          safeSetScannerHint("Vaš browser može biti ograničen za klasične barkodove. QR obično radi pouzdano.");
           return;
         }
         const supported: string[] = await detector.getSupportedFormats();
         const hasLinear = supported.some((f) => ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"].includes(String(f)));
         if (!hasLinear) {
-          setScannerHint("Na ovom uređaju/browseru linearni barkod možda nije podržan. Probajte noviji Chrome na telefonu.");
+          safeSetScannerHint("Na ovom uređaju/browseru linearni barkod možda nije podržan. Probajte noviji Chrome na telefonu.");
         }
       } catch {
         // Best effort hint only.
@@ -144,8 +155,8 @@ export default function Scanner() {
               const value = String(first?.rawValue || "").trim();
               if (value) {
                 scanLockRef.current = true;
-                void handleScanSuccessRef.current(value).finally(() => {
-                  setTimeout(() => (scanLockRef.current = false), 220);
+                void handleScanSuccess(value).finally(() => {
+                  setTimeout(() => (scanLockRef.current = false), SCAN_UNLOCK_DELAY_MS);
                 });
               }
             } catch (err) {
@@ -178,10 +189,10 @@ export default function Scanner() {
         const decodeCb = (result: { getText: () => string } | null, err: unknown) => {
           if (result && !scanLockRef.current) {
             scanLockRef.current = true;
-            void handleScanSuccessRef.current(result.getText()).finally(() => {
+            void handleScanSuccess(result.getText()).finally(() => {
               setTimeout(() => {
                 scanLockRef.current = false;
-              }, 220);
+              }, SCAN_UNLOCK_DELAY_MS);
             });
             return;
           }
@@ -206,20 +217,21 @@ export default function Scanner() {
             devices.find((d) => /back|rear|environment|zadnja/i.test(d.label || "")) ||
             devices[0];
           if (!preferred?.deviceId) {
-            setError("Kamera nije pronađena na uređaju.");
+            safeSetError("Kamera nije pronađena na uređaju.");
             return;
           }
           await reader.decodeFromVideoDevice(preferred.deviceId, videoRef.current, decodeCb);
         }
       } catch (e) {
         console.error("ZXing scanner init error:", e);
-        setError("Kamera nije dostupna. Proverite dozvolu kamere u browseru i osvežite stranicu.");
+        safeSetError("Kamera nije dostupna. Proverite dozvolu kamere u browseru i osvežite stranicu.");
       }
     };
 
     startScanner();
 
     return () => {
+      isMountedRef.current = false;
       try {
         if (detectLoopRef.current) {
           cancelAnimationFrame(detectLoopRef.current);
@@ -234,13 +246,15 @@ export default function Scanner() {
   }, []);
 
   const handleScanSuccess = async (scannedText: string) => {
+    if (scanInFlightRef.current) return;
+    scanInFlightRef.current = true;
     if (!scannedText || typeof scannedText !== "string") {
-      setError("QR kod je očitan, ali format nije podržan. Pokušajte ponovo.");
+      safeSetError("QR kod je očitan, ali format nije podržan. Pokušajte ponovo.");
+      scanInFlightRef.current = false;
       return;
     }
-    if (isScanning) return; // Prevent double trigger
-    setIsScanning(true);
-    setError(null);
+    safeSetIsScanning(true);
+    safeSetError(null);
 
     const st = scannedText.trim();
     const licenseTok = extractActivateTokenFromInput(st);
@@ -249,7 +263,8 @@ export default function Scanner() {
       (st.includes('/activate') || st.includes('token=') || /^lic_/i.test(licenseTok))
     ) {
       navigate(`/activate?token=${encodeURIComponent(licenseTok)}`);
-      setIsScanning(false);
+      safeSetIsScanning(false);
+      scanInFlightRef.current = false;
       return;
     }
 
@@ -266,6 +281,13 @@ export default function Scanner() {
         productId = rawPart.split(/[?#]/)[0] || rawPart;
       }
       productId = decodeURIComponent(String(productId || "").trim());
+      const throttleKey = `${scannedBarcode || "raw"}:${st.toLowerCase()}`;
+      const cooldownUntil = notFoundCooldownRef.current.get(throttleKey) || 0;
+      if (Date.now() < cooldownUntil) {
+        safeSetError("Kod nije pronađen. Sačekaj nekoliko sekundi ili skeniraj drugi proizvod.");
+        safeSetIsScanning(false);
+        return;
+      }
 
       // Avoid unnecessary ID read for plain barcodes / arbitrary QR text.
       const shouldTryDirectIdLookup =
@@ -279,51 +301,40 @@ export default function Scanner() {
         finalProductId = productRow.id;
         finalProductData = productRow as ProductLookupData;
       } else {
+        // Strict worker-first path: no direct Firestore reads during incident mode.
         const edgeBarcodeHit = await fetchPublicProductByBarcodeLookup(scannedBarcode, st);
         if (edgeBarcodeHit) {
           finalProductId = edgeBarcodeHit.id;
           finalProductData = edgeBarcodeHit as ProductLookupData;
         }
 
-        if (!finalProductId) {
-          // Robust fallback: normalize barcode and match client-side.
-          // Handles values like "860-123 4567890", numeric Firestore fields, etc.
-          if (scannedBarcode) {
-            const catalog = await queryClient.fetchQuery({
-              queryKey: queryKeys.scanner.barcodeCatalog(900),
-              queryFn: async () =>
-                fetchPublicProducts({
-                  limitCount: 900,
-                  cacheKey: "rakivinum_cache_scanner_barcode_fallback_v1",
-                  ttlMs: CACHE_TTL.PRODUCTS_6H,
-                }),
-              ...stableQueryOptions(CACHE_TTL.PRODUCTS_6H),
-            });
-            const hit = catalog.find((row) => {
-              const data = row as ProductLookupData;
-              return normalizeBarcode(data.barcodeNormalized || data.barcode) === scannedBarcode;
-            });
-            if (hit?.id) {
-              finalProductId = hit.id;
-              finalProductData = hit as ProductLookupData;
-            }
-          }
-        }
       }
 
       if (!finalProductId) {
-        setError("Proizvod nije pronađen u sistemu.");
-        setIsScanning(false);
+        const now = Date.now();
+        if (notFoundCooldownRef.current.size > MAX_NOT_FOUND_KEYS) {
+          const next = new Map<string, number>();
+          notFoundCooldownRef.current.forEach((expiry, key) => {
+            if (expiry > now) next.set(key, expiry);
+          });
+          notFoundCooldownRef.current = next;
+          if (notFoundCooldownRef.current.size > MAX_NOT_FOUND_KEYS) {
+            notFoundCooldownRef.current.clear();
+          }
+        }
+        notFoundCooldownRef.current.set(throttleKey, Date.now() + NOT_FOUND_COOLDOWN_MS);
+        safeSetError("Proizvod nije pronađen u sistemu.");
+        safeSetIsScanning(false);
         return;
       }
       if (finalProductData?.isArchivedByDistillery) {
-        setError("Ovaj proizvod je trenutno nedostupan.");
-        setIsScanning(false);
+        safeSetError("Ovaj proizvod je trenutno nedostupan.");
+        safeSetIsScanning(false);
         return;
       }
       if (finalProductData?.publicLabelDisabled === true) {
-        setError("Javni pristup ovoj etiketi je isključen od strane proizvođača.");
-        setIsScanning(false);
+        safeSetError("Javni pristup ovoj etiketi je isključen od strane proizvođača.");
+        safeSetIsScanning(false);
         return;
       }
 
@@ -335,7 +346,7 @@ export default function Scanner() {
         timestamp: Date.now()
       };
       updatePendingQueue(pendingEntry);
-      setIsScanning(false);
+      safeSetIsScanning(false);
       const returnTo = `${location.pathname}${location.search}`;
       try {
         sessionStorage.setItem("rakivinum_last_label_return_v1", returnTo);
@@ -348,12 +359,12 @@ export default function Scanner() {
       void logProductScan(finalProductId, finalProductData, "barcode_scan");
     } catch (err: unknown) {
       console.error("Scan processing error", err);
-      setError("Greška pri obradi skeniranja.");
-      setIsScanning(false);
+      safeSetError("Greška pri obradi skeniranja.");
+      safeSetIsScanning(false);
+    } finally {
+      scanInFlightRef.current = false;
     }
   };
-
-  handleScanSuccessRef.current = handleScanSuccess;
 
   return (
     <div className="h-full flex flex-col items-center justify-center p-6 space-y-8 animate-in fade-in duration-500 relative">

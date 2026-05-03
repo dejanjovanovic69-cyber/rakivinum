@@ -21,22 +21,12 @@ function Invoke-EdgeCheck {
     $status = [int]$response.StatusCode
     $body = [string]$response.Content
     $sizeBytes = [Text.Encoding]::UTF8.GetByteCount($body)
-    $cacheStatus = "-"
-    try {
-      $xh = $response.Headers["x-cache-status"]
-      if ($null -ne $xh -and "$xh".Trim().Length -gt 0) {
-        $cacheStatus = "$xh".Trim()
-      }
-    } catch {
-      $cacheStatus = "-"
-    }
     [pscustomobject]@{
       Name = $Name
       Ok = ($status -ge 200 -and $status -lt 300)
       Status = $status
       Ms = [int]$sw.ElapsedMilliseconds
       SizeKB = [math]::Round($sizeBytes / 1024, 2)
-      Cache = $cacheStatus
       Url = $Url
     }
   } catch {
@@ -47,82 +37,41 @@ function Invoke-EdgeCheck {
       Status = 0
       Ms = [int]$sw.ElapsedMilliseconds
       SizeKB = 0
-      Cache = "-"
       Url = $Url
     }
   }
 }
 
 $cb = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-$distilleriesSmokeUrl = "$BaseUrl/api/public/distilleries?limit=5&_cb=$cb"
-$productsSmokeUrl = "$BaseUrl/api/public/products?limit=5&_cb=$cb"
-$ratingsFeedSmokeUrl = "$BaseUrl/api/public/ratings-feed?limit=5&_cb=$cb"
-$communityLinksSmokeUrl = "$BaseUrl/api/public/community-links?limit=10&_cb=$cb"
-$communityEventsSmokeUrl = "$BaseUrl/api/public/community-events?limit=10&_cb=$cb"
-$distilleriesByIdsSmokeUrl = "$BaseUrl/api/public/distilleries-by-ids?ids=smoke-test&_cb=$cb"
-$distilleryDetailSmokeUrl = "$BaseUrl/api/public/distillery/e2e-missing-distillery-00000?_cb=$cb"
-$productDetailSmokeUrl = "$BaseUrl/api/public/product/$SampleProductId?_cb=$cb"
-$clubActionsSmokeUrl = "$BaseUrl/api/public/club-actions?limit=5&_cb=$cb"
-$ratingsSummarySmokeUrl = "$BaseUrl/api/public/ratings-summary/$SampleProductId?_cb=$cb"
-$productRatingsSmokeUrl = "$BaseUrl/api/public/product-ratings/$SampleProductId?limit=5&_cb=$cb"
-$productsByDistillerySmokeUrl = "$BaseUrl/api/public/products-by-distillery/smoke-test?limit=5&_cb=$cb"
-$clubActionsByDistillerySmokeUrl = "$BaseUrl/api/public/club-actions-by-distillery/smoke-test?limit=5&_cb=$cb"
-$clubMembershipCountSmokeUrl = "$BaseUrl/api/public/club-membership-count/smoke-test?_cb=$cb"
-$productLookupSmokeUrl = "$BaseUrl/api/public/product-lookup?n=0&r=0&_cb=$cb"
-$scanClustersSmokeUrl = "$BaseUrl/api/public/scan-clusters/$SampleProductId?limit=5&_cb=$cb"
 $targets = @(
   @{ Name = "health"; Url = "$BaseUrl/health?_cb=$cb" },
-  @{ Name = "distilleries"; Url = $distilleriesSmokeUrl },
-  @{ Name = "distilleries-repeat"; Url = $distilleriesSmokeUrl },
-  @{ Name = "products"; Url = $productsSmokeUrl },
-  @{ Name = "products-repeat"; Url = $productsSmokeUrl },
-  @{ Name = "ratings-feed"; Url = $ratingsFeedSmokeUrl },
-  @{ Name = "ratings-feed-repeat"; Url = $ratingsFeedSmokeUrl },
-  @{ Name = "ratings-summary"; Url = $ratingsSummarySmokeUrl },
-  @{ Name = "ratings-summary-repeat"; Url = $ratingsSummarySmokeUrl },
-  @{ Name = "product-ratings"; Url = $productRatingsSmokeUrl },
-  @{ Name = "product-ratings-repeat"; Url = $productRatingsSmokeUrl },
-  @{ Name = "club-actions"; Url = $clubActionsSmokeUrl },
-  @{ Name = "club-actions-repeat"; Url = $clubActionsSmokeUrl },
-  @{ Name = "community-links"; Url = $communityLinksSmokeUrl },
-  @{ Name = "community-links-repeat"; Url = $communityLinksSmokeUrl },
-  @{ Name = "community-events"; Url = $communityEventsSmokeUrl },
-  @{ Name = "community-events-repeat"; Url = $communityEventsSmokeUrl },
-  @{ Name = "distilleries-by-ids"; Url = $distilleriesByIdsSmokeUrl },
-  @{ Name = "distilleries-by-ids-repeat"; Url = $distilleriesByIdsSmokeUrl },
-  @{ Name = "distillery-detail"; Url = $distilleryDetailSmokeUrl },
-  @{ Name = "distillery-detail-repeat"; Url = $distilleryDetailSmokeUrl },
-  @{ Name = "product-detail"; Url = $productDetailSmokeUrl },
-  @{ Name = "product-detail-repeat"; Url = $productDetailSmokeUrl },
-  @{ Name = "products-by-distillery"; Url = $productsByDistillerySmokeUrl },
-  @{ Name = "products-by-distillery-repeat"; Url = $productsByDistillerySmokeUrl },
-  @{ Name = "club-actions-by-distillery"; Url = $clubActionsByDistillerySmokeUrl },
-  @{ Name = "club-actions-by-distillery-repeat"; Url = $clubActionsByDistillerySmokeUrl },
-  @{ Name = "club-membership-count"; Url = $clubMembershipCountSmokeUrl },
-  @{ Name = "club-membership-count-repeat"; Url = $clubMembershipCountSmokeUrl },
-  @{ Name = "product-lookup"; Url = $productLookupSmokeUrl },
-  @{ Name = "product-lookup-repeat"; Url = $productLookupSmokeUrl },
-  @{ Name = "scan-clusters"; Url = $scanClustersSmokeUrl },
-  @{ Name = "scan-clusters-repeat"; Url = $scanClustersSmokeUrl }
+  @{ Name = "distilleries"; Url = "$BaseUrl/api/public/distilleries?limit=5&_cb=$cb" },
+  @{ Name = "products"; Url = "$BaseUrl/api/public/products?limit=5&_cb=$cb" },
+  @{ Name = "ratings-feed"; Url = "$BaseUrl/api/public/ratings-feed?limit=5&_cb=$cb" },
+  @{ Name = "ratings-summary"; Url = "$BaseUrl/api/public/ratings-summary/$SampleProductId?_cb=$cb" },
+  @{ Name = "product-ratings"; Url = "$BaseUrl/api/public/product-ratings/$SampleProductId?limit=5&_cb=$cb" },
+  @{ Name = "club-actions"; Url = "$BaseUrl/api/public/club-actions?limit=5&_cb=$cb" },
+  @{ Name = "community-links"; Url = "$BaseUrl/api/public/community-links?limit=10&_cb=$cb" },
+  @{ Name = "products-by-distillery"; Url = "$BaseUrl/api/public/products-by-distillery/smoke-test?limit=5&_cb=$cb" },
+  @{ Name = "club-actions-by-distillery"; Url = "$BaseUrl/api/public/club-actions-by-distillery/smoke-test?limit=5&_cb=$cb" },
+  @{ Name = "club-membership-count"; Url = "$BaseUrl/api/public/club-membership-count/smoke-test?_cb=$cb" },
+  @{ Name = "product-lookup"; Url = "$BaseUrl/api/public/product-lookup?n=0&r=0&_cb=$cb" },
+  @{ Name = "scan-clusters"; Url = "$BaseUrl/api/public/scan-clusters/$SampleProductId?limit=5&_cb=$cb" }
 )
 
 if ($SampleVisitorId -and $SampleVisitorId.Trim()) {
-  $clubMembershipsSmokeUrl = "$BaseUrl/api/public/club-memberships/$([uri]::EscapeDataString($SampleVisitorId))?limit=5&_cb=$cb"
-  $targets += @{ Name = "club-memberships"; Url = $clubMembershipsSmokeUrl }
-  $targets += @{ Name = "club-memberships-repeat"; Url = $clubMembershipsSmokeUrl }
+  $targets += @{ Name = "club-memberships"; Url = "$BaseUrl/api/public/club-memberships/$([uri]::EscapeDataString($SampleVisitorId))?limit=5&_cb=$cb" }
 }
 
 if ($SampleLicenseToken -and $SampleLicenseToken.Trim()) {
-  $licenseSmokeUrl = "$BaseUrl/api/public/license/$([uri]::EscapeDataString($SampleLicenseToken))?_cb=$cb"
-  $targets += @{ Name = "license"; Url = $licenseSmokeUrl }
-  $targets += @{ Name = "license-repeat"; Url = $licenseSmokeUrl }
+  $targets += @{ Name = "license"; Url = "$BaseUrl/api/public/license/$([uri]::EscapeDataString($SampleLicenseToken))?_cb=$cb" }
 }
 
 $results = foreach ($t in $targets) {
   Invoke-EdgeCheck -Name $t.Name -Url $t.Url
 }
 
-$results | Format-Table Name, Ok, Status, Ms, SizeKB, Cache -AutoSize
+$results | Format-Table Name, Ok, Status, Ms, SizeKB -AutoSize
 
 $failed = $results | Where-Object { -not $_.Ok }
 if ($failed.Count -gt 0) {

@@ -9,7 +9,7 @@ Cilj: lista **gde se još direktno čita** Firestore (van centralnog `dataServic
 **Postojeći Worker public GET:**  
 `/health`, `/api/public/distilleries`, `/api/public/products`, `/api/public/products-by-distillery/:id`, `/api/public/community-events`, `/api/public/community-links`, `/api/public/ratings-feed`, `/api/public/club-actions`, `/api/public/club-actions-by-distillery/:id`, `/api/public/club-membership-count/:distilleryId`, `/api/public/club-memberships/:visitorId`, `/api/public/license/:token` (samo polja: `id`, `token`, `expiresAt`, `status`, `plan`), `/api/public/distillery/:id`, `/api/public/product/:id`, `/api/public/product-lookup?n=&r=`, `/api/public/ratings-summary/:productId`, `/api/public/product-ratings/:productId`, `/api/public/scan-clusters/:productId`.
 
-**Centralni sloj:** `src/lib/dataService.ts` — Worker-first, zatim `getDoc`/`getDocs` kao fallback + keš. Edge `fetch` pozivi imaju **timeout** (15s) da spor Worker ne blokira UI beskonačno; posle isteka ide fallback ili greška kao i ranije.  
+**Centralni sloj:** `src/lib/dataService.ts` — Worker-first, zatim `getDoc`/`getDocs` kao fallback + keš.  
 Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se kao konačan rezultat (fallback se radi samo kada edge nije dostupan/vrati grešku). Za ključne by-id tokove i `license-by-token`, uspešan edge odgovor sa `item: null` takođe je konačan miss (ne pali fallback read).
 
 ---

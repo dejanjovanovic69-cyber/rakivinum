@@ -3,6 +3,7 @@ import { auth, db } from "./firebase";
 import { recordScanAchievement } from "./achievements";
 
 const ENABLE_SCANCOUNT_WRITE = String(import.meta.env.VITE_ENABLE_SCANCOUNT_WRITE || "") === "1";
+const DISABLE_SCAN_LOG_WRITE = String(import.meta.env.VITE_DISABLE_SCAN_LOG_WRITE || "").trim() === "1";
 
 const enrichScanLocation = async (lat: number, lng: number) => {
   const fallback = {
@@ -57,12 +58,36 @@ const enrichScanLocation = async (lat: number, lng: number) => {
  * Beleži sken u `scans` i uvećava `products.scanCount`.
  * `source`: barcode_scan (iz skenera) | label_open (direktan link / etiketa u browseru).
  */
+const SCAN_DEDUPE_MS = 5 * 60 * 1000;
+
 export async function logProductScan(
   finalProductId: string,
   finalProductData: { distilleryId?: string; type?: string } | null | undefined,
   source: "barcode_scan" | "label_open"
 ): Promise<void> {
+  if (DISABLE_SCAN_LOG_WRITE) {
+    try {
+      recordScanAchievement(finalProductData?.type);
+    } catch {
+      // achievements are best-effort
+    }
+    return;
+  }
   try {
+    const visitorIdEarly = typeof localStorage !== "undefined" ? localStorage.getItem("rakivinum_visitor_id") : null;
+    const dedupeKey = `rakivinum_scan_dedupe_${visitorIdEarly || "anon"}_${finalProductId}_${source}`;
+    try {
+      const raw = typeof sessionStorage !== "undefined" ? sessionStorage.getItem(dedupeKey) : null;
+      if (raw) {
+        const prev = JSON.parse(raw) as { ts?: number };
+        if (typeof prev.ts === "number" && Date.now() - prev.ts < SCAN_DEDUPE_MS) {
+          return;
+        }
+      }
+    } catch {
+      // ignore malformed storage
+    }
+
     let locationData = { lat: 0, lng: 0 };
     const geoTimeoutMs = 1500;
 
@@ -106,6 +131,12 @@ export async function logProductScan(
       isPublicVenue: locationMeta.isPublicVenue,
       source,
     });
+
+    try {
+      sessionStorage.setItem(dedupeKey, JSON.stringify({ ts: Date.now() }));
+    } catch {
+      // private mode / quota
+    }
 
     if (ENABLE_SCANCOUNT_WRITE) {
       try {

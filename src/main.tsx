@@ -1,14 +1,8 @@
-import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
-import App from './App.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
-import './lib/requestMeter';
 import './index.css';
-import { registerSW } from 'virtual:pwa-register';
-import { getFirebaseRedirectResultOnce } from './lib/firebaseRedirectResult';
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-const queryClient = new QueryClient();
+const EMERGENCY_MAINTENANCE_LOCK = false;
 
 function normalizeNameLikeValue(value: unknown): string {
   if (typeof value === "string") return value;
@@ -87,27 +81,37 @@ async function disableServiceWorkerInDev() {
  * Workbox can race with Firebase and you stay "Gost" after Google sign-in.
  */
 async function bootstrap() {
+  const root = createRoot(document.getElementById('root')!);
+  if (EMERGENCY_MAINTENANCE_LOCK) {
+    root.render(
+      <main className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+        <section className="max-w-xl text-center space-y-4">
+          <h1 className="text-2xl font-bold">Rakivinum je privremeno u maintenance režimu</h1>
+          <p className="text-sm text-white/80">
+            Privremeno je isključen pristup aplikaciji dok stabilizujemo Firestore potrošnju.
+            Servis će biti vraćen čim zaštita bude potvrđena.
+          </p>
+        </section>
+      </main>,
+    );
+    return;
+  }
+
   sanitizePendingStorage();
   await disableServiceWorkerInDev();
 
-  try {
-    await getFirebaseRedirectResultOnce();
-  } catch {
+  const { default: App } = await import('./App.tsx');
+  const { getFirebaseRedirectResultOnce } = await import('./lib/firebaseRedirectResult');
+  const { registerSW } = await import('virtual:pwa-register');
+  await getFirebaseRedirectResultOnce().catch(() => {
     // Menu also consumes the same promise and shows errors; avoid unhandled rejection.
-  }
+  });
+  if (import.meta.env.PROD) registerSW({ immediate: true });
 
-  if (import.meta.env.PROD) {
-    registerSW({ immediate: true });
-  }
-
-  createRoot(document.getElementById('root')!).render(
-    <StrictMode>
-      <ErrorBoundary>
-        <QueryClientProvider client={queryClient}>
-          <App />
-        </QueryClientProvider>
-      </ErrorBoundary>
-    </StrictMode>,
+  root.render(
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>,
   );
 }
 

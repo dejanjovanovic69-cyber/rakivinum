@@ -1,11 +1,8 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, MapPin, Loader2, ChevronRight, Award, Search, X } from "lucide-react";
 import { isQuotaError } from "../lib/resilience";
 import { fetchPublicDistilleries } from "../lib/dataService";
-import { stableQueryOptions } from "../lib/queryDefaults";
-import { queryKeys } from "../lib/queryKeys";
 
 type DistilleryRow = {
   id: string;
@@ -31,7 +28,10 @@ export default function Distilleries() {
     }
     navigate("/", { replace: true });
   };
+  const [distilleries, setDistilleries] = useState<DistilleryRow[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [quotaExceeded, setQuotaExceeded] = useState(false);
   const normalizeText = (value: unknown) =>
     String(value || "")
       .toLowerCase()
@@ -41,20 +41,24 @@ export default function Distilleries() {
       .replace(/ž/g, "z")
       .replace(/đ/g, "dj");
 
-  const distilleriesQuery = useQuery<DistilleryRow[]>({
-    queryKey: queryKeys.distilleries.list(300),
-    queryFn: async () =>
-      fetchPublicDistilleries({
-        limitCount: 300,
-        cacheKey: "rakivinum_cache_distilleries_page_v1",
-        ttlMs: 30 * 60 * 1000,
-      }),
-    initialData: [],
-    ...stableQueryOptions(30 * 60 * 1000),
-  });
-  const distilleries = distilleriesQuery.data || [];
-  const isLoading = distilleriesQuery.isFetching && distilleries.length === 0;
-  const quotaExceeded = Boolean(distilleriesQuery.error && isQuotaError(distilleriesQuery.error));
+  useEffect(() => {
+    async function fetchDistilleries() {
+      try {
+        const publicDistilleries = await fetchPublicDistilleries({
+          limitCount: 120,
+          cacheKey: "rakivinum_cache_distilleries_page_v1",
+          ttlMs: 30 * 60 * 1000,
+        });
+        setDistilleries(publicDistilleries);
+      } catch (err) {
+        console.error(err);
+        if (isQuotaError(err)) setQuotaExceeded(true);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    fetchDistilleries();
+  }, []);
 
   const filteredDistilleries = distilleries.filter(d => {
     const q = normalizeText(searchQuery);

@@ -1,36 +1,29 @@
-import { useState, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useQuery, useQueryClient, useIsFetching } from "@tanstack/react-query";
-import {
-  ShieldAlert,
-  Users,
-  UserX,
-  Activity,
-  Fingerprint,
-  ShieldCheck,
+import { 
+  ShieldAlert, 
+  Users, 
+  UserX, 
+  Activity, 
+  Fingerprint, 
+  ShieldCheck, 
   AlertTriangle,
   Search,
   MoreVertical,
   CheckCircle2,
   XCircle,
   Clock,
-  Loader2,
   ExternalLink,
   Filter,
-  ArrowLeft,
+  ArrowLeft
 } from "lucide-react";
-import { db } from "../lib/firebase";
+import { auth, db } from "../lib/firebase";
 import { collection, query, orderBy, limit, getDocs, doc, updateDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { cn } from "../lib/utils";
+import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { readCache, writeCache } from "../lib/resilience";
 import { meterDbRead } from "../lib/requestMeter";
-import { queryKeys } from "../lib/queryKeys";
-import { stableQueryOptions } from "../lib/queryDefaults";
-
-const LOGS_CACHE_KEY = "rakivinum_cache_admin_audit_logs_v1";
-const USERS_CACHE_KEY = "rakivinum_cache_admin_audit_users_v1";
-const BLOCKS_CACHE_KEY = "rakivinum_cache_admin_audit_blocks_v1";
 
 const PERMISSION_MATRIX = [
   { role: "Gost", viewLabel: "Da", rate: "Ne", analytics: "Ne", actions: "Pretraga" },
@@ -69,78 +62,10 @@ type SourceSummary = {
   productList?: string[];
 };
 
-type AdminAuditBundle = {
-  logs: AuditLog[];
-  users: AuditUser[];
-  abuseBlocks: Record<string, AbuseBlock>;
-};
-
-function readBundleFromCache(): AdminAuditBundle {
-  return {
-    logs: readCache<AuditLog[]>(LOGS_CACHE_KEY) ?? [],
-    users: readCache<AuditUser[]>(USERS_CACHE_KEY) ?? [],
-    abuseBlocks: readCache<Record<string, AbuseBlock>>(BLOCKS_CACHE_KEY) ?? {},
-  };
-}
-
-async function fetchAdminAuditBundle(): Promise<AdminAuditBundle> {
-  let logs: AuditLog[] = readCache<AuditLog[]>(LOGS_CACHE_KEY) ?? [];
-  let users: AuditUser[] = readCache<AuditUser[]>(USERS_CACHE_KEY) ?? [];
-  let abuseBlocks: Record<string, AbuseBlock> = readCache<Record<string, AbuseBlock>>(BLOCKS_CACHE_KEY) ?? {};
-
-  try {
-    const logsQuery = query(collection(db, "rating_logs"), orderBy("createdAt", "desc"), limit(20));
-    const logsSnap = await getDocs(logsQuery);
-    meterDbRead("adminAudit:rating_logs", logsSnap.size);
-    logs = logsSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as AuditLog[];
-    writeCache(LOGS_CACHE_KEY, logs, REFRESH_INTERVAL.ADMIN_PANEL_10M);
-  } catch (err) {
-    console.error("AdminAudit logs refresh failed", err);
-    const cachedLogs = readCache<AuditLog[]>(LOGS_CACHE_KEY);
-    if (cachedLogs) logs = cachedLogs;
-  }
-
-  try {
-    const usersQuery = query(collection(db, "users"), limit(20));
-    const usersSnap = await getDocs(usersQuery);
-    meterDbRead("adminAudit:users", usersSnap.size);
-    users = usersSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as AuditUser[];
-    writeCache(USERS_CACHE_KEY, users, REFRESH_INTERVAL.ADMIN_PANEL_10M);
-  } catch (err) {
-    console.error("AdminAudit users refresh failed", err);
-    const cachedUsers = readCache<AuditUser[]>(USERS_CACHE_KEY);
-    if (cachedUsers) users = cachedUsers;
-  }
-
-  try {
-    const blocksQuery = query(collection(db, "abuse_blocks"), limit(20));
-    const blocksSnap = await getDocs(blocksQuery);
-    meterDbRead("adminAudit:abuse_blocks", blocksSnap.size);
-    const next: Record<string, AbuseBlock> = {};
-    blocksSnap.forEach((d) => {
-      next[d.id] = d.data();
-    });
-    abuseBlocks = next;
-    writeCache(BLOCKS_CACHE_KEY, abuseBlocks, REFRESH_INTERVAL.ADMIN_PANEL_10M);
-  } catch (err) {
-    console.error("AdminAudit abuse blocks refresh failed", err);
-    const cachedBlocks = readCache<Record<string, AbuseBlock>>(BLOCKS_CACHE_KEY);
-    if (cachedBlocks) abuseBlocks = cachedBlocks;
-  }
-
-  return { logs, users, abuseBlocks };
-}
-
 export default function AdminAudit() {
+  const EMERGENCY_READ_FREEZE = false;
   const navigate = useNavigate();
   const location = useLocation();
-  const queryClient = useQueryClient();
-  const auditQueriesFetching = useIsFetching({ queryKey: queryKeys.adminAudit.scope() });
-
-  const refreshAuditBundle = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: queryKeys.adminAudit.scope() });
-  }, [queryClient]);
-
   const goBackSafe = () => {
     const navState = location.state as { returnTo?: string } | null;
     if (navState?.returnTo) {
@@ -154,34 +79,116 @@ export default function AdminAudit() {
     }
     navigate("/admin", { replace: true });
   };
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [users, setUsers] = useState<AuditUser[]>([]);
+  const [abuseBlocks, setAbuseBlocks] = useState<Record<string, AbuseBlock>>({});
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'matrix' | 'logs' | 'users' | 'sources'>('logs');
 
-  const auditQuery = useQuery({
-    queryKey: queryKeys.adminAudit.bundle(),
-    queryFn: fetchAdminAuditBundle,
-    placeholderData: (prev) => prev ?? readBundleFromCache(),
-    ...stableQueryOptions(REFRESH_INTERVAL.ADMIN_PANEL_10M),
-  });
+  useEffect(() => {
+    if (EMERGENCY_READ_FREEZE) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const logsCacheKey = "rakivinum_cache_admin_audit_logs_v1";
+    const usersCacheKey = "rakivinum_cache_admin_audit_users_v1";
+    const blocksCacheKey = "rakivinum_cache_admin_audit_blocks_v1";
 
-  const logs = auditQuery.data?.logs ?? [];
-  const users = auditQuery.data?.users ?? [];
-  const abuseBlocks = auditQuery.data?.abuseBlocks ?? {};
+    const refreshAuditData = async () => {
+      // Throttle quick focus/visibility bursts.
+      if (!shouldRunRefresh("admin-audit:refresh", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      try {
+        const logsQuery = query(collection(db, 'rating_logs'), orderBy('createdAt', 'desc'), limit(80));
+        const logsSnap = await getDocs(logsQuery);
+        meterDbRead("adminAudit:rating_logs", logsSnap.size);
+        const nextLogs = logsSnap.docs.map(d => ({ id: d.id, ...d.data() })) as AuditLog[];
+        if (!cancelled) {
+          setLogs(nextLogs);
+          setLoading(false);
+        }
+        writeCache(logsCacheKey, nextLogs, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      } catch (err) {
+        console.error("AdminAudit logs refresh failed", err);
+        if (!cancelled) {
+          const cachedLogs = readCache<AuditLog[]>(logsCacheKey);
+          if (cachedLogs) setLogs(cachedLogs);
+          setLoading(false);
+        }
+      }
 
-  const [activeTab, setActiveTab] = useState<"matrix" | "logs" | "users" | "sources">("logs");
+      try {
+        const usersQuery = query(collection(db, 'users'), limit(25));
+        const usersSnap = await getDocs(usersQuery);
+        meterDbRead("adminAudit:users", usersSnap.size);
+        const nextUsers = usersSnap.docs.map(d => ({ id: d.id, ...d.data() })) as AuditUser[];
+        if (!cancelled) setUsers(nextUsers);
+        writeCache(usersCacheKey, nextUsers, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      } catch (err) {
+        console.error("AdminAudit users refresh failed", err);
+        if (!cancelled) {
+          const cachedUsers = readCache<AuditUser[]>(usersCacheKey);
+          if (cachedUsers) setUsers(cachedUsers);
+        }
+      }
+
+      try {
+        const blocksQuery = query(collection(db, 'abuse_blocks'), limit(80));
+        const blocksSnap = await getDocs(blocksQuery);
+        meterDbRead("adminAudit:abuse_blocks", blocksSnap.size);
+        const next: Record<string, AbuseBlock> = {};
+        blocksSnap.forEach((d) => {
+          next[d.id] = d.data();
+        });
+        if (!cancelled) setAbuseBlocks(next);
+        writeCache(blocksCacheKey, next, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+      } catch (err) {
+        console.error("AdminAudit abuse blocks refresh failed", err);
+        if (!cancelled) {
+          const cachedBlocks = readCache<Record<string, AbuseBlock>>(blocksCacheKey);
+          if (cachedBlocks) setAbuseBlocks(cachedBlocks);
+        }
+      }
+    };
+
+    const cachedLogs = readCache<AuditLog[]>(logsCacheKey);
+    const cachedUsers = readCache<AuditUser[]>(usersCacheKey);
+    const cachedBlocks = readCache<Record<string, AbuseBlock>>(blocksCacheKey);
+    if (cachedLogs) {
+      setLogs(cachedLogs);
+      setLoading(false);
+    }
+    if (cachedUsers) setUsers(cachedUsers);
+    if (cachedBlocks) setAbuseBlocks(cachedBlocks);
+
+    if (!cachedLogs || !cachedUsers || !cachedBlocks || shouldRunRefresh("admin-audit:initial", REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+      void refreshAuditData();
+    }
+    const onFocusRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void refreshAuditData();
+    };
+    const onVisibilityRefresh = () => {
+      if (document.visibilityState !== "visible") return;
+      onFocusRefresh();
+    };
+    window.addEventListener("focus", onFocusRefresh);
+    document.addEventListener("visibilitychange", onVisibilityRefresh);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocusRefresh);
+      document.removeEventListener("visibilitychange", onVisibilityRefresh);
+    };
+  }, [EMERGENCY_READ_FREEZE]);
 
   const toggleBlockUser = async (userId: string, currentStatus: boolean) => {
     try {
-      await updateDoc(doc(db, "users", userId), {
+      await updateDoc(doc(db, 'users', userId), {
         isBlocked: !currentStatus,
-        updatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       });
-      queryClient.setQueryData<AdminAuditBundle>(queryKeys.adminAudit.bundle(), (prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          users: prev.users.map((u) => (u.id === userId ? { ...u, isBlocked: !currentStatus } : u)),
-        };
-      });
-      alert(`Korisnik je ${!currentStatus ? "BLOKIRAN" : "ODBLOKIRAN"}`);
+      alert(`Korisnik je ${!currentStatus ? 'BLOKIRAN' : 'ODBLOKIRAN'}`);
     } catch (err) {
       console.error(err);
     }
@@ -201,33 +208,16 @@ export default function AdminAudit() {
       return;
     }
     try {
-      await setDoc(
-        doc(db, "abuse_blocks", meta.docId),
-        {
-          isBlocked: shouldBlock,
-          sourceType: meta.label,
-          sourceDocId: meta.docId,
-          ipHash: source.ipHash || null,
-          fingerprintHash: source.fingerprintHash || null,
-          visitorId: source.visitorId || null,
-          reason: shouldBlock ? "Manual admin block" : "Manual admin approval",
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-      queryClient.setQueryData<AdminAuditBundle>(queryKeys.adminAudit.bundle(), (prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          abuseBlocks: {
-            ...prev.abuseBlocks,
-            [meta.docId]: {
-              ...(prev.abuseBlocks[meta.docId] || {}),
-              isBlocked: shouldBlock,
-            },
-          },
-        };
-      });
+      await setDoc(doc(db, "abuse_blocks", meta.docId), {
+        isBlocked: shouldBlock,
+        sourceType: meta.label,
+        sourceDocId: meta.docId,
+        ipHash: source.ipHash || null,
+        fingerprintHash: source.fingerprintHash || null,
+        visitorId: source.visitorId || null,
+        reason: shouldBlock ? "Manual admin block" : "Manual admin approval",
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
       alert(shouldBlock ? "Izvor je blokiran." : "Izvor je odobren i odblokiran.");
     } catch (err) {
       console.error(err);
@@ -280,7 +270,10 @@ export default function AdminAudit() {
     <div className="min-h-screen bg-bg-base text-white p-4 pb-24 space-y-6">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <button onClick={goBackSafe} className="p-2 -ml-2 text-text-secondary hover:text-white transition-colors">
+        <button 
+          onClick={goBackSafe}
+          className="p-2 -ml-2 text-text-secondary hover:text-white transition-colors"
+        >
           <ArrowLeft className="w-6 h-6" />
         </button>
         <div className="w-12 h-12 bg-red-500/10 rounded-2xl flex items-center justify-center border border-red-500/20">
@@ -295,14 +288,14 @@ export default function AdminAudit() {
       {/* Tabs */}
       <div className="flex gap-2 p-1 bg-bg-card border border-border-subtle rounded-xl max-w-fit">
         {[
-          { id: "logs", label: "Logovi", icon: Activity },
-          { id: "sources", label: "Izvori", icon: Fingerprint },
-          { id: "users", label: "Korisnici", icon: Users },
-          { id: "matrix", label: "Matrica", icon: ShieldCheck },
+          { id: 'logs', label: 'Logovi', icon: Activity },
+          { id: 'sources', label: 'Izvori', icon: Fingerprint },
+          { id: 'users', label: 'Korisnici', icon: Users },
+          { id: 'matrix', label: 'Matrica', icon: ShieldCheck },
         ].map((tab) => (
-          <button
+          <button 
             key={tab.id}
-            onClick={() => setActiveTab(tab.id as "matrix" | "logs" | "users" | "sources")}
+            onClick={() => setActiveTab(tab.id as 'matrix' | 'logs' | 'users' | 'sources')}
             className={cn(
               "flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all",
               activeTab === tab.id ? "bg-red-500 text-white shadow-lg" : "text-text-secondary hover:text-white"
@@ -314,90 +307,53 @@ export default function AdminAudit() {
         ))}
       </div>
 
-      <div className="flex justify-end">
-        <button
-          type="button"
-          disabled={auditQueriesFetching > 0}
-          onClick={() => void refreshAuditBundle()}
-          className="inline-flex items-center justify-center gap-2 min-w-[10.5rem] px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase disabled:opacity-60 disabled:cursor-not-allowed"
-        >
-          {auditQueriesFetching > 0 ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden />
-              Učitavanje…
-            </>
-          ) : (
-            "Osveži podatke"
-          )}
-        </button>
-      </div>
-
       {/* Content Areas */}
-      {activeTab === "logs" && (
+      {activeTab === 'logs' && (
         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-5 duration-500">
-          <div className="flex justify-between items-center px-1">
-            <h3 className="text-xs font-bold text-text-secondary uppercase tracking-[0.2em]">Sistemski Logovi (Anti-Indijanac)</h3>
-            <button className="text-[10px] font-bold text-red-400">Očisti logove</button>
-          </div>
-          <div className="space-y-3">
-            {logs.length === 0 && auditQuery.isPending ? (
-              <div className="p-12 text-center bg-bg-card border border-dashed border-border-subtle rounded-3xl">
-                <Activity className="w-8 h-8 text-white/5 mx-auto mb-2 animate-pulse" />
-                <p className="text-xs text-text-secondary">Učitavanje…</p>
-              </div>
-            ) : logs.length === 0 ? (
-              <div className="p-12 text-center bg-bg-card border border-dashed border-border-subtle rounded-3xl">
-                <Activity className="w-8 h-8 text-white/5 mx-auto mb-2" />
-                <p className="text-xs text-text-secondary">Nema sumnjivih aktivnosti.</p>
-              </div>
-            ) : (
-              logs.map((log) => (
-                <div key={log.id} className="bg-bg-card border border-border-subtle p-4 rounded-2xl space-y-3">
-                  <div className="flex justify-between items-start">
-                    <div className="flex items-center gap-2">
-                      <div
-                        className={cn(
-                          "w-2 h-2 rounded-full",
-                          log.rating <= 2 ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" : "bg-green-500"
-                        )}
-                      ></div>
-                      <span className="text-xs font-bold">{log.productName}</span>
-                    </div>
-                    <span className="text-[10px] text-text-secondary font-mono">
-                      {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : "—"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-[10px]">
-                    <Fingerprint className="w-3 h-3 text-red-400" />
-                    <span className="text-text-secondary truncate max-w-[200px]">{log.userAgent}</span>
-                  </div>
-                  <div className="p-2 bg-black/40 rounded-lg border border-white/5">
-                    <p className="text-[10px] italic text-text-secondary">&quot;{log.reviewText || "Bez komentara"}&quot;</p>
-                  </div>
-                  <div className="flex justify-between pt-1">
-                    <span className="text-[10px] font-bold text-gold-500">Ocena: {log.rating} ★</span>
-                    {log.userId ? (
-                      <button
-                        onClick={() =>
-                          toggleBlockUser(
-                            log.userId!,
-                            users.find((u) => u.id === log.userId)?.isBlocked ?? false
-                          )
-                        }
-                        className="text-[10px] bg-red-500/10 text-red-500 px-2.5 py-1 rounded-md border border-red-500/20 font-bold uppercase transition-colors hover:bg-red-500 hover:text-white"
-                      >
-                        Blokiraj Korisnika
-                      </button>
-                    ) : null}
-                  </div>
+           <div className="flex justify-between items-center px-1">
+             <h3 className="text-xs font-bold text-text-secondary uppercase tracking-[0.2em]">Sistemski Logovi (Anti-Indijanac)</h3>
+             <button className="text-[10px] font-bold text-red-400">Očisti logove</button>
+           </div>
+           <div className="space-y-3">
+              {logs.length === 0 ? (
+                <div className="p-12 text-center bg-bg-card border border-dashed border-border-subtle rounded-3xl">
+                   <Activity className="w-8 h-8 text-white/5 mx-auto mb-2" />
+                   <p className="text-xs text-text-secondary">Nema sumnjivih aktivnosti.</p>
                 </div>
-              ))
-            )}
-          </div>
+              ) : (
+                logs.map((log) => (
+                  <div key={log.id} className="bg-bg-card border border-border-subtle p-4 rounded-2xl space-y-3">
+                    <div className="flex justify-between items-start">
+                      <div className="flex items-center gap-2">
+                        <div className={cn("w-2 h-2 rounded-full", log.rating <= 2 ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" : "bg-green-500")}></div>
+                        <span className="text-xs font-bold">{log.productName}</span>
+                      </div>
+                      <span className="text-[10px] text-text-secondary font-mono">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[10px]">
+                      <Fingerprint className="w-3 h-3 text-red-400" />
+                      <span className="text-text-secondary truncate max-w-[200px]">{log.userAgent}</span>
+                    </div>
+                    <div className="p-2 bg-black/40 rounded-lg border border-white/5">
+                      <p className="text-[10px] italic text-text-secondary">"{log.reviewText || "Bez komentara"}"</p>
+                    </div>
+                    <div className="flex justify-between pt-1">
+                       <span className="text-[10px] font-bold text-gold-500">Ocena: {log.rating} ★</span>
+                       <button 
+                         onClick={() => toggleBlockUser(log.userId, false)}
+                         className="text-[10px] bg-red-500/10 text-red-500 px-2.5 py-1 rounded-md border border-red-500/20 font-bold uppercase transition-colors hover:bg-red-500 hover:text-white"
+                       >
+                         Blokiraj Korisnika
+                       </button>
+                    </div>
+                  </div>
+                ))
+              )}
+           </div>
         </div>
       )}
 
-      {activeTab === "sources" && (
+      {activeTab === 'sources' && (
         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-5 duration-500">
           <div className="flex justify-between items-center px-1">
             <h3 className="text-xs font-bold text-text-secondary uppercase tracking-[0.2em]">Rizični izvori (7 dana)</h3>
@@ -443,7 +399,7 @@ export default function AdminAudit() {
                     </div>
                     <div className="bg-black/30 rounded-lg p-2">
                       <p className="text-[9px] text-text-secondary uppercase">Udeo</p>
-                      <p className="text-sm font-black text-gold-500">{Math.round((source.lowRatio ?? 0) * 100)}%</p>
+                      <p className="text-sm font-black text-gold-500">{Math.round(source.lowRatio * 100)}%</p>
                     </div>
                   </div>
 
@@ -481,104 +437,104 @@ export default function AdminAudit() {
         </div>
       )}
 
-      {activeTab === "users" && (
+      {activeTab === 'users' && (
         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-5 duration-500">
-          <div className="bg-bg-card border border-border-subtle rounded-2xl overflow-hidden">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-white/5 border-b border-white/5">
-                <tr>
-                  <th className="p-4 font-bold text-text-secondary">Korisnik</th>
-                  <th className="p-4 font-bold text-text-secondary text-right">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {users.map((u) => (
-                  <tr key={u.id}>
-                    <td className="p-4">
-                      <p className="font-bold truncate max-w-[120px]">{u.email}</p>
-                      <p className="text-[9px] text-text-secondary uppercase">{u.role || "user"}</p>
-                    </td>
-                    <td className="p-4 text-right">
-                      <button
-                        onClick={() => toggleBlockUser(u.id, u.isBlocked ?? false)}
-                        className={cn(
-                          "px-2 py-1 rounded-md text-[10px] font-bold uppercase border",
-                          u.isBlocked
-                            ? "bg-red-500/10 text-red-500 border-red-500/20"
-                            : "bg-green-500/10 text-green-500 border-green-500/20"
-                        )}
-                      >
-                        {u.isBlocked ? "Blokiran" : "Aktivan"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+           <div className="bg-bg-card border border-border-subtle rounded-2xl overflow-hidden">
+             <table className="w-full text-left text-xs">
+               <thead className="bg-white/5 border-b border-white/5">
+                 <tr>
+                   <th className="p-4 font-bold text-text-secondary">Korisnik</th>
+                   <th className="p-4 font-bold text-text-secondary text-right">Status</th>
+                 </tr>
+               </thead>
+               <tbody className="divide-y divide-white/5">
+                 {users.map(u => (
+                   <tr key={u.id}>
+                     <td className="p-4">
+                       <p className="font-bold truncate max-w-[120px]">{u.email}</p>
+                       <p className="text-[9px] text-text-secondary uppercase">{u.role || 'user'}</p>
+                     </td>
+                     <td className="p-4 text-right">
+                       <button 
+                         onClick={() => toggleBlockUser(u.id, u.isBlocked)}
+                         className={cn(
+                           "px-2 py-1 rounded-md text-[10px] font-bold uppercase border",
+                           u.isBlocked 
+                             ? "bg-red-500/10 text-red-500 border-red-500/20" 
+                             : "bg-green-500/10 text-green-500 border-green-500/20"
+                         )}
+                       >
+                         {u.isBlocked ? 'Blokiran' : 'Aktivan'}
+                       </button>
+                     </td>
+                   </tr>
+                 ))}
+               </tbody>
+             </table>
+           </div>
         </div>
       )}
 
-      {activeTab === "matrix" && (
+      {activeTab === 'matrix' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-5 duration-500">
           <div className="p-5 bg-gradient-to-br from-red-500/20 to-transparent border border-red-500/20 rounded-3xl space-y-3">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-500" />
-              <h3 className="text-sm font-bold uppercase tracking-wider">Anti-Abuse Strategija</h3>
-            </div>
-            <ul className="space-y-2">
-              {[
-                "Max 1 ocena po artiklu dnevno",
-                "Fingerprinting botova preko User-Agenta",
-                "Cooldown od 3s između akcija",
-                "Automatsko flag-ovanje niskih ocena bez teksta",
-                "Moderator dashboard za instat blokadu",
-              ].map((r, i) => (
-                <li key={i} className="flex items-center gap-2 text-[11px] text-text-primary/90">
-                  <div className="w-1 h-1 bg-red-400 rounded-full" /> {r}
-                </li>
-              ))}
-            </ul>
+             <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-500" />
+                <h3 className="text-sm font-bold uppercase tracking-wider">Anti-Abuse Strategija</h3>
+             </div>
+             <ul className="space-y-2">
+                {[
+                  "Max 1 ocena po artiklu dnevno",
+                  "Fingerprinting botova preko User-Agenta",
+                  "Cooldown od 3s između akcija",
+                  "Automatsko flag-ovanje niskih ocena bez teksta",
+                  "Moderator dashboard za instat blokadu"
+                ].map((r, i) => (
+                  <li key={i} className="flex items-center gap-2 text-[11px] text-text-primary/90">
+                     <div className="w-1 h-1 bg-red-400 rounded-full" /> {r}
+                  </li>
+                ))}
+             </ul>
           </div>
 
           <div className="space-y-3">
-            <h3 className="text-xs font-bold text-text-secondary uppercase tracking-[0.2em] px-2">Matrica Pristupa (D2)</h3>
-            <div className="bg-bg-card border border-border-subtle rounded-[24px] overflow-x-auto">
-              <table className="w-full text-left text-[10px]">
-                <thead className="bg-white/5 text-text-secondary border-b border-white/5">
-                  <tr>
-                    <th className="p-3">Uloga</th>
-                    <th className="p-3 whitespace-nowrap">Ocenjivanje</th>
-                    <th className="p-3">Analitika</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {PERMISSION_MATRIX.map((row, i) => (
-                    <tr key={i} className="hover:bg-white/5">
-                      <td className="p-3 font-bold text-gold-500">{row.role}</td>
-                      <td className="p-3">{row.rate}</td>
-                      <td className="p-3">{row.analytics}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+             <h3 className="text-xs font-bold text-text-secondary uppercase tracking-[0.2em] px-2">Matrica Pristupa (D2)</h3>
+             <div className="bg-bg-card border border-border-subtle rounded-[24px] overflow-x-auto">
+                <table className="w-full text-left text-[10px]">
+                   <thead className="bg-white/5 text-text-secondary border-b border-white/5">
+                      <tr>
+                         <th className="p-3">Uloga</th>
+                         <th className="p-3 whitespace-nowrap">Ocenjivanje</th>
+                         <th className="p-3">Analitika</th>
+                      </tr>
+                   </thead>
+                   <tbody className="divide-y divide-white/5">
+                      {PERMISSION_MATRIX.map((row, i) => (
+                        <tr key={i} className="hover:bg-white/5">
+                           <td className="p-3 font-bold text-gold-500">{row.role}</td>
+                           <td className="p-3">{row.rate}</td>
+                           <td className="p-3">{row.analytics}</td>
+                        </tr>
+                      ))}
+                   </tbody>
+                </table>
+             </div>
           </div>
         </div>
       )}
 
       {/* Security Actions Cards */}
       <div className="grid grid-cols-2 gap-3">
-        <div className="bg-bg-base border border-border-subtle p-4 rounded-3xl space-y-2 hover:border-red-500/40 transition-colors">
-          <UserX className="w-5 h-5 text-red-500" />
-          <p className="text-[10px] font-bold text-white uppercase">Sruši nalog</p>
-          <p className="text-[8px] text-text-secondary">Trajna blokada po UID-u</p>
-        </div>
-        <div className="bg-bg-base border border-border-subtle p-4 rounded-3xl space-y-2 hover:border-gold-500/40 transition-colors">
-          <Fingerprint className="w-5 h-5 text-gold-500" />
-          <p className="text-[10px] font-bold text-white uppercase">Otisak</p>
-          <p className="text-[8px] text-text-secondary">Audit sumnjivih MAC-ova</p>
-        </div>
+         <div className="bg-bg-base border border-border-subtle p-4 rounded-3xl space-y-2 hover:border-red-500/40 transition-colors">
+            <UserX className="w-5 h-5 text-red-500" />
+            <p className="text-[10px] font-bold text-white uppercase">Sruši nalog</p>
+            <p className="text-[8px] text-text-secondary">Trajna blokada po UID-u</p>
+         </div>
+         <div className="bg-bg-base border border-border-subtle p-4 rounded-3xl space-y-2 hover:border-gold-500/40 transition-colors">
+            <Fingerprint className="w-5 h-5 text-gold-500" />
+            <p className="text-[10px] font-bold text-white uppercase">Otisak</p>
+            <p className="text-[8px] text-text-secondary">Audit sumnjivih MAC-ova</p>
+         </div>
       </div>
     </div>
   );

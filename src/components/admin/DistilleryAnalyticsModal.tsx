@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   collection,
   query,
@@ -38,6 +38,12 @@ const COLORS = [
   "var(--color-gold-400)",
 ];
 
+/** Modal analytics: keep Firestore reads bounded (one open was ~500+400+ ≈ 900+ reads). */
+const ANALYTICS_PRODUCTS_LIMIT = 80;
+const ANALYTICS_DISTILLERY_RATINGS_LIMIT = 120;
+const ANALYTICS_FALLBACK_RATINGS_PER_CHUNK = 45;
+const ANALYTICS_MAX_FALLBACK_CHUNKS = 6;
+
 export default function DistilleryAnalyticsModal({ distillery, onClose }: AnalyticsModalProps) {
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState<ProductRow[]>([]);
@@ -48,16 +54,25 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
   const [platformAvg, setPlatformAvg] = useState<number | null>(null);
   const [clubMemberCount, setClubMemberCount] = useState(0);
 
-  const fetchData = useCallback(async () => {
+  useEffect(() => {
+    fetchData();
+  }, [distillery.id]);
+
+  const fetchData = async () => {
     setLoading(true);
     try {
-      // 1. Fetch products
-      const qProd = query(collection(db, "products"), where("distilleryId", "==", distillery.id), limit(20));
+      // 1. Fetch products (capped — modal ne treba ceo katalog od 500+ flaša za KPI/grafike)
+      const qProd = query(
+        collection(db, "products"),
+        where("distilleryId", "==", distillery.id),
+        limit(ANALYTICS_PRODUCTS_LIMIT),
+      );
       const pSnap = await getDocs(qProd);
       const prodData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       setProducts(prodData);
 
-      // 2. Ocene: jedan upit po destileriji (manje čitanja nego više „in“ chunkova), plus dedup fallback za stare zapise bez distilleryId
+      // 2. Ocene: prvo jedan upit po destileriji. Chunk fallback (productId in) SAMO ako primarni upit padne
+      // ili ako uspešno vrati 0 dokumenata a imamo proizvode (stari zapisi bez distilleryId).
       const pIds = prodData.map((p: { id: string }) => p.id);
       const byId = new Map<string, Record<string, unknown>>();
       const addRatingSnap = (snap: QuerySnapshot) => {
@@ -65,25 +80,41 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
           if (!byId.has(d.id)) byId.set(d.id, d.data() as Record<string, unknown>);
         });
       };
+      let primaryQueryOk = false;
       try {
-        const rQ = query(collection(db, 'ratings'), where('distilleryId', '==', distillery.id), limit(20));
+        const rQ = query(
+          collection(db, "ratings"),
+          where("distilleryId", "==", distillery.id),
+          limit(ANALYTICS_DISTILLERY_RATINGS_LIMIT),
+        );
         const rSnap = await getDocs(rQ);
         addRatingSnap(rSnap);
+        primaryQueryOk = true;
       } catch (e) {
-        console.warn('Ocene po distilleryId nisu učitane', e);
+        console.warn("Ocene po distilleryId nisu učitane — koristim fallback po productId", e);
       }
-      for (let i = 0; i < pIds.length; i += 10) {
-        const chunk = pIds.slice(i, i + 10);
-        if (chunk.length === 0) continue;
-        try {
-          const qRat = query(collection(db, "ratings"), where("productId", "in", chunk), limit(20));
-          const rSnap = await getDocs(qRat);
-          addRatingSnap(rSnap);
-        } catch (e) {
-          console.warn('Fallback ocene po productId chunk', e);
+      const needsProductIdFallback =
+        !primaryQueryOk || (primaryQueryOk && byId.size === 0 && pIds.length > 0);
+      if (needsProductIdFallback) {
+        const maxProducts = ANALYTICS_MAX_FALLBACK_CHUNKS * 10;
+        const cappedLen = Math.min(pIds.length, maxProducts);
+        for (let i = 0; i < cappedLen; i += 10) {
+          const chunk = pIds.slice(i, i + 10);
+          if (chunk.length === 0) continue;
+          try {
+            const qRat = query(
+              collection(db, "ratings"),
+              where("productId", "in", chunk),
+              limit(ANALYTICS_FALLBACK_RATINGS_PER_CHUNK),
+            );
+            const rSnap = await getDocs(qRat);
+            addRatingSnap(rSnap);
+          } catch (e) {
+            console.warn("Fallback ocene po productId chunk", e);
+          }
         }
       }
-      setRatings([...byId.values()]);
+      setRatings([...byId.values()] as RatingRow[]);
 
       const ownProductIds = new Set(prodData.map((p: { id: string }) => p.id));
       let benchmark: number | null = null;
@@ -97,14 +128,14 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
       try {
         let plat: { rating: number; productId?: string }[] = [];
         try {
-          const platQ = query(collection(db, 'ratings'), orderBy('createdAt', 'desc'), limit(20));
+          const platQ = query(collection(db, "ratings"), orderBy("createdAt", "desc"), limit(24));
           const platSnap = await getDocs(platQ);
           plat = parseRatingDocs(platSnap.docs);
         } catch (e) {
-          console.warn('Benchmark orderBy(createdAt) nije uspeo — probam uzorak bez sortiranja', e);
+          console.warn("Benchmark orderBy(createdAt) nije uspeo — probam uzorak bez sortiranja", e);
         }
         if (plat.length < 5) {
-          const fbSnap = await getDocs(query(collection(db, 'ratings'), limit(20)));
+          const fbSnap = await getDocs(query(collection(db, "ratings"), limit(40)));
           plat = parseRatingDocs(fbSnap.docs);
         }
         const others = plat.filter((r) => r.productId && !ownProductIds.has(r.productId));
@@ -131,11 +162,7 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
     } finally {
       setLoading(false);
     }
-  }, [distillery.id]);
-
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  };
 
   const generateAiAnalysis = async () => {
     setGeneratingAi(true);
