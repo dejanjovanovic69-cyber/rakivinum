@@ -6,7 +6,12 @@ import { onAuthStateChanged } from "firebase/auth";
 import { cn } from "../lib/utils";
 import { isQuotaError, readCache } from "../lib/resilience";
 import type { HomeBundlePublic } from "../lib/dataService";
-import { fetchPublicHomeBundle, fetchPublicLicenseByToken } from "../lib/dataService";
+import {
+  fetchPublicHomeBundle,
+  fetchPublicLicenseByToken,
+  pickHttpProductThumbForHome,
+  stripHttpProductImgUrl,
+} from "../lib/dataService";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 
@@ -21,47 +26,20 @@ type ProductLite = {
   averageRating?: number;
 };
 
-/** Viši skor = verovatnije thumbnail / CDN varijanta — bolje u malom kvadratu. */
-function thumbUrlPreferenceScore(u: string): number {
-  const lower = u.toLowerCase();
-  let n = 0;
-  if (lower.includes("thumb")) n += 4;
-  if (lower.includes("resize") || lower.includes("width=") || lower.includes("w=")) n += 2;
-  if (lower.includes("_200") || lower.includes("200x") || lower.includes("x200") || lower.includes("400")) n += 1;
-  return n;
-}
-
-/** Mali tile na Home: bira između `image` i `bottleImageUrl` (kad oba postoje) po heuristici + podrazumevano `image`. */
-function pickProductThumbSrc(p: Pick<ProductLite, "id" | "image" | "bottleImageUrl" | "type">): string {
-  const a = String(p.image || "").trim();
-  const b = String(p.bottleImageUrl || "").trim();
-  if (a && b) {
-    const sa = thumbUrlPreferenceScore(a);
-    const sb = thumbUrlPreferenceScore(b);
-    if (sa > sb) return a;
-    if (sb > sa) return b;
-    return a;
-  }
-  const primary = a || b;
-  if (primary) return primary;
-  const seed = encodeURIComponent(p.type || "rakivinum") + "-" + encodeURIComponent(p.id || "p");
-  return `https://picsum.photos/seed/${seed}/200/200`;
-}
-
 function HomeDailyThumbImg({ product, alt }: { product: ProductLite; alt: string }) {
-  const [src, setSrc] = useState(() => pickProductThumbSrc(product));
+  const [src, setSrc] = useState(() => pickHttpProductThumbForHome(product));
   const phaseRef = useRef(0);
 
   useEffect(() => {
     phaseRef.current = 0;
-    setSrc(pickProductThumbSrc(product));
+    setSrc(pickHttpProductThumbForHome(product));
   }, [product.id, product.image, product.bottleImageUrl, product.type]);
 
   const fallbackPicsum = `https://picsum.photos/seed/rakivinum-${encodeURIComponent(product.id)}/200/200`;
 
   const handleError = () => {
-    const a = String(product.image || "").trim();
-    const b = String(product.bottleImageUrl || "").trim();
+    const a = stripHttpProductImgUrl(product.image);
+    const b = stripHttpProductImgUrl(product.bottleImageUrl);
     if (phaseRef.current === 0 && a && b && a !== b) {
       const other = src === a ? b : src === b ? a : "";
       if (other && other !== src) {
@@ -160,7 +138,7 @@ export default function Home() {
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
     const visitorId = localStorage.getItem("rakivinum_visitor_id");
-    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v4` : `rakivinum_cache_home_bundle_anon_v4`;
+    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v5` : `rakivinum_cache_home_bundle_anon_v5`;
 
     const applyBundle = (b: HomeBundlePublic) => {
       const clubs = b.memberships

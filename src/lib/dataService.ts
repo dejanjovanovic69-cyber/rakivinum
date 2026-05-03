@@ -44,6 +44,51 @@ type DailyRecommendationsPublic = {
   vino: ProductPublic | null;
 };
 
+/** Za `<img src>`: bez `data:` (ogroman JSON / loš mali tile u Firefoxu) i bez ekstremno dugih stringova. */
+export function stripHttpProductImgUrl(v: unknown): string {
+  if (typeof v !== "string") return "";
+  const t = v.trim();
+  if (!t || /^\s*data:/i.test(t) || t.length > 120_000) return "";
+  return t;
+}
+
+function sanitizeHomeDailyProductImages(p: ProductPublic | null): ProductPublic | null {
+  if (!p || typeof p !== "object") return null;
+  const next: ProductPublic = { ...p };
+  for (const k of ["image", "bottleImageUrl"] as const) {
+    const cleaned = stripHttpProductImgUrl(next[k]);
+    if (cleaned) next[k] = cleaned;
+    else delete next[k];
+  }
+  return next;
+}
+
+function sanitizeHomeBundleDailyCached(b: HomeBundlePublic): HomeBundlePublic {
+  return {
+    ...b,
+    daily: {
+      rakija: sanitizeHomeDailyProductImages(b.daily?.rakija ?? null),
+      vino: sanitizeHomeDailyProductImages(b.daily?.vino ?? null),
+    },
+  };
+}
+
+/** Isti red kao Label (`image` pa `bottleImageUrl`), bez inline base64 — za mali tile na Home. */
+export function pickHttpProductThumbForHome(p: {
+  id?: unknown;
+  type?: unknown;
+  image?: unknown;
+  bottleImageUrl?: unknown;
+}): string {
+  const a = stripHttpProductImgUrl(p.image);
+  const b = stripHttpProductImgUrl(p.bottleImageUrl);
+  const primary = a || b;
+  if (primary) return primary;
+  const id = encodeURIComponent(String(p.id || "p"));
+  const typ = encodeURIComponent(String(p.type || "rakivinum"));
+  return `https://picsum.photos/seed/${typ}-${id}/200/200`;
+}
+
 export type HomeBundlePublic = {
   memberships: ClubMembershipPublic[];
   actions: ClubActionPublic[];
@@ -230,10 +275,15 @@ export async function fetchPublicProducts(options?: {
 }
 
 export async function fetchPublicDailyRecommendations(): Promise<DailyRecommendationsPublic> {
-  const cacheKey = "rakivinum_cache_home_daily_recommendations_v1";
+  const cacheKey = "rakivinum_cache_home_daily_recommendations_v2";
   return dedupe("dailyRecommendations", async () => {
     const cached = readCache<DailyRecommendationsPublic>(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+      return {
+        rakija: sanitizeHomeDailyProductImages(cached.rakija),
+        vino: sanitizeHomeDailyProductImages(cached.vino),
+      };
+    }
 
     const json = await fetchEdgeRawJson("/api/public/daily-recommendations");
     if (!json) {
@@ -243,8 +293,12 @@ export async function fetchPublicDailyRecommendations(): Promise<DailyRecommenda
       writeCache(cacheKey, empty, CACHE_TTL.HOME_RECOMMENDATIONS_EDGE_EMPTY_2M);
       return empty;
     }
-    const rakija = (json?.rakija && typeof json.rakija === "object" ? (json.rakija as ProductPublic) : null) || null;
-    const vino = (json?.vino && typeof json.vino === "object" ? (json.vino as ProductPublic) : null) || null;
+    const rakija = sanitizeHomeDailyProductImages(
+      (json?.rakija && typeof json.rakija === "object" ? (json.rakija as ProductPublic) : null) || null,
+    );
+    const vino = sanitizeHomeDailyProductImages(
+      (json?.vino && typeof json.vino === "object" ? (json.vino as ProductPublic) : null) || null,
+    );
     const payload = { rakija, vino };
     writeCache(cacheKey, payload, CACHE_TTL.HOME_RECOMMENDATIONS_6H);
     return payload;
@@ -261,8 +315,8 @@ function parseHomeBundleJson(json: Record<string, unknown>): HomeBundlePublic {
     const rak = dr.rakija;
     const vin = dr.vino;
     daily = {
-      rakija: rak && typeof rak === "object" ? (rak as ProductPublic) : null,
-      vino: vin && typeof vin === "object" ? (vin as ProductPublic) : null,
+      rakija: sanitizeHomeDailyProductImages(rak && typeof rak === "object" ? (rak as ProductPublic) : null),
+      vino: sanitizeHomeDailyProductImages(vin && typeof vin === "object" ? (vin as ProductPublic) : null),
     };
   }
   const dn = json.distilleryNames;
@@ -275,11 +329,11 @@ function parseHomeBundleJson(json: Record<string, unknown>): HomeBundlePublic {
 export async function fetchPublicHomeBundle(visitorId: string | null | undefined): Promise<HomeBundlePublic | null> {
   const v = String(visitorId || "").trim();
   const dedupeKey = `homeBundle:${v || "anon"}`;
-  const cacheKey = v ? `rakivinum_cache_home_bundle_${v}_v4` : `rakivinum_cache_home_bundle_anon_v4`;
+  const cacheKey = v ? `rakivinum_cache_home_bundle_${v}_v5` : `rakivinum_cache_home_bundle_anon_v5`;
 
   return dedupe(dedupeKey, async () => {
     const cached = readCache<HomeBundlePublic>(cacheKey);
-    if (cached) return cached;
+    if (cached) return sanitizeHomeBundleDailyCached(cached);
 
     const qs = v ? `?visitor=${encodeURIComponent(v)}` : "";
     const json = await fetchEdgeRawJson(`/api/public/home-bundle${qs}`);

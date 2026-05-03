@@ -423,6 +423,25 @@ function toProductListItem(row: Record<string, unknown>): Record<string, unknown
   };
 }
 
+function firstSanitizedGalleryUrl(row: Record<string, unknown>): string | undefined {
+  const g = row.galleryImages;
+  if (!Array.isArray(g)) return undefined;
+  for (const x of g) {
+    const u = sanitizeImageUrl(x);
+    if (u) return u;
+  }
+  return undefined;
+}
+
+/** Dnevna preporuka na Home: ako nema HTTP slike u glavnim poljima, uzmi prvi `galleryImages` (https). */
+function toProductListItemWithDailyThumb(row: Record<string, unknown>): Record<string, unknown> {
+  const base = toProductListItem(row);
+  if (sanitizeImageUrl(base.image) || sanitizeImageUrl(base.bottleImageUrl)) return base;
+  const gal = firstSanitizedGalleryUrl(row);
+  if (gal) return { ...base, image: gal };
+  return base;
+}
+
 function toProductScannerHit(row: Record<string, unknown>): Record<string, unknown> {
   return {
     ...toProductListItem(row),
@@ -465,8 +484,8 @@ function dailyRecommendationsFromRows(rows: Record<string, unknown>[]): {
   const rakija = pick(rakijaPool, "rakija");
   const vino = pick(winePool, "vino");
   return {
-    rakija: rakija ? toProductListItem(rakija) : null,
-    vino: vino ? toProductListItem(vino) : null,
+    rakija: rakija ? toProductListItemWithDailyThumb(rakija) : null,
+    vino: vino ? toProductListItemWithDailyThumb(vino) : null,
   };
 }
 
