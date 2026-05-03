@@ -291,12 +291,14 @@ export default function DistilleryDashboard() {
       return;
     }
     // Sajam / gužva: stalni ručni refresh ovog ekrana i dalje troši Firestore read-ove kad istekne keš; podaci su i inače ograničeni feed + agregat sa proizvoda.
+    let latestInit = 0;
     const initData = async () => {
+      const runId = ++latestInit;
       setLoading(true);
       try {
         const user = auth.currentUser;
         if (!user) {
-           setLoading(false);
+           if (runId === latestInit) setLoading(false);
            return;
         }
 
@@ -419,20 +421,24 @@ export default function DistilleryDashboard() {
       } catch (err) {
         console.error("Dashboard init error", err);
       } finally {
-        setLoading(false);
+        if (runId === latestInit) setLoading(false);
       }
     };
 
     // Use onAuthStateChanged to ensure auth is ready
     const unsub = auth.onAuthStateChanged(user => {
        if (user) {
-         initData();
+         void initData();
        } else {
+         latestInit++;
          setLoading(false);
        }
     });
 
-    return () => unsub();
+    return () => {
+      latestInit++;
+      unsub();
+    };
   }, [EMERGENCY_READ_FREEZE]);
 
   useEffect(() => {

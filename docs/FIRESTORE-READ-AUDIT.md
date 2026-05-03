@@ -31,6 +31,7 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 | Tip | Napomena |
 |-----|----------|
 | Read | Namerno: fallback kada `VITE_EDGE_API_BASE` nedostaje ili Worker vrati grešku. |
+| `fetchPublicDailyRecommendations` | Ako edge ne vrati JSON, prazan odgovor se kratko kešira (**2m**) da se smanje ponavljanje istog fetch-a (Home); uspešan payload i dalje **6h** (`HOME_RECOMMENDATIONS_6H`). |
 
 ---
 
@@ -61,7 +62,7 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 | `community_links` `limit(80)` | **[Implementirano]** Worker `/api/public/community-links` + `fetchCommunityLinks`. |
 | `club_memberships` po `visitorId` | **[Implementirano]** `fetchPublicClubMembershipsByVisitorId` + 1h cache (po visitor/limit kombinaciji). |
 | Joined klubovi (distillery podaci) | Koristi se batch helper `fetchPublicDistilleriesByIds` (Worker `/api/public/distilleries-by-ids`), uz batched Firestore fallback (`documentId in`) samo kada edge nije dostupan (prazan edge odgovor je konačan i ne pali fallback readove); ID lista se kanonizuje (sort) radi boljeg dedupe/cache hita + 1h cache za isti set ID-jeva. |
-| Distillery lookup po `ownerId` / `email` | Vlasnički tok — ostaje Firestore. |
+| Distillery lookup po `ownerId` / `email` | Vlasnički tok — ostaje Firestore; **kratak `sessionStorage` keš** (5 min hit / 45 s „nema destilerije“) smanjuje dupli `getDocs` pri višestrukim `onAuthStateChanged` callback-ima u istoj sesiji. |
 | Licence u admin delu menija | Osetljivo pisanje + pun dokument — Firestore. |
 
 ---
@@ -99,7 +100,7 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 
 | Read | Napomena |
 |------|----------|
-| `club_memberships`, `distilleries`, `club_actions` | **[Delom urađeno]** `fetchPublicClubMembershipsByVisitorId`, `fetchPublicDistilleriesByIds` (+ batched Firestore fallback `documentId in`), `fetchPublicClubActionsForDistillery` (+ 1h cache po distillery/limit kombinaciji). |
+| `club_memberships`, `distilleries`, `club_actions` | **[Delom urađeno]** `fetchPublicClubMembershipsByVisitorId`, `fetchPublicDistilleriesByIds` (+ batched Firestore fallback `documentId in`), `fetchPublicClubActionsForDistillery` (+ 1h cache); akcije po klubovima se učitavaju **paralelno** (`Promise.all`) da se smanji wall-clock i ponovno zakazivanje. |
 | `scans`, `ratings` (napredak po visitoru) | Ostaje Firestore (nema javnog Worker-a), ali je optimizovano na **2 upita ukupno po ekranu** (jedan za `scans`, jedan za `ratings`) umesto 2 upita po klubu/akciji. |
 
 ---
@@ -119,6 +120,7 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 |------|----------|
 | `distilleries` po `ownerId` / `email`, `products`, `ratings`, `scans` | Vlasnički dashboard — ostaje Firestore (ograničeni feed-i). |
 | `club_actions` + broj članova kluba | **Panel kluba:** `fetchPublicClubActionsForDistillery` i `fetchPublicClubMembershipCount` (Worker-first + keš / isti fallback kao javna destilerija), umesto direktnog `getDocs`/`getCountFromServer` na klijentu. |
+| `initData` / `onAuthStateChanged` | **last-writer-wins** (`latestInit`) da brzi dupli auth callback ne ostavi `loading` u pogrešnom stanju i da se suvišni paralelni init-i preskoče u `finally`. |
 
 ---
 

@@ -135,6 +135,19 @@ function BadgeCatalogRow({
 /** StrictMode / double effect would show two alerts for one redirect failure */
 let menuRedirectAuthErrorShown = false;
 
+/** sessionStorage: smanji dupli Firestore `distilleries` lookup pri višestrukim `onAuthStateChanged` callback-ima */
+const MENU_OWNER_DISTILLERY_SESSION = "rakivinum_menu_owner_distillery_v1";
+const MENU_OWNER_CACHE_HIT_MS = 5 * 60 * 1000;
+const MENU_OWNER_CACHE_MISS_MS = 45 * 1000;
+
+function writeMenuOwnerDistilleryCache(uid: string, distilleryId: string | null) {
+  try {
+    sessionStorage.setItem(`${MENU_OWNER_DISTILLERY_SESSION}:${uid}`, JSON.stringify({ id: distilleryId, at: Date.now() }));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 export default function Menu() {
   const EMERGENCY_READ_FREEZE = false;
   const [user, setUser] = useState<User | null>(null);
@@ -212,6 +225,25 @@ export default function Menu() {
 
       if (currentUser) {
         try {
+          try {
+            const raw = sessionStorage.getItem(`${MENU_OWNER_DISTILLERY_SESSION}:${currentUser.uid}`);
+            if (raw) {
+              const row = JSON.parse(raw) as { id: string | null; at: number };
+              const ttl = row.id != null && row.id !== "" ? MENU_OWNER_CACHE_HIT_MS : MENU_OWNER_CACHE_MISS_MS;
+              if (Number.isFinite(row.at) && Date.now() - row.at < ttl) {
+                if (row.id != null && row.id !== "") {
+                  setDistilleryId(row.id);
+                  void markDistilleryAccess(row.id, currentUser);
+                } else {
+                  setDistilleryId(null);
+                }
+                return;
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+
           const qByOwner = query(
             collection(db, "distilleries"),
             where("ownerId", "==", currentUser.uid),
@@ -222,10 +254,12 @@ export default function Menu() {
             const ownerDoc = ownerSnap.docs[0];
             const ownerData = ownerDoc.data() as DistilleryOwnershipRow;
             if (ownerData?.isArchived) {
+              writeMenuOwnerDistilleryCache(currentUser.uid, null);
               setDistilleryId(null);
               return;
             }
             const dId = ownerDoc.id;
+            writeMenuOwnerDistilleryCache(currentUser.uid, dId);
             setDistilleryId(dId);
             void markDistilleryAccess(dId, currentUser);
             return;
@@ -243,9 +277,11 @@ export default function Menu() {
               const distDoc = emailSnap.docs[0];
               const distData = distDoc.data() as DistilleryOwnershipRow;
               if (distData?.isArchived) {
+                writeMenuOwnerDistilleryCache(currentUser.uid, null);
                 setDistilleryId(null);
                 return;
               }
+              writeMenuOwnerDistilleryCache(currentUser.uid, distDoc.id);
               setDistilleryId(distDoc.id);
               void markDistilleryAccess(distDoc.id, currentUser);
 
@@ -262,6 +298,7 @@ export default function Menu() {
             }
           }
 
+          writeMenuOwnerDistilleryCache(currentUser.uid, null);
           setDistilleryId(null);
         } catch (error) {
           console.error("Error finding user distillery:", error);

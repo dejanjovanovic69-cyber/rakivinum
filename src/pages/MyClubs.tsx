@@ -138,11 +138,22 @@ export default function MyClubs() {
           distilleryRows.map((row) => [String(row.id), row as Record<string, unknown>]),
         );
 
+        const actionsByDistilleryId = new Map<string, Awaited<ReturnType<typeof fetchPublicClubActionsForDistillery>>>();
+        const actionLists = await Promise.all(
+          allIds.map(async (clubId) => {
+            const rows = await fetchPublicClubActionsForDistillery(clubId, 60);
+            return { clubId, rows };
+          }),
+        );
+        for (const { clubId, rows } of actionLists) {
+          actionsByDistilleryId.set(clubId, rows);
+        }
+
         for (const id of allIds) {
           const distillery = distilleryById.get(id);
           if (!distillery) continue;
 
-          const actionRows = await fetchPublicClubActionsForDistillery(id, 60);
+          const actionRows = actionsByDistilleryId.get(id) || [];
           const actions: ClubAction[] = actionRows.map((row) => ({ id: row.id, ...(row as object) } as ClubAction));
 
           // Calculate Progress for each action

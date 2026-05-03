@@ -194,7 +194,9 @@ export async function fetchPublicDailyRecommendations(): Promise<DailyRecommenda
     if (!json) {
       const stale = readStaleCacheValue<DailyRecommendationsPublic>(cacheKey);
       if (stale) return stale;
-      return { rakija: null, vino: null };
+      const empty = { rakija: null, vino: null };
+      writeCache(cacheKey, empty, CACHE_TTL.HOME_RECOMMENDATIONS_EDGE_EMPTY_2M);
+      return empty;
     }
     const rakija = (json?.rakija && typeof json.rakija === "object" ? (json.rakija as ProductPublic) : null) || null;
     const vino = (json?.vino && typeof json.vino === "object" ? (json.vino as ProductPublic) : null) || null;

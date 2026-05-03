@@ -20,6 +20,8 @@ export const CACHE_TTL = {
   SCAN_CLUSTERS_1H: 60 * 60 * 1000,
   COMMUNITY_EVENTS_6H: 6 * 60 * 60 * 1000,
   HOME_RECOMMENDATIONS_6H: 6 * 60 * 60 * 1000,
+  /** Kratko keširanje praznog odgovora kad edge ne vrati JSON — smanjuje ponavljane fetch-e, ne Firestore direktno */
+  HOME_RECOMMENDATIONS_EDGE_EMPTY_2M: 2 * 60 * 1000,
   HOME_DISTILLERY_MAP_6H: 6 * 60 * 60 * 1000,
 } as const;
 
