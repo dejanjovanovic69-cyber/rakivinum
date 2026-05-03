@@ -172,6 +172,11 @@ async function servePublicCached(
       allowedParams.set("visitor", String(cacheUrl.searchParams.get("visitor") || ""));
     }
   }
+  if (cacheUrl.pathname.startsWith("/api/public/products-by-distillery/")) {
+    if (cacheUrl.searchParams.has("after")) {
+      allowedParams.set("after", String(cacheUrl.searchParams.get("after") || ""));
+    }
+  }
   cacheUrl.search = allowedParams.toString();
 
   const normalizedUrl = cacheUrl.toString();
@@ -751,6 +756,57 @@ async function fetchCollectionWhereEquals(
     .map((r) => decodeDocument(r.document as FirestoreDoc));
 }
 
+/** `where` + `orderBy(__name__)` + optional `startAfter` — za katalog po destileriji bez duplog čitanja istih dokumenata. */
+async function fetchProductsByDistilleryPaged(
+  env: Env,
+  distilleryId: string,
+  pageSize: number,
+  afterDocumentId?: string,
+): Promise<Record<string, unknown>[]> {
+  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
+  const accessToken = await getAccessToken(env);
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:runQuery`;
+  const structuredQuery: Record<string, unknown> = {
+    from: [{ collectionId: "products" }],
+    where: {
+      fieldFilter: {
+        field: { fieldPath: "distilleryId" },
+        op: "EQUAL",
+        value: { stringValue: distilleryId },
+      },
+    },
+    orderBy: [{ field: { fieldPath: "__name__" }, direction: "ASCENDING" }],
+    limit: pageSize,
+  };
+  const after = String(afterDocumentId || "").trim();
+  if (after) {
+    const ref = `projects/${projectId}/databases/${databaseId}/documents/products/${after}`;
+    structuredQuery.startAt = {
+      values: [{ referenceValue: ref }],
+      before: false,
+    };
+  }
+  const body = { structuredQuery };
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Firestore REST runQuery error ${res.status}: ${txt.slice(0, 240)}`);
+  }
+  const rows = (await res.json()) as Array<{ document?: FirestoreDoc }>;
+  return rows
+    .filter((r) => r.document)
+    .map((r) => decodeDocument(r.document as FirestoreDoc));
+}
+
 async function fetchCountWhereEquals(
   env: Env,
   collectionName: string,
@@ -1074,8 +1130,9 @@ export default {
             url.pathname.replace("/api/public/products-by-distillery/", "").trim(),
           );
           if (!distilleryId) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
-          const limitCount = parseLimit(url, 60, 100);
-          const rows = await fetchCollectionWhereEquals(env, "products", "distilleryId", distilleryId, limitCount);
+          const limitCount = parseLimit(url, 6, 60);
+          const after = String(url.searchParams.get("after") || "").trim();
+          const rows = await fetchProductsByDistilleryPaged(env, distilleryId, limitCount, after || undefined);
           const filtered = rows.filter(
             (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
           );

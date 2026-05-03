@@ -1,5 +1,5 @@
 import { useParams, useNavigate, useLocation } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { auth, db } from "../lib/firebase";
 import { doc, collection, addDoc, serverTimestamp, deleteDoc } from "firebase/firestore";
 import { ArrowLeft, MapPin, Globe, Loader2, Star, Hexagon, CheckCircle, Phone, Mail, Award, History, Info, Users, ImageIcon, Share2, X } from "lucide-react";
@@ -54,7 +54,19 @@ type ProductCard = {
   publicLabelDisabled?: boolean;
 };
 
-const DISTILLERY_PRODUCTS_PAGE_LIMIT = 48;
+function mergeDistilleryProductPages(prev: ProductCard[], more: ProductCard[]): ProductCard[] {
+  const seen = new Set(prev.map((p) => p.id));
+  const out = [...prev];
+  for (const p of more) {
+    if (!seen.has(p.id)) {
+      seen.add(p.id);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+const DISTILLERY_PRODUCTS_PAGE_SIZE = 6;
 
 function tabFromSearch(search: string): "products" | "about" {
   const t = new URLSearchParams(search).get("tab");
@@ -105,7 +117,56 @@ export default function Distillery() {
   const [isMember, setIsMember] = useState(false);
   const [membershipDocId, setMembershipDocId] = useState<string | null>(null);
   const [totalMembers, setTotalMembers] = useState<number | null>(null);
+  const [hasMoreProducts, setHasMoreProducts] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const [activeGalleryImage, setActiveGalleryImage] = useState<string | null>(null);
+  const productsRef = useRef<ProductCard[]>([]);
+  productsRef.current = products;
+
+  const loadMoreLock = useRef(false);
+  const loadMoreProducts = useCallback(async () => {
+    if (!id || activeTab !== "products" || !hasMoreProducts || loadMoreLock.current) return;
+    const lastId = productsRef.current.at(-1)?.id;
+    if (!lastId) return;
+    loadMoreLock.current = true;
+    setIsLoadingMore(true);
+    try {
+      const more = (await fetchPublicProductsByDistilleryId(
+        id,
+        DISTILLERY_PRODUCTS_PAGE_SIZE,
+        lastId,
+      )) as ProductCard[];
+      const cacheKey = `rakivinum_cache_distillery_products_${id}_v2`;
+      setProducts((prev) => {
+        const merged = mergeDistilleryProductPages(prev, more);
+        writeCache(cacheKey, merged, REFRESH_INTERVAL.USER_LIGHT_1H);
+        return merged;
+      });
+      setHasMoreProducts(more.length >= DISTILLERY_PRODUCTS_PAGE_SIZE);
+    } catch (e) {
+      console.error("Load more distillery products failed", e);
+    } finally {
+      loadMoreLock.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [id, activeTab, hasMoreProducts]);
+
+  useEffect(() => {
+    if (activeTab !== "products" || !hasMoreProducts || !id) return;
+    const el = loadMoreSentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0]?.isIntersecting) return;
+        void loadMoreProducts();
+      },
+      { root: null, rootMargin: "200px 0px", threshold: 0 },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [activeTab, hasMoreProducts, id, loadMoreProducts]);
+
   const resolvedMapsUrl =
     String(distillery?.mapsUrl || "").trim() ||
     `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
@@ -143,7 +204,7 @@ export default function Distillery() {
   useEffect(() => {
     const visitorId = localStorage.getItem('rakivinum_visitor_id');
     const profileCacheKey = id ? `rakivinum_cache_distillery_profile_${id}_v1` : null;
-    const productsCacheKey = id ? `rakivinum_cache_distillery_products_${id}_v1` : null;
+    const productsCacheKey = id ? `rakivinum_cache_distillery_products_${id}_v2` : null;
     const memberCountCacheKey = id ? `rakivinum_cache_distillery_member_count_${id}_v1` : null;
     const membershipCacheKey = id && visitorId ? `rakivinum_cache_distillery_membership_${id}_${visitorId}_v1` : null;
     
@@ -157,11 +218,13 @@ export default function Distillery() {
           if (dData.isArchived) {
             setDistillery(null);
             setProducts([]);
+            setHasMoreProducts(false);
             return;
           }
           if (!dData.isVerified) {
             setDistillery(null);
             setProducts([]);
+            setHasMoreProducts(false);
             return;
           }
           setDistillery(dData);
@@ -169,17 +232,18 @@ export default function Distillery() {
         } else {
           setDistillery(null);
           setProducts([]);
+          setHasMoreProducts(false);
           return;
         }
 
         // Katalog: samo na tabu „Proizvodi“ (tab „O nama“ ne treba do 100 read-ova za listu proizvoda).
         if (activeTab === "products") {
-          const filteredProducts = (await fetchPublicProductsByDistilleryId(
-            id,
-            DISTILLERY_PRODUCTS_PAGE_LIMIT,
-          )) as ProductCard[];
+          const filteredProducts = (await fetchPublicProductsByDistilleryId(id, DISTILLERY_PRODUCTS_PAGE_SIZE)) as ProductCard[];
           setProducts(filteredProducts);
+          setHasMoreProducts(filteredProducts.length >= DISTILLERY_PRODUCTS_PAGE_SIZE);
           if (productsCacheKey) writeCache(productsCacheKey, filteredProducts, REFRESH_INTERVAL.USER_LIGHT_1H);
+        } else {
+          setHasMoreProducts(false);
         }
       } catch (err) {
         console.error("Error fetching distillery data", err);
@@ -568,6 +632,14 @@ export default function Distillery() {
                  <Hexagon className="w-8 h-8 text-gold-500/30 mx-auto" aria-hidden />
                  <p className="text-text-secondary text-sm leading-relaxed">Trenutno nema unetih pića u katalogu.</p>
                </div>
+            )}
+            {products.length > 0 && hasMoreProducts && (
+              <div className="flex flex-col items-center gap-2 pt-2">
+                <div ref={loadMoreSentinelRef} className="h-2 w-full shrink-0" aria-hidden />
+                {isLoadingMore ? (
+                  <Loader2 className="w-5 h-5 animate-spin text-gold-500" aria-label="Učitavanje" />
+                ) : null}
+              </div>
             )}
           </div>
         ) : (

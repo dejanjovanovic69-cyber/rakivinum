@@ -1,4 +1,17 @@
-﻿import { collection, doc, documentId, getCountFromServer, getDoc, getDocs, limit, orderBy, query, where } from "firebase/firestore";
+﻿import {
+  collection,
+  doc,
+  documentId,
+  getCountFromServer,
+  getDoc,
+  getDocs,
+  limit,
+  orderBy,
+  query,
+  startAfter,
+  where,
+  type QueryConstraint,
+} from "firebase/firestore";
 import { db } from "./firebase";
 import { isQuotaError, readCache, writeCache } from "./resilience";
 import { CACHE_TTL, REFRESH_INTERVAL } from "./cachePolicy";
@@ -79,11 +92,18 @@ function readStaleCacheValue<T>(key: string): T | null {
   }
 }
 
-async function fetchEdgeItems<T>(path: string, limitCount: number): Promise<T[] | null> {
+async function fetchEdgeItems<T>(
+  path: string,
+  limitCount: number,
+  pageOpts?: { after?: string },
+): Promise<T[] | null> {
   if (!EDGE_API_BASE) return null;
   try {
     const base = EDGE_API_BASE.endsWith("/") ? EDGE_API_BASE.slice(0, -1) : EDGE_API_BASE;
-    const res = await fetch(`${base}${path}?limit=${encodeURIComponent(String(limitCount))}`, {
+    const qs = new URLSearchParams();
+    qs.set("limit", String(limitCount));
+    if (pageOpts?.after) qs.set("after", pageOpts.after);
+    const res = await fetch(`${base}${path}?${qs.toString()}`, {
       method: "GET",
       headers: { accept: "application/json" },
     });
@@ -520,18 +540,27 @@ export async function fetchPublicProductsByIds(ids: string[]): Promise<ProductPu
   });
 }
 
-export async function fetchPublicProductsByDistilleryId(distilleryId: string, limitCount = 300): Promise<ProductPublic[]> {
+/**
+ * Katalog proizvoda po destileriji. Default **6** (jedan ekran); sledeća strana preko `afterProductId` (isti model kao Worker `?after=`).
+ */
+export async function fetchPublicProductsByDistilleryId(
+  distilleryId: string,
+  limitCount = 6,
+  afterProductId?: string,
+): Promise<ProductPublic[]> {
   const safeId = String(distilleryId || "").trim();
   if (!safeId) return [];
-  return dedupe(`productsByDistillery:${safeId}:${limitCount}`, async () => {
+  const after = String(afterProductId || "").trim();
+  return dedupe(`productsByDistillery:${safeId}:${limitCount}:${after}`, async () => {
     try {
-      const cacheKey = `rakivinum_cache_products_by_distillery_${safeId}_${limitCount}_v1`;
+      const cacheKey = `rakivinum_cache_products_by_distillery_${safeId}_${limitCount}_${after || "_0"}_v2`;
       const cached = readCache<ProductPublic[]>(cacheKey);
       if (cached) return cached;
 
       const edgeRows = await fetchEdgeItems<ProductPublic>(
         `/api/public/products-by-distillery/${encodeURIComponent(safeId)}`,
         limitCount,
+        after ? { after } : undefined,
       );
       if (Array.isArray(edgeRows)) {
         const rows = edgeRows.filter(
@@ -541,7 +570,10 @@ export async function fetchPublicProductsByDistilleryId(distilleryId: string, li
         return rows;
       }
       if (DISABLE_DIRECT_FIRESTORE_READS) return readCache<ProductPublic[]>(cacheKey) || [];
-      const snap = await getDocs(query(collection(db, "products"), where("distilleryId", "==", safeId), limit(limitCount)));
+      const constraints: QueryConstraint[] = [where("distilleryId", "==", safeId), orderBy(documentId())];
+      if (after) constraints.push(startAfter(doc(db, "products", after)));
+      constraints.push(limit(limitCount));
+      const snap = await getDocs(query(collection(db, "products"), ...constraints));
       meterDbRead("dataService:products_by_distillery", snap.size);
       const rows = snap.docs
         .map((d) => ({ id: d.id, ...d.data() } as ProductPublic))
@@ -550,7 +582,7 @@ export async function fetchPublicProductsByDistilleryId(distilleryId: string, li
       return rows;
     } catch (err) {
       if (isQuotaError(err)) {
-        const cacheKey = `rakivinum_cache_products_by_distillery_${safeId}_${limitCount}_v1`;
+        const cacheKey = `rakivinum_cache_products_by_distillery_${safeId}_${limitCount}_${after || "_0"}_v2`;
         return readCache<ProductPublic[]>(cacheKey) || [];
       }
       throw err;
