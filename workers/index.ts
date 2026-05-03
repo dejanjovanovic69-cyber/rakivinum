@@ -368,7 +368,24 @@ function asText(value: unknown): string | undefined {
 function sanitizeImageUrl(value: unknown): string | undefined {
   const v = asText(value);
   if (!v) return undefined;
+  // Inline base64 blows up JSON, edge cache, and bandwidth; public responses should use https/storage URLs.
+  if (/^\s*data:/i.test(v)) return undefined;
   return v;
+}
+
+function sanitizeProductDocForPublicJson(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    bottleImageUrl: sanitizeImageUrl(row.bottleImageUrl),
+    image: sanitizeImageUrl(row.image),
+  };
+}
+
+function sanitizeDistilleryDocForPublicJson(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    logoUrl: sanitizeImageUrl(row.logoUrl),
+  };
 }
 
 function toDistilleryListItem(row: Record<string, unknown>): Record<string, unknown> {
@@ -1123,12 +1140,13 @@ export default {
           const id = decodeURIComponent(url.pathname.replace("/api/public/product/", "").trim());
           if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
           const row = await fetchDocumentById(env, "products", id);
-          const item = row &&
+          const item =
+            row &&
             row.isApproved !== false &&
             row.isArchivedByDistillery !== true &&
             row.publicLabelDisabled !== true
-            ? row
-            : null;
+              ? sanitizeProductDocForPublicJson(row)
+              : null;
           return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
         });
       }
@@ -1149,7 +1167,7 @@ export default {
           const distilleryRaw = distilleryId ? await fetchDocumentById(env, "distilleries", distilleryId) : null;
           const distillery =
             distilleryRaw && distilleryRaw.isArchived !== true && distilleryRaw.isVerified === true
-              ? distilleryRaw
+              ? sanitizeDistilleryDocForPublicJson(distilleryRaw)
               : null;
           const reviewRows = await fetchCollectionWhereEquals(env, "ratings", "productId", id, 8);
           const reviews = reviewRows
@@ -1157,7 +1175,7 @@ export default {
             .map((r) => toProductRatingItem(r));
           return new Response(
             JSON.stringify({
-              product,
+              product: sanitizeProductDocForPublicJson(product),
               distillery,
               reviews,
             }),
