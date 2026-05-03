@@ -123,11 +123,17 @@ function emergencyEmptyPayload(pathname: string): string {
   return JSON.stringify({ items: [] });
 }
 
+type ServePublicCachedOpts = {
+  /** In-memory isolate cache TTL after a Firestore miss (default 3m). */
+  memTtlMs?: number;
+};
+
 async function servePublicCached(
   request: Request,
   env: Env,
   ctx: WorkerExecutionContext,
   handler: () => Promise<Response>,
+  opts?: ServePublicCachedOpts,
 ): Promise<Response> {
   const cacheUrl = new URL(request.url);
   // Keep only request-shaping params in cache key; drop noisy tracking params.
@@ -152,6 +158,8 @@ async function servePublicCached(
     const keysToDelete = Array.from(isolateCache.keys()).slice(0, 50);
     keysToDelete.forEach((k) => isolateCache.delete(k));
   }
+
+  const memTtlAfterMiss = opts?.memTtlMs ?? 180_000;
 
   const memHit = isolateCache.get(normalizedUrl);
   if (memHit && now < memHit.expiresAt) {
@@ -206,7 +214,7 @@ async function servePublicCached(
   const fresh = await handler();
   if (fresh.ok) {
     const bodyText = await fresh.clone().text();
-    isolateCache.set(normalizedUrl, { data: bodyText, expiresAt: now + 180_000 });
+    isolateCache.set(normalizedUrl, { data: bodyText, expiresAt: now + memTtlAfterMiss });
     if (env.FIRESTORE_CACHE) {
       ctx.waitUntil(
         env.FIRESTORE_CACHE.put(kvKey, bodyText, { expirationTtl: KV_CACHE_TTL_SECONDS }).catch((err) => {
@@ -745,8 +753,13 @@ export default {
       }
 
       if (url.pathname === "/api/public/daily-recommendations") {
-        return servePublicCached(request, env, ctx, async () => {
-          const rows = await fetchCollection(env, "products", 60);
+        return servePublicCached(
+          request,
+          env,
+          ctx,
+          async () => {
+          // listDocuments bills one read per returned doc; we only need a modest pool for date-seeded picks.
+          const rows = await fetchCollection(env, "products", 40);
           const eligible = rows.filter(
             (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
           );
@@ -766,7 +779,9 @@ export default {
             }),
             { headers: jsonHeaders },
           );
-        });
+        },
+          { memTtlMs: 900_000 },
+        );
       }
 
       if (url.pathname === "/api/public/products-by-ids") {
