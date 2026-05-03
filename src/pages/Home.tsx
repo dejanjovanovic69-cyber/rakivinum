@@ -21,10 +21,27 @@ type ProductLite = {
   averageRating?: number;
 };
 
-/** Na početnoj mali tile: često je `image` bolji/konzistentniji od `bottleImageUrl` (stari base64 u boci, drugačiji crop). Isti red kao na Label hero kad nema eksplicitnog thumb polja. */
+/** Viši skor = verovatnije thumbnail / CDN varijanta — bolje u malom kvadratu. */
+function thumbUrlPreferenceScore(u: string): number {
+  const lower = u.toLowerCase();
+  let n = 0;
+  if (lower.includes("thumb")) n += 4;
+  if (lower.includes("resize") || lower.includes("width=") || lower.includes("w=")) n += 2;
+  if (lower.includes("_200") || lower.includes("200x") || lower.includes("x200") || lower.includes("400")) n += 1;
+  return n;
+}
+
+/** Mali tile na Home: bira između `image` i `bottleImageUrl` (kad oba postoje) po heuristici + podrazumevano `image`. */
 function pickProductThumbSrc(p: Pick<ProductLite, "id" | "image" | "bottleImageUrl" | "type">): string {
   const a = String(p.image || "").trim();
   const b = String(p.bottleImageUrl || "").trim();
+  if (a && b) {
+    const sa = thumbUrlPreferenceScore(a);
+    const sb = thumbUrlPreferenceScore(b);
+    if (sa > sb) return a;
+    if (sb > sa) return b;
+    return a;
+  }
   const primary = a || b;
   if (primary) return primary;
   const seed = encodeURIComponent(p.type || "rakivinum") + "-" + encodeURIComponent(p.id || "p");
@@ -102,7 +119,7 @@ export default function Home() {
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
     const visitorId = localStorage.getItem("rakivinum_visitor_id");
-    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v1` : `rakivinum_cache_home_bundle_anon_v1`;
+    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v3` : `rakivinum_cache_home_bundle_anon_v3`;
 
     const applyBundle = (b: HomeBundlePublic) => {
       const clubs = b.memberships
@@ -341,11 +358,13 @@ export default function Home() {
               >
                 <div className="card-soft card-elevated card-interactive border-gold-500/25 p-4">
                   <div className="flex items-center gap-4">
-                    <div className="w-16 h-16 rounded-xl overflow-hidden bg-black border border-white/10 shrink-0">
+                    <div className="h-[4.5rem] w-[4.5rem] rounded-xl overflow-hidden bg-black border border-white/10 shrink-0">
                       <img
                         src={pickProductThumbSrc(recommendedRakija)}
                         alt="Rakija dana"
-                        className="h-full w-full object-contain object-center p-0.5 media-crisp"
+                        className="h-full w-full object-cover object-center media-crisp"
+                        loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         onError={(e) => {
                           const el = e.target as HTMLImageElement;
@@ -371,11 +390,13 @@ export default function Home() {
               >
                 <div className="card-soft card-elevated card-interactive border-purple-500/25 p-4 hover:border-purple-500/50">
                   <div className="flex items-center gap-4">
-                    <div className="w-16 h-16 rounded-xl overflow-hidden bg-black border border-white/10 shrink-0">
+                    <div className="h-[4.5rem] w-[4.5rem] rounded-xl overflow-hidden bg-black border border-white/10 shrink-0">
                       <img
                         src={pickProductThumbSrc(recommendedVino)}
                         alt="Vino dana"
-                        className="h-full w-full object-contain object-center p-0.5 media-crisp"
+                        className="h-full w-full object-cover object-center media-crisp"
+                        loading="lazy"
+                        decoding="async"
                         referrerPolicy="no-referrer"
                         onError={(e) => {
                           const el = e.target as HTMLImageElement;
