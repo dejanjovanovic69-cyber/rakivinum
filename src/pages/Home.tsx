@@ -1,6 +1,6 @@
 import { ArrowRight, Trophy, Droplet, Flame, ArrowUpRight, Sparkles, Star, Clock, Download, ShieldAlert, X, Gift, Ticket, CheckCircle2 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { auth } from "../lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
 import { cn } from "../lib/utils";
@@ -78,6 +78,7 @@ export default function Home() {
   const [activeActions, setActiveActions] = useState<ClubActionLite[]>([]);
   const [distilleryMap, setDistilleryMap] = useState<Record<string, string>>({});
   const [quotaExceeded, setQuotaExceeded] = useState(false);
+  const homeBundleRefreshInFlight = useRef(false);
   const toDateSafe = (value: unknown): Date => {
     if (value && typeof (value as { toDate?: () => Date }).toDate === "function") {
       const d = (value as { toDate?: () => Date }).toDate?.();
@@ -131,6 +132,8 @@ export default function Home() {
     }
 
     const refreshBundle = async () => {
+      if (homeBundleRefreshInFlight.current) return;
+      homeBundleRefreshInFlight.current = true;
       try {
         const b = await fetchPublicHomeBundle(visitorId);
         if (b) applyBundle(b);
@@ -141,6 +144,7 @@ export default function Home() {
         if (stale) applyBundle(stale);
       } finally {
         setIsLoadingRec(false);
+        homeBundleRefreshInFlight.current = false;
       }
     };
 

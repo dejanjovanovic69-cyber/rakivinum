@@ -864,18 +864,18 @@ export default {
             const visitorRaw = String(url.searchParams.get("visitor") || "").trim();
             let membershipItems: Record<string, unknown>[] = [];
             if (visitorRaw) {
-              const mRows = await fetchCollectionWhereEquals(env, "club_memberships", "visitorId", visitorRaw, 24);
+              const mRows = await fetchCollectionWhereEquals(env, "club_memberships", "visitorId", visitorRaw, 12);
               membershipItems = mRows.map((r) => toClubMembershipItem(r));
             }
 
-            const clubRows = await fetchCollection(env, "club_actions", 22);
+            const clubRows = await fetchCollection(env, "club_actions", 14);
             const actions = clubRows
               .filter((r) => r.isActive === true)
               .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-              .slice(0, 20)
+              .slice(0, 12)
               .map((r) => toClubActionItem(r));
 
-            const productRows = await fetchCollection(env, "products", 16);
+            const productRows = await fetchCollection(env, "products", 8);
             const daily = dailyRecommendationsFromRows(productRows);
 
             const distilleryIds = Array.from(
@@ -884,7 +884,7 @@ export default {
                   .map((a) => String((a as { distilleryId?: string }).distilleryId || "").trim())
                   .filter((id) => id.length > 0),
               ),
-            ).slice(0, 20);
+            ).slice(0, 6);
             const distilleryNames: Record<string, string> = {};
             if (distilleryIds.length > 0) {
               const dRows = await Promise.all(distilleryIds.map((id) => fetchDocumentById(env, "distilleries", id)));
@@ -916,7 +916,7 @@ export default {
           env,
           ctx,
           async () => {
-            const rows = await fetchCollection(env, "products", 16);
+            const rows = await fetchCollection(env, "products", 8);
             const daily = dailyRecommendationsFromRows(rows);
             return new Response(JSON.stringify(daily), { headers: jsonHeaders });
           },
