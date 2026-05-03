@@ -117,7 +117,8 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 
 | Read | Napomena |
 |------|----------|
-| `distilleries` po `ownerId` / `email`, `products`, `ratings`, `scans`, `club_actions`, `club_memberships` | Vlasnički dashboard — tipično ostaje Firestore; opciono Worker sa **service auth** u budućnosti, ne javni GET. |
+| `distilleries` po `ownerId` / `email`, `products`, `ratings`, `scans` | Vlasnički dashboard — ostaje Firestore (ograničeni feed-i). |
+| `club_actions` + broj članova kluba | **Panel kluba:** `fetchPublicClubActionsForDistillery` i `fetchPublicClubMembershipCount` (Worker-first + keš / isti fallback kao javna destilerija), umesto direktnog `getDocs`/`getCountFromServer` na klijentu. |
 
 ---
 
@@ -125,7 +126,8 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 
 | Read | Napomena |
 |------|----------|
-| Skupi upiti: `products`, `ratings` (uklj. `in` chunk), `club_memberships` | Admin kontekst — ostaje Firestore ili budući zaštićeni backend. |
+| Skupi upiti: `products`, `ratings` (uklj. `in` chunk) | Admin kontekst — ostaje Firestore. |
+| Broj članova kluba | **`fetchPublicClubMembershipCount(distilleryId)`** — Worker-first + keš, umesto `getCountFromServer` na celoj `club_memberships` grani. |
 
 ---
 

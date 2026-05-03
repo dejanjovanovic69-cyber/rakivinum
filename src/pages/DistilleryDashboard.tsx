@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "../lib/firebase";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
-import { collection, query, where, getDocs, orderBy, Timestamp, addDoc, serverTimestamp, doc, updateDoc, getCountFromServer, limit } from "firebase/firestore";
+import { collection, query, where, getDocs, orderBy, Timestamp, addDoc, serverTimestamp, doc, updateDoc, limit } from "firebase/firestore";
 import { QRCodeCanvas } from "qrcode.react";
 import { 
   BarChart3, 
@@ -58,6 +58,7 @@ import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { readCache, writeCache } from "../lib/resilience";
 import { meterDbRead } from "../lib/requestMeter";
+import { fetchPublicClubActionsForDistillery, fetchPublicClubMembershipCount } from "../lib/dataService";
 
 const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality = 0.6): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -211,15 +212,8 @@ export default function DistilleryDashboard() {
     const refreshClubPanel = async () => {
       if (!shouldRunRefresh(`dist-dashboard:${distillery.id}:club-panel`, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
       try {
-        const qActions = query(
-          collection(db, 'club_actions'),
-          where('distilleryId', '==', distillery.id),
-          orderBy('createdAt', 'desc'),
-          limit(40),
-        );
-        const actionsSnap = await getDocs(qActions);
-        meterDbRead("distDashboard:club_actions", actionsSnap.size);
-        const nextActions = actionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+        const rowActions = await fetchPublicClubActionsForDistillery(distillery.id, 40);
+        const nextActions = rowActions.map((d) => ({ id: d.id, ...d }));
         if (!cancelled) {
           setClubActions(nextActions);
         }
@@ -233,13 +227,7 @@ export default function DistilleryDashboard() {
       }
 
       try {
-        const qMembers = query(
-          collection(db, 'club_memberships'),
-          where('distilleryId', '==', distillery.id),
-        );
-        const countSnap = await getCountFromServer(qMembers);
-        meterDbRead("distDashboard:club_memberships_count", 1);
-        const nextCount = countSnap.data().count;
+        const nextCount = await fetchPublicClubMembershipCount(distillery.id);
         if (!cancelled) setClubMembersCount(nextCount);
         writeCache(memberCountCacheKey, nextCount, REFRESH_INTERVAL.USER_LIGHT_1H);
       } catch (err) {

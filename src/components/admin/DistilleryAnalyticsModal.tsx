@@ -6,10 +6,10 @@ import {
   getDocs,
   orderBy,
   limit,
-  getCountFromServer,
   type QuerySnapshot,
 } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { fetchPublicClubMembershipCount } from '../../lib/dataService';
 import { X, TrendingUp, Star, Loader2, Sparkles, Download, BarChart2, ArrowLeft, Info, FileSpreadsheet } from 'lucide-react';
 import { 
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, 
@@ -149,9 +149,7 @@ export default function DistilleryAnalyticsModal({ distillery, onClose }: Analyt
       setPlatformAvg(benchmark);
 
       try {
-        const mQ = query(collection(db, 'club_memberships'), where('distilleryId', '==', distillery.id));
-        const cnt = await getCountFromServer(mQ);
-        setClubMemberCount(cnt.data().count);
+        setClubMemberCount(await fetchPublicClubMembershipCount(distillery.id));
       } catch (e) {
         console.warn('Broj članova kluba nije učitan', e);
         setClubMemberCount(0);
