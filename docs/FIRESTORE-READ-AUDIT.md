@@ -138,6 +138,7 @@ Napomena: za public list helper-e prazan edge odgovor (`items: []`) tretira se k
 | Read | Napomena |
 |------|----------|
 | Masovni listovi: `distilleries`, `products`, `eventProposals`, `community_links`, `community_events`, `ratings`, `blocked_users`, `licenses`, … | Namerno na Firestore + pravila. Migracija = Cloud Function / Worker sa admin JWT, ne public API. |
+| Lista destilerija + proizvoda (tab „destilerije“) | **`readCache`/`writeCache`** (10m) + **`shouldRunRefresh`** za mrežni `getDocs` samo kad nema svežeg keša ili je prošao interval; posle mutacija **`fetchDistilleries({ force: true })`** / **`fetchAdminProducts({ force: true })`**. |
 
 ---
 

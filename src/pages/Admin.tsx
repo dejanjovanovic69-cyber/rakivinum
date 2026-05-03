@@ -31,6 +31,9 @@ import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
 import { DISABLE_ONLINE_PRESENCE_TRACKING } from "../lib/presence";
+import { readCache, writeCache } from "../lib/resilience";
+
+const ADMIN_DISTILLERIES_LIST_CACHE_KEY = "rakivinum_cache_admin_distilleries_list_v1";
 
 // Helper function to resize and compress image to base64
 const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality: number = 0.6): Promise<string> => {
@@ -767,12 +770,28 @@ export default function Admin() {
     el.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const fetchDistilleries = async () => {
+  const fetchDistilleries = async (opts?: { force?: boolean }) => {
     try {
+      if (!opts?.force) {
+        const cached = readCache<DistilleryListItem[]>(ADMIN_DISTILLERIES_LIST_CACHE_KEY);
+        if (cached != null) {
+          setDistilleries(cached);
+          setSelectedDistilleryId((current) => {
+            if (current === "all") return current;
+            if (current && cached.some((d) => d.id === current)) return current;
+            return cached[0]?.id || "";
+          });
+          if (!shouldRunRefresh("admin:distilleries:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+            return;
+          }
+        }
+      }
+
       const snap = await getDocs(query(collection(db, 'distilleries'), limit(ADMIN_DISTILLERIES_LIMIT)));
       meterDbRead("admin:distilleries", snap.size);
       const list: DistilleryListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as DistilleryListItem) }));
       list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
+      writeCache(ADMIN_DISTILLERIES_LIST_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setDistilleries(list);
       setSelectedDistilleryId((current) => {
         if (current === "all") return current;
@@ -784,17 +803,31 @@ export default function Admin() {
     }
   };
 
-  const fetchAdminProducts = async () => {
+  const fetchAdminProducts = async (opts?: { force?: boolean }) => {
     try {
       if (!selectedDistilleryId) {
         setAdminProducts([]);
         return;
       }
+      const allMode = selectedDistilleryId === "all" && isSuperAdminUser;
+      const productsCacheKey = `rakivinum_cache_admin_products_v2_${allMode ? "all" : selectedDistilleryId}`;
+      if (!opts?.force) {
+        const cached = readCache<ProductListItem[]>(productsCacheKey);
+        if (cached != null) {
+          setAdminProducts(cached);
+          if (!shouldRunRefresh(`admin:products:network:${productsCacheKey}`, REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+            return;
+          }
+        }
+      }
+
       // Super admin vidi sve ako želi, ili filtrira po izabranoj destileriji
       if (selectedDistilleryId === "all" && isSuperAdminUser) {
         const snap = await getDocs(query(collection(db, "products"), limit(ADMIN_PRODUCTS_ALL_LIMIT)));
         meterDbRead("admin:products_all", snap.size);
-        setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) })));
+        const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) }));
+        writeCache(productsCacheKey, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+        setAdminProducts(rows);
       } else {
         const q = query(
           collection(db, "products"),
@@ -803,7 +836,9 @@ export default function Admin() {
         );
         const snap = await getDocs(q);
         meterDbRead("admin:products_by_distillery", snap.size);
-        setAdminProducts(snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) })));
+        const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) }));
+        writeCache(productsCacheKey, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+        setAdminProducts(rows);
       }
     } catch (err) {
       console.error("Greška pri učitavanju proizvoda", err);
@@ -1393,8 +1428,8 @@ export default function Admin() {
           cursor = last;
         }
       }
-      fetchDistilleries();
-      fetchAdminProducts();
+      void fetchDistilleries({ force: true });
+      void fetchAdminProducts({ force: true });
     } catch (err) {
       console.error("Greška pri promeni statusa:", err);
       alert("Niste ovlašćeni za ovu akciju.");
@@ -1478,7 +1513,7 @@ export default function Admin() {
       setDistilleryData({ id: "", name: "", region: "Beograd i okolina", website: "", email: "", description: "", logoUrl: "", pib: "", address: "", city: "", mapsUrl: "", trialEndsAt: "" });
        clearGallerySlots();
        try {
-         await fetchDistilleries();
+         await fetchDistilleries({ force: true });
        } catch (e) {
          console.warn("Refresh list failed", e);
        }
@@ -1560,8 +1595,8 @@ export default function Admin() {
       await deleteDoc(doc(db, 'distilleries', id));
       
       setDistilleryToDelete(null);
-      fetchDistilleries();
-      fetchAdminProducts();
+      void fetchDistilleries({ force: true });
+      void fetchAdminProducts({ force: true });
       setManualResult("Destilerija i sve njene rakije su uspešno obrisane.");
     } catch (err: unknown) {
       console.error(err);
@@ -1622,8 +1657,8 @@ export default function Admin() {
       }
 
       setManualResult(nextArchived ? "Destilerija je arhivirana." : "Destilerija je vraćena iz arhive.");
-      fetchDistilleries();
-      fetchAdminProducts();
+      void fetchDistilleries({ force: true });
+      void fetchAdminProducts({ force: true });
     } catch (err: unknown) {
       console.error(err);
       setManualResult("Greška pri arhiviranju: " + ((err as { message?: string } | null)?.message || "Nepoznata greška."));
@@ -1694,7 +1729,7 @@ export default function Admin() {
         setManualResult("Nova rakija uspešno dodata u bazu!");
       }
       setFormData({ name: "", type: "", description: "", alcoholPercentage: 40, bottleImageUrl: "", barcode: "" });
-      fetchAdminProducts();
+      void fetchAdminProducts({ force: true });
     } catch (error: unknown) {
       setManualResult("Greška pri unosu: " + ((error as { message?: string } | null)?.message || "Nepoznata greška."));
     } finally {
@@ -1706,7 +1741,7 @@ export default function Admin() {
     try {
       await deleteDoc(doc(db, 'products', id));
       setProductToDelete(null);
-      fetchAdminProducts();
+      void fetchAdminProducts({ force: true });
     } catch(err) {
       console.error(err);
       setManualResult("Greška pri brisanju: Nemate dozvolu.");
