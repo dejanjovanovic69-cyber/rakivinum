@@ -45,11 +45,19 @@ const RATE_LIMIT_MAX_REQUESTS = 360;
 /** Browser/edge cache; public catalog hits should mostly avoid Firestore repeat reads. */
 const EDGE_CACHE_TTL_SECONDS = 3600;
 const KV_CACHE_TTL_SECONDS = 6 * 60 * 60;
+/** Workers Cache API (POP); many concurrent clients share one cached body per normalized URL. */
+const CF_CACHE_S_MAXAGE_SECONDS = 3600;
 const EMERGENCY_CACHE_ONLY_MODE = false;
 
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
 let rateLimitState = new Map<string, { count: number; resetAt: number }>();
 let isolateCache = new Map<string, { data: string; expiresAt: number }>();
+/** One Firestore round-trip per normalized URL per isolate while the promise is in flight. */
+const publicInFlight = new Map<string, Promise<PublicFetchCoalesceResult>>();
+
+type PublicFetchCoalesceResult =
+  | { ok: true; status: number; bodyText: string }
+  | { ok: false; status: number; bodyText: string };
 
 function getClientIp(request: Request): string {
   const fromCf = String(request.headers.get("cf-connecting-ip") || "").trim();
@@ -189,6 +197,25 @@ async function servePublicCached(
     }
   }
 
+  const cfCacheReq = new Request(normalizedUrl, { method: "GET" });
+  try {
+    const cfHit = await caches.default.match(cfCacheReq);
+    if (cfHit) {
+      const bodyText = await cfHit.text();
+      isolateCache.set(normalizedUrl, { data: bodyText, expiresAt: now + Math.min(memTtlAfterMiss, 120_000) });
+      return new Response(bodyText, {
+        status: cfHit.status,
+        headers: {
+          ...jsonHeaders,
+          "cache-control": `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=${CF_CACHE_S_MAXAGE_SECONDS}`,
+          "x-cache-status": "cf-hit",
+        },
+      });
+    }
+  } catch (err) {
+    console.warn("caches.default.match failed:", err);
+  }
+
   if (EMERGENCY_CACHE_ONLY_MODE && isEmergencyCacheOnlyPath(cacheUrl.pathname)) {
     const staleMem = isolateCache.get(normalizedUrl);
     if (staleMem) {
@@ -211,27 +238,69 @@ async function servePublicCached(
     });
   }
 
-  const fresh = await handler();
-  if (fresh.ok) {
-    const bodyText = await fresh.clone().text();
-    isolateCache.set(normalizedUrl, { data: bodyText, expiresAt: now + memTtlAfterMiss });
-    if (env.FIRESTORE_CACHE) {
-      ctx.waitUntil(
-        env.FIRESTORE_CACHE.put(kvKey, bodyText, { expirationTtl: KV_CACHE_TTL_SECONDS }).catch((err) => {
-          console.warn("KV cache put failed:", err);
-        }),
-      );
-    }
-    return new Response(bodyText, {
-      status: fresh.status,
-      headers: {
-        ...jsonHeaders,
-        "cache-control": `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=3600`,
-        "x-cache-status": "miss-store",
-      },
+  let inFlight = publicInFlight.get(normalizedUrl);
+  if (!inFlight) {
+    inFlight = (async (): Promise<PublicFetchCoalesceResult> => {
+      try {
+        const fresh = await handler();
+        if (!fresh.ok) {
+          const bodyText = await fresh.text();
+          return { ok: false, status: fresh.status, bodyText };
+        }
+        const bodyText = await fresh.text();
+        const t = Date.now();
+        isolateCache.set(normalizedUrl, { data: bodyText, expiresAt: t + memTtlAfterMiss });
+        if (env.FIRESTORE_CACHE) {
+          ctx.waitUntil(
+            env.FIRESTORE_CACHE.put(kvKey, bodyText, { expirationTtl: KV_CACHE_TTL_SECONDS }).catch((err) => {
+              console.warn("KV cache put failed:", err);
+            }),
+          );
+        }
+        const cfStoreHeaders = new Headers({
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=${CF_CACHE_S_MAXAGE_SECONDS}`,
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET,POST,OPTIONS",
+          "access-control-allow-headers": "content-type,authorization",
+        });
+        ctx.waitUntil(
+          caches.default
+            .put(cfCacheReq, new Response(bodyText, { status: 200, headers: cfStoreHeaders }))
+            .catch((err) => {
+              console.warn("caches.default.put failed:", err);
+            }),
+        );
+        return { ok: true, status: fresh.status, bodyText };
+      } catch (err) {
+        console.warn("servePublicCached handler error:", err);
+        return {
+          ok: false,
+          status: 500,
+          bodyText: JSON.stringify({ error: "internal", message: "Temporary failure fetching public data." }),
+        };
+      } finally {
+        publicInFlight.delete(normalizedUrl);
+      }
+    })();
+    publicInFlight.set(normalizedUrl, inFlight);
+  }
+
+  const coalesced = await inFlight;
+  if (!coalesced.ok) {
+    return new Response(coalesced.bodyText, {
+      status: coalesced.status,
+      headers: jsonHeaders,
     });
   }
-  return withDefaultHeaders(fresh);
+  return new Response(coalesced.bodyText, {
+    status: coalesced.status,
+    headers: {
+      ...jsonHeaders,
+      "cache-control": `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=3600`,
+      "x-cache-status": "miss-store",
+    },
+  });
 }
 
 function decodeFirestoreValue(value: FirestoreValue | undefined): unknown {
