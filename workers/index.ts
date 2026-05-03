@@ -804,6 +804,18 @@ export default {
         });
       }
 
+      if (url.pathname === "/" || url.pathname === "") {
+        return new Response(
+          JSON.stringify({
+            service: "rakivinum-api",
+            hint: "This host is the JSON API only (no HTML). Use the main site in a browser.",
+            health: "/health",
+            example: "/api/public/home-bundle",
+          }),
+          { status: 200, headers: jsonHeaders },
+        );
+      }
+
       if (url.pathname.startsWith("/api/public/")) {
         if (isRateLimited(request, url)) {
           return new Response(
