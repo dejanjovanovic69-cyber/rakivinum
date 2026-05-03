@@ -254,12 +254,18 @@ async function servePublicCached(
 
   let inFlight = publicInFlight.get(normalizedUrl);
   if (!inFlight) {
-    inFlight = (async (): Promise<PublicFetchCoalesceResult> => {
+    let resolveCoalesce!: (value: PublicFetchCoalesceResult) => void;
+    inFlight = new Promise<PublicFetchCoalesceResult>((res) => {
+      resolveCoalesce = res;
+    });
+    publicInFlight.set(normalizedUrl, inFlight);
+    void (async () => {
       try {
         const fresh = await handler();
         if (!fresh.ok) {
           const bodyText = await fresh.text();
-          return { ok: false, status: fresh.status, bodyText };
+          resolveCoalesce({ ok: false, status: fresh.status, bodyText });
+          return;
         }
         const bodyText = await fresh.text();
         const t = Date.now();
@@ -285,19 +291,18 @@ async function servePublicCached(
               console.warn("caches.default.put failed:", err);
             }),
         );
-        return { ok: true, status: fresh.status, bodyText };
+        resolveCoalesce({ ok: true, status: fresh.status, bodyText });
       } catch (err) {
         console.warn("servePublicCached handler error:", err);
-        return {
+        resolveCoalesce({
           ok: false,
           status: 500,
           bodyText: JSON.stringify({ error: "internal", message: "Temporary failure fetching public data." }),
-        };
+        });
       } finally {
         publicInFlight.delete(normalizedUrl);
       }
     })();
-    publicInFlight.set(normalizedUrl, inFlight);
   }
 
   const coalesced = await inFlight;

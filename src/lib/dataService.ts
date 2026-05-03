@@ -42,11 +42,29 @@ const inFlight = new Map<string, Promise<unknown>>();
 const EDGE_API_BASE = String(import.meta.env.VITE_EDGE_API_BASE || "").trim();
 const DISABLE_DIRECT_FIRESTORE_READS = true;
 
+/**
+ * Single-flight per key. The promise MUST be registered before `factory` runs, otherwise two
+ * concurrent callers can both miss the map and each run a full Firestore/edge path (read spikes).
+ */
 function dedupe<T>(key: string, factory: () => Promise<T>): Promise<T> {
   const existing = inFlight.get(key);
   if (existing) return existing as Promise<T>;
-  const created = factory().finally(() => inFlight.delete(key));
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const created = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
   inFlight.set(key, created);
+  void (async () => {
+    try {
+      resolve(await factory());
+    } catch (err) {
+      reject(err);
+    } finally {
+      inFlight.delete(key);
+    }
+  })();
   return created;
 }
 
