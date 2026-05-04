@@ -12,7 +12,7 @@ import {
   fetchPublicProducts,
   stripHttpProductImgUrl,
 } from "../lib/dataService";
-import { RAKIVINUM_MARK_FALLBACK } from "../lib/imageFallback";
+import { RAKIVINUM_MARK_FALLBACK, isImgFallbackUrl } from "../lib/imageFallback";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
 
@@ -630,7 +630,7 @@ export default function Community() {
                         className="h-full w-full object-contain object-center media-crisp p-0.5"
                         onError={(e) => {
                           const el = e.target as HTMLImageElement;
-                          if (el.src.includes("/rv-mark.svg")) return;
+                          if (isImgFallbackUrl(el.src)) return;
                           el.src = RAKIVINUM_MARK_FALLBACK;
                         }}
                         alt={prod.name} />
@@ -790,7 +790,7 @@ export default function Community() {
                                   className="h-full w-full object-contain object-center p-0.5 media-crisp group-hover:scale-[1.03] transition-transform duration-500"
                                   onError={(e) => {
                                     const el = e.target as HTMLImageElement;
-                                    if (el.src.includes("/rv-mark.svg")) return;
+                                    if (isImgFallbackUrl(el.src)) return;
                                     el.src = RAKIVINUM_MARK_FALLBACK;
                                   }}
                                 />
@@ -1015,7 +1015,7 @@ export default function Community() {
                               className="w-full h-36 object-contain object-center p-2 media-crisp"
                               onError={(e) => {
                                 const el = e.target as HTMLImageElement;
-                                if (el.src.includes("/rv-mark.svg")) return;
+                                if (isImgFallbackUrl(el.src)) return;
                                 el.src = RAKIVINUM_MARK_FALLBACK;
                               }}
                             />

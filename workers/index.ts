@@ -459,13 +459,32 @@ function firstSanitizedGalleryUrl(row: Record<string, unknown>): string | undefi
   return undefined;
 }
 
+/** Prvi N HTTPS URL-ova iz galerije (za listne odgovore — klijent može da izabere drugi ako prvi ne učita). */
+function sanitizedGalleryHttpsList(row: Record<string, unknown>, max: number): string[] {
+  const out: string[] = [];
+  const g = row.galleryImages;
+  if (!Array.isArray(g)) return out;
+  for (const x of g) {
+    const u = galleryImageUrlFromUnknown(x);
+    if (u && !out.includes(u)) out.push(u);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 /** Dnevna preporuka na Home: ako nema HTTP slike u glavnim poljima, uzmi prvi `galleryImages` (https). */
 function toProductListItemWithDailyThumb(row: Record<string, unknown>): Record<string, unknown> {
   const base = toProductListItem(row);
-  if (sanitizeImageUrl(base.image) || sanitizeImageUrl(base.bottleImageUrl)) return base;
-  const gal = firstSanitizedGalleryUrl(row);
-  if (gal) return { ...base, image: gal };
-  return base;
+  const extras = sanitizedGalleryHttpsList(row, 6);
+  let merged: Record<string, unknown> = { ...base };
+  if (sanitizeImageUrl(base.image) || sanitizeImageUrl(base.bottleImageUrl)) {
+    // ostavi glavna polja
+  } else {
+    const gal = firstSanitizedGalleryUrl(row);
+    if (gal) merged = { ...merged, image: gal };
+  }
+  if (extras.length > 0) merged = { ...merged, galleryImages: extras };
+  return merged;
 }
 
 function toProductScannerHit(row: Record<string, unknown>): Record<string, unknown> {

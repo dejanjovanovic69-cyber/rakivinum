@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 120" role="img" aria-label="">
+  <rect width="80" height="120" rx="10" fill="#0f0f11"/>
+  <path
+    fill="none"
+    stroke="#c9a227"
+    stroke-width="1.8"
+    stroke-opacity="0.5"
+    d="M40 10c3 0 6 2 7 5l3 10v6c10 4 12 12 12 22l-2 52c0 7-6 12-15 12h-10c-9 0-15-5-15-12l-2-52c0-10 2-18 12-22v-6l3-10c1-3 4-5 7-5z"
+  />
+</svg>

@@ -14,7 +14,7 @@ import {
 } from "../lib/dataService";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
-import { RAKIVINUM_MARK_FALLBACK } from "../lib/imageFallback";
+import { RAKIVINUM_MARK_FALLBACK, isImgFallbackUrl } from "../lib/imageFallback";
 
 type ProductLite = {
   id: string;
@@ -47,7 +47,7 @@ function HomeDailyThumbImg({ product, alt }: { product: ProductLite; alt: string
         return;
       }
     }
-    if (!src.includes("/rv-mark.svg")) {
+    if (!isImgFallbackUrl(src)) {
       phaseRef.current = 2;
       setSrc(RAKIVINUM_MARK_FALLBACK);
     }
@@ -554,7 +554,7 @@ export default function Home() {
                     className="h-full w-full object-contain object-center p-1.5 media-crisp"
                     onError={(e) => {
                       const el = e.target as HTMLImageElement;
-                      if (el.src.includes("/rv-mark.svg")) return;
+                      if (isImgFallbackUrl(el.src)) return;
                       el.src = RAKIVINUM_MARK_FALLBACK;
                     }}
                   />

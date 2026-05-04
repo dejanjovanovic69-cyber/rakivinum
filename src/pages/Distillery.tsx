@@ -13,7 +13,9 @@ import {
   fetchPublicClubMembershipsByVisitorId,
   fetchPublicDistilleryById,
   fetchPublicProductsByDistilleryId,
+  stripHttpProductImgUrl,
 } from "../lib/dataService";
+import { RAKIVINUM_MARK_FALLBACK, isImgFallbackUrl } from "../lib/imageFallback";
 
 type DistilleryProfile = {
   id: string;
@@ -47,12 +49,37 @@ type ProductCard = {
   type?: string;
   image?: string;
   bottleImageUrl?: string;
+  galleryImages?: unknown[];
   alcoholPercentage?: number;
   averageRating?: number;
   isApproved?: boolean;
   isArchivedByDistillery?: boolean;
   publicLabelDisabled?: boolean;
 };
+
+function pickDistilleryProductThumb(p: ProductCard): string {
+  const a = stripHttpProductImgUrl(p.bottleImageUrl);
+  const b = stripHttpProductImgUrl(p.image);
+  if (a) return a;
+  if (b) return b;
+  const g = p.galleryImages;
+  if (Array.isArray(g)) {
+    for (const x of g) {
+      if (typeof x === "string") {
+        const s = stripHttpProductImgUrl(x);
+        if (s) return s;
+      }
+      if (x && typeof x === "object" && !Array.isArray(x)) {
+        const o = x as Record<string, unknown>;
+        for (const k of ["url", "src", "href", "image"] as const) {
+          const s = stripHttpProductImgUrl(o[k]);
+          if (s) return s;
+        }
+      }
+    }
+  }
+  return RAKIVINUM_MARK_FALLBACK;
+}
 
 function mergeDistilleryProductPages(prev: ProductCard[], more: ProductCard[]): ProductCard[] {
   const seen = new Set(prev.map((p) => p.id));
@@ -569,10 +596,14 @@ export default function Distillery() {
                            className="card-soft card-elevated card-interactive rounded-3xl p-4 flex flex-col items-center gap-3 cursor-pointer hover:border-gold-500/60 hover:scale-[1.02] text-center group shadow-md"
                          >
                            <div className="h-32 w-20 relative rounded-lg overflow-hidden bg-black group-hover:drop-shadow-[0_10px_15px_rgba(212,175,55,0.2)] transition-all">
-                             <img 
-                               src={prod.bottleImageUrl || prod.image || "https://picsum.photos/seed/rakivinum/200/200"}
-                              className="h-full w-full object-contain object-center p-1 media-crisp"
-                               onError={(e) => { (e.target as HTMLImageElement).src = 'https://picsum.photos/seed/rakivinum/200/200'; }}
+                             <img
+                               src={pickDistilleryProductThumb(prod)}
+                               className="h-full w-full object-contain object-center p-1 media-crisp"
+                               onError={(e) => {
+                                 const el = e.target as HTMLImageElement;
+                                 if (isImgFallbackUrl(el.src)) return;
+                                 el.src = RAKIVINUM_MARK_FALLBACK;
+                               }}
                                alt={prod.name}
                              />
                            </div>
@@ -604,10 +635,14 @@ export default function Distillery() {
                            className="card-soft card-elevated card-interactive rounded-3xl p-4 flex flex-col items-center gap-3 cursor-pointer hover:border-gold-500/60 hover:scale-[1.02] text-center group shadow-md"
                          >
                            <div className="h-32 w-20 relative rounded-lg overflow-hidden bg-black group-hover:drop-shadow-[0_10px_15px_rgba(212,175,55,0.2)] transition-all">
-                             <img 
-                               src={prod.bottleImageUrl || prod.image || "https://picsum.photos/seed/wine/200/200"}
-                              className="h-full w-full object-contain object-center p-1 media-crisp"
-                               onError={(e) => { (e.target as HTMLImageElement).src = 'https://picsum.photos/seed/wine/200/200'; }}
+                             <img
+                               src={pickDistilleryProductThumb(prod)}
+                               className="h-full w-full object-contain object-center p-1 media-crisp"
+                               onError={(e) => {
+                                 const el = e.target as HTMLImageElement;
+                                 if (isImgFallbackUrl(el.src)) return;
+                                 el.src = RAKIVINUM_MARK_FALLBACK;
+                               }}
                                alt={prod.name}
                              />
                            </div>
