@@ -14,6 +14,7 @@ import {
 } from "../lib/dataService";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { RAKIVINUM_MARK_FALLBACK } from "../lib/imageFallback";
 
 type ProductLite = {
   id: string;
@@ -35,8 +36,6 @@ function HomeDailyThumbImg({ product, alt }: { product: ProductLite; alt: string
     setSrc(pickHttpProductThumbForHome(product));
   }, [product.id, product.image, product.bottleImageUrl, product.type]);
 
-  const fallbackPicsum = `https://picsum.photos/seed/rakivinum-${encodeURIComponent(product.id)}/200/200`;
-
   const handleError = () => {
     const a = stripHttpProductImgUrl(product.image);
     const b = stripHttpProductImgUrl(product.bottleImageUrl);
@@ -48,9 +47,9 @@ function HomeDailyThumbImg({ product, alt }: { product: ProductLite; alt: string
         return;
       }
     }
-    if (src !== fallbackPicsum) {
+    if (!src.includes("/rv-mark.svg")) {
       phaseRef.current = 2;
-      setSrc(fallbackPicsum);
+      setSrc(RAKIVINUM_MARK_FALLBACK);
     }
   };
 
@@ -335,8 +334,7 @@ export default function Home() {
                  if (target.src.includes('logo-gold.png')) {
                    target.src = '/logo.png';
                  } else {
-                   // Final fallback if no local logo exists
-                   target.src = 'https://picsum.photos/seed/rakivinum-brand/600/400';
+                   target.src = RAKIVINUM_MARK_FALLBACK;
                  }
                }}
             />
@@ -551,14 +549,13 @@ export default function Home() {
               >
                 <div className="aspect-[2/3] rounded-xl overflow-hidden bg-black mb-2 border border-white/5">
                   <img
-                    src={
-                      stripHttpProductImgUrl(item.image) ||
-                      `https://picsum.photos/seed/${encodeURIComponent(item.id)}/200/300`
-                    }
+                    src={stripHttpProductImgUrl(item.image) || RAKIVINUM_MARK_FALLBACK}
                     alt={item.name}
                     className="h-full w-full object-contain object-center p-1.5 media-crisp"
                     onError={(e) => {
-                      (e.target as HTMLImageElement).src = `https://picsum.photos/seed/rakivinum/200/200`;
+                      const el = e.target as HTMLImageElement;
+                      if (el.src.includes("/rv-mark.svg")) return;
+                      el.src = RAKIVINUM_MARK_FALLBACK;
                     }}
                   />
                 </div>

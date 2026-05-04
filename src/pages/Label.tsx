@@ -14,6 +14,7 @@ import { logProductScan } from "../lib/logProductScan";
 import { readCache, writeCache } from "../lib/resilience";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { fetchPublicLabelView, stripHttpProductImgUrl } from "../lib/dataService";
+import { RAKIVINUM_MARK_FALLBACK } from "../lib/imageFallback";
 import { 
   RadarChart, 
   PolarGrid, 
@@ -75,7 +76,7 @@ function pickProductPrimaryImageUrl(p: ProductData): string {
   const a = stripHttpProductImgUrl(p.image);
   const b = stripHttpProductImgUrl(p.bottleImageUrl);
   const c = firstGalleryHttpFromProduct(p);
-  return a || b || c || "https://picsum.photos/seed/rakivinum/800/1000";
+  return a || b || c || RAKIVINUM_MARK_FALLBACK;
 }
 
 type DistilleryData = {
@@ -987,7 +988,7 @@ export default function Label() {
         productId: productData?.id,
         distilleryId: productData?.distilleryId || distilleryData?.id || "unknown",
         productName: productData?.name || "Rakija",
-        productImage: productData ? pickProductPrimaryImageUrl(productData) : "https://picsum.photos/seed/rakivinum/800/1000",
+        productImage: productData ? pickProductPrimaryImageUrl(productData) : RAKIVINUM_MARK_FALLBACK,
         rating: avgRating,
         reviewText: reviewText.trim() || null,
         userLocation: sanitizePublicLocation(userLocation),
@@ -1190,7 +1191,7 @@ export default function Label() {
                 className="h-full w-full object-contain object-center p-3 media-crisp"
                 referrerPolicy="no-referrer"
                 onError={(e) => {
-                  (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${encodeURIComponent(productData.type || "pice")}/800/1000`;
+                  (e.target as HTMLImageElement).src = RAKIVINUM_MARK_FALLBACK;
                 }}
               />
               <div className="absolute top-4 right-4 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-[10px] font-bold text-gold-500 uppercase tracking-widest">
@@ -1260,7 +1261,7 @@ export default function Label() {
                   className="h-full w-full object-contain object-center p-3 sm:p-4 media-crisp transition-transform duration-700 ease-out group-hover:scale-[1.03]"
                   referrerPolicy="no-referrer"
                   onError={(e) => {
-                    (e.target as HTMLImageElement).src = `https://picsum.photos/seed/${productData.type || 'pice'}/800/1000`;
+                    (e.target as HTMLImageElement).src = RAKIVINUM_MARK_FALLBACK;
                   }}
                 />
                 

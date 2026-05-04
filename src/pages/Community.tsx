@@ -12,6 +12,7 @@ import {
   fetchPublicProducts,
   stripHttpProductImgUrl,
 } from "../lib/dataService";
+import { RAKIVINUM_MARK_FALLBACK } from "../lib/imageFallback";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
 
@@ -89,7 +90,7 @@ function pickRatingListThumb(rating: RatingItem, catalog: ProductItem[]): string
   const fromProd =
     stripHttpProductImgUrl(prod?.bottleImageUrl) || stripHttpProductImgUrl(prod?.image);
   if (fromProd) return fromProd;
-  return `https://picsum.photos/seed/rakivinum_${encodeURIComponent(rating.productId)}/200/300`;
+  return RAKIVINUM_MARK_FALLBACK;
 }
 
 function formatRatingDate(value: RatingItem["createdAt"]): string {
@@ -625,9 +626,13 @@ export default function Community() {
                   <button key={prod.id} type="button" onClick={() => openLabelWithReturn(prod.id, searchReturnTo)}
                     className="card-elevated border border-white/8 rounded-[20px] p-3.5 flex flex-col items-center gap-2.5 text-center hover:border-gold-500/30 transition-all active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base">
                     <div className="w-16 h-20 rounded-xl bg-black/60 border border-gold-500/45 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.16)] flex items-center justify-center overflow-hidden">
-                      <img src={prod.bottleImageUrl || prod.image || `https://picsum.photos/seed/${prod.id}/200/300`}
+                      <img src={prod.bottleImageUrl || prod.image || RAKIVINUM_MARK_FALLBACK}
                         className="h-full w-full object-contain object-center media-crisp p-0.5"
-                        onError={(e) => { (e.target as HTMLImageElement).src = "https://picsum.photos/seed/rakivinum/200/200"; }}
+                        onError={(e) => {
+                          const el = e.target as HTMLImageElement;
+                          if (el.src.includes("/rv-mark.svg")) return;
+                          el.src = RAKIVINUM_MARK_FALLBACK;
+                        }}
                         alt={prod.name} />
                     </div>
                     <div className="min-w-0 w-full">
@@ -784,8 +789,9 @@ export default function Community() {
                                   referrerPolicy="no-referrer"
                                   className="h-full w-full object-contain object-center p-0.5 media-crisp group-hover:scale-[1.03] transition-transform duration-500"
                                   onError={(e) => {
-                                    (e.target as HTMLImageElement).src =
-                                      `https://picsum.photos/seed/rakivinum_${encodeURIComponent(rating.productId)}/200/300`;
+                                    const el = e.target as HTMLImageElement;
+                                    if (el.src.includes("/rv-mark.svg")) return;
+                                    el.src = RAKIVINUM_MARK_FALLBACK;
                                   }}
                                 />
                               </div>
@@ -1004,9 +1010,14 @@ export default function Community() {
                             title="Otvori etiketu"
                           >
                             <img
-                              src={p.bottleImageUrl || p.image || `https://picsum.photos/seed/${p.id}/220/320`}
+                              src={p.bottleImageUrl || p.image || RAKIVINUM_MARK_FALLBACK}
                               alt={p.name || "Piće"}
                               className="w-full h-36 object-contain object-center p-2 media-crisp"
+                              onError={(e) => {
+                                const el = e.target as HTMLImageElement;
+                                if (el.src.includes("/rv-mark.svg")) return;
+                                el.src = RAKIVINUM_MARK_FALLBACK;
+                              }}
                             />
                           </button>
                           <p className="text-[11px] font-black text-white line-clamp-2">{p.name || "Piće"}</p>

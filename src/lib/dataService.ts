@@ -16,6 +16,7 @@ import { db } from "./firebase";
 import { isQuotaError, readCache, writeCache } from "./resilience";
 import { CACHE_TTL, REFRESH_INTERVAL } from "./cachePolicy";
 import { meterDbRead, meterEdgeRequest } from "./requestMeter";
+import { RAKIVINUM_MARK_FALLBACK } from "./imageFallback";
 
 type DistilleryPublic = { id: string; isArchived?: boolean; isVerified?: boolean; [key: string]: unknown };
 type ProductPublic = { id: string; isApproved?: boolean; isArchivedByDistillery?: boolean; publicLabelDisabled?: boolean; [key: string]: unknown };
@@ -84,9 +85,7 @@ export function pickHttpProductThumbForHome(p: {
   const b = stripHttpProductImgUrl(p.bottleImageUrl);
   const primary = a || b;
   if (primary) return primary;
-  const id = encodeURIComponent(String(p.id || "p"));
-  const typ = encodeURIComponent(String(p.type || "rakivinum"));
-  return `https://picsum.photos/seed/${typ}-${id}/200/200`;
+  return RAKIVINUM_MARK_FALLBACK;
 }
 
 export type HomeBundlePublic = {
