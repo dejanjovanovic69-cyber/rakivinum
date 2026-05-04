@@ -13,7 +13,7 @@ import { buildStableVisitorSeed, getOrCreateVisitorId } from "../lib/visitorIden
 import { logProductScan } from "../lib/logProductScan";
 import { readCache, writeCache } from "../lib/resilience";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
-import { fetchPublicLabelView } from "../lib/dataService";
+import { fetchPublicLabelView, stripHttpProductImgUrl } from "../lib/dataService";
 import { 
   RadarChart, 
   PolarGrid, 
@@ -38,6 +38,7 @@ type ProductData = {
   distillery?: string;
   description?: string;
   story?: string;
+  galleryImages?: unknown[];
   sensoryProfile?: {
     aroma?: number;
     taste?: number;
@@ -50,11 +51,31 @@ type ProductData = {
   [key: string]: unknown;
 };
 
-/** `image` pa `bottleImageUrl` — usklađeno sa Home „preporuka dana“ (često bolji izvor u `image`). */
-function pickProductPrimaryImageUrl(p: Pick<ProductData, "image" | "bottleImageUrl">): string {
-  const a = String(p.image || "").trim();
-  const b = String(p.bottleImageUrl || "").trim();
-  return a || b || "https://picsum.photos/seed/rakivinum/800/1000";
+function firstGalleryHttpFromProduct(p: Pick<ProductData, "galleryImages">): string {
+  const g = p.galleryImages;
+  if (!Array.isArray(g)) return "";
+  for (const x of g) {
+    if (typeof x === "string") {
+      const s = stripHttpProductImgUrl(x);
+      if (s) return s;
+    }
+    if (x && typeof x === "object" && !Array.isArray(x)) {
+      const o = x as Record<string, unknown>;
+      for (const k of ["url", "src", "href", "image", "thumb"] as const) {
+        const s = stripHttpProductImgUrl(o[k]);
+        if (s) return s;
+      }
+    }
+  }
+  return "";
+}
+
+/** `image` pa `bottleImageUrl`, zatim prvi HTTP iz `galleryImages` (Worker često stripuje base64 iz glavnih polja). */
+function pickProductPrimaryImageUrl(p: ProductData): string {
+  const a = stripHttpProductImgUrl(p.image);
+  const b = stripHttpProductImgUrl(p.bottleImageUrl);
+  const c = firstGalleryHttpFromProduct(p);
+  return a || b || c || "https://picsum.photos/seed/rakivinum/800/1000";
 }
 
 type DistilleryData = {

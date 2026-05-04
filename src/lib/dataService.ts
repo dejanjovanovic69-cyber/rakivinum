@@ -648,7 +648,7 @@ export async function fetchPublicProductById(id: string): Promise<ProductPublic 
   const safeId = String(id || "").trim();
   if (!safeId) return null;
   return dedupe(`productById:${safeId}`, async () => {
-    const cacheKey = `rakivinum_cache_product_by_id_${safeId}_v1`;
+    const cacheKey = `rakivinum_cache_product_by_id_${safeId}_v2`;
     const cached = readCache<{ found: boolean; item: ProductPublic | null }>(cacheKey);
     if (cached) return cached.found ? cached.item : null;
 
@@ -810,7 +810,7 @@ export async function fetchPublicLabelView(productId: string): Promise<LabelView
   const safeId = String(productId || "").trim();
   if (!safeId) return { product: null, distillery: null, reviews: [] };
   return dedupe(`labelView:${safeId}`, async () => {
-    const cacheKey = `rakivinum_cache_label_view_${safeId}_v1`;
+    const cacheKey = `rakivinum_cache_label_view_${safeId}_v2`;
     const cached = readCache<LabelViewPublic>(cacheKey);
     if (cached) return cached;
 

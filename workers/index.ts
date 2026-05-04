@@ -378,11 +378,25 @@ function sanitizeImageUrl(value: unknown): string | undefined {
   return v;
 }
 
+/** Pun JSON etikete: bez base64 u poljima; HTTP iz galerije u `image`/`galleryImages` (isti princip kao listni thumb). */
 function sanitizeProductDocForPublicJson(row: Record<string, unknown>): Record<string, unknown> {
+  const light = toProductListItemWithDailyThumb(row);
+  const galleryClean: string[] = [];
+  if (Array.isArray(row.galleryImages)) {
+    for (const x of row.galleryImages) {
+      const u = galleryImageUrlFromUnknown(x);
+      if (u) galleryClean.push(u);
+    }
+  }
+  const { galleryImages: _omitGallery, ...rest } = row;
+  const bottleOut = sanitizeImageUrl(light.bottleImageUrl);
+  const imageOut =
+    sanitizeImageUrl(light.image) || bottleOut || (galleryClean.length > 0 ? galleryClean[0] : undefined);
   return {
-    ...row,
-    bottleImageUrl: sanitizeImageUrl(row.bottleImageUrl),
-    image: sanitizeImageUrl(row.image),
+    ...rest,
+    image: imageOut,
+    bottleImageUrl: bottleOut,
+    ...(galleryClean.length > 0 ? { galleryImages: galleryClean } : {}),
   };
 }
 
@@ -456,7 +470,7 @@ function toProductListItemWithDailyThumb(row: Record<string, unknown>): Record<s
 
 function toProductScannerHit(row: Record<string, unknown>): Record<string, unknown> {
   return {
-    ...toProductListItem(row),
+    ...toProductListItemWithDailyThumb(row),
     barcode: row.barcode,
     barcodeNormalized: row.barcodeNormalized,
   };
