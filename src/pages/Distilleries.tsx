@@ -45,8 +45,8 @@ export default function Distilleries() {
     async function fetchDistilleries() {
       try {
         const publicDistilleries = await fetchPublicDistilleries({
-          limitCount: 120,
-          cacheKey: "rakivinum_cache_distilleries_page_v1",
+          limitCount: 100,
+          cacheKey: "rakivinum_cache_distilleries_page_v2",
           ttlMs: 30 * 60 * 1000,
         });
         setDistilleries(publicDistilleries);

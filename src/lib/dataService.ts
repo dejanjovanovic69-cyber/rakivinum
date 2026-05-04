@@ -210,7 +210,7 @@ export async function fetchPublicDistilleries(options?: {
   cacheKey?: string;
   ttlMs?: number;
 }): Promise<DistilleryPublic[]> {
-  const limitCount = options?.limitCount ?? 250;
+  const limitCount = options?.limitCount ?? 100;
   const cacheKey = options?.cacheKey ?? "rakivinum_cache_public_distilleries_v1";
   const ttlMs = options?.ttlMs ?? CACHE_TTL.DISTILLERY_LIST_6H;
 
@@ -244,7 +244,7 @@ export async function fetchPublicProducts(options?: {
   cacheKey?: string;
   ttlMs?: number;
 }): Promise<ProductPublic[]> {
-  const limitCount = options?.limitCount ?? 350;
+  const limitCount = options?.limitCount ?? 120;
   const cacheKey = options?.cacheKey ?? "rakivinum_cache_public_products_v1";
   const ttlMs = options?.ttlMs ?? CACHE_TTL.PRODUCTS_6H;
 
@@ -509,7 +509,7 @@ export async function fetchPublicDistilleriesByIds(ids: string[]): Promise<Disti
         .map((id) => String(id || "").trim())
         .filter((id) => id.length > 0),
     ),
-  ).slice(0, 40);
+  ).slice(0, 32);
   const safeIds = [...uniqueIds].sort((a, b) => a.localeCompare(b));
   if (safeIds.length === 0) return [];
   return dedupe(`distilleryByIds:${safeIds.join(",")}`, async () => {
@@ -554,7 +554,7 @@ export async function fetchPublicProductsByIds(ids: string[]): Promise<ProductPu
         .map((id) => String(id || "").trim())
         .filter((id) => id.length > 0),
     ),
-  ).slice(0, 40);
+  ).slice(0, 32);
   const safeIds = [...uniqueIds].sort((a, b) => a.localeCompare(b));
   if (safeIds.length === 0) return [];
   return dedupe(`productsByIds:${safeIds.join(",")}`, async () => {

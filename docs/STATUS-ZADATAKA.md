@@ -4,7 +4,7 @@
 
 **Vodič:** `docs/FIRESTORE-SPIKE-PLAYBOOK.md` — šta Firebase graf meri (uključujući Worker), kad je **0 read/min** normalno, šta očekivati od `ratings-feed` / `home-bundle` na hladnom kešu, **šablon zapisa** kad prijaviš pik, i **sekcija 8** u playbooku (smoke scenario + `x-cache-status` u Network / `__rakivinumEdgeMeterEnable`).
 
-**Worker (`rakivinum-api`, 2026-05-04):** verzija **`bba643e1-801c-4505-b173-61c580d5cdef`** — CORS **`x-cache-status`** + **`HOME_BUNDLE_*`** (playbook **5.1**) + **`RATINGS_FEED_*`** (playbook **5.2**). Detalji: `docs/FIRESTORE-SPIKE-PLAYBOOK.md`.
+**Worker (`rakivinum-api`, 2026-05-04):** verzija **`a0a45960-a1a2-47ef-9532-f4f0b7192a8e`** — CORS **`x-cache-status`** + **`HOME_BUNDLE_*`** (5.1) + **`RATINGS_FEED_*`** (5.2) + **`PUBLIC_*`** liste / `by-ids` (5.3). **Frontend:** Community / Distilleries keš ključevi i limiti. Detalji: `docs/FIRESTORE-SPIKE-PLAYBOOK.md`.
 
 **Frontend (Firestore / dupli poziv):** `shouldRunRefresh` — **isti ključ** za mount i `focus`/`visibility` gde je isti mrežni tok: `Home.tsx` (`home-bundle`), `Distillery.tsx`, `DistilleryDashboard.tsx` (club panel), `Menu.tsx` (članstva; ako je gate u cooldown-u, samo lokalni `clubs_*` bez novog fetch-a), `AdminAudit.tsx`. Pravilo u `src/lib/refreshGate.ts`. **Deploy (2026-05-04):** Cloudflare Pages `master.rakivinum.pages.dev` + Firebase hosting `gen-lang-client-0889534325.web.app` (isti `dist`); ako `rakivinum.com` ide preko CF, trebalo bi da povuče novi bundle posle propagacije.
 

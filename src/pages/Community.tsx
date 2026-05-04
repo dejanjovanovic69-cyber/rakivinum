@@ -117,8 +117,8 @@ function readCommunityRatingsCache(): RatingItem[] | null {
 }
 
 export default function Community() {
-  const PRODUCTS_FETCH_LIMIT = 140;
-  const DISTILLERIES_FETCH_LIMIT = 120;
+  const PRODUCTS_FETCH_LIMIT = 120;
+  const DISTILLERIES_FETCH_LIMIT = 100;
   const EVENTS_FETCH_LIMIT = 60;
   const [ratings, setRatings] = useState<RatingItem[]>(() => readCommunityRatingsCache() ?? []);
   const [loading, setLoading] = useState(() => readCommunityRatingsCache() === null);
@@ -227,12 +227,12 @@ export default function Community() {
         const [prodResult, distResult] = await Promise.allSettled([
           fetchPublicProducts({
             limitCount: PRODUCTS_FETCH_LIMIT,
-            cacheKey: "rakivinum_MASTER_products_cache_v3",
+            cacheKey: "rakivinum_MASTER_products_cache_v4",
             ttlMs: CACHE_TTL.HOME_RECOMMENDATIONS_6H,
           }),
           fetchPublicDistilleries({
             limitCount: DISTILLERIES_FETCH_LIMIT,
-            cacheKey: "rakivinum_MASTER_distilleries_cache_v1",
+            cacheKey: "rakivinum_MASTER_distilleries_cache_v2",
             ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
           }),
         ]);
@@ -244,7 +244,7 @@ export default function Community() {
         } else {
           console.error("Error fetching products:", prodResult.reason);
           if (isQuotaError(prodResult.reason)) setQuotaExceeded(true);
-          const cachedProducts = readCache<ProductItem[]>("rakivinum_MASTER_products_cache_v3");
+          const cachedProducts = readCache<ProductItem[]>("rakivinum_MASTER_products_cache_v4");
           if (cachedProducts && cachedProducts.length > 0) setProducts(cachedProducts);
         }
 
@@ -253,7 +253,7 @@ export default function Community() {
         } else {
           console.error("Error fetching distilleries:", distResult.reason);
           if (isQuotaError(distResult.reason)) setQuotaExceeded(true);
-          const cachedDistilleries = readCache<DistilleryItem[]>("rakivinum_MASTER_distilleries_cache_v1");
+          const cachedDistilleries = readCache<DistilleryItem[]>("rakivinum_MASTER_distilleries_cache_v2");
           setDistilleries(cachedDistilleries || []);
         }
       } catch (error) {

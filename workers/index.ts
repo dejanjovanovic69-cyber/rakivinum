@@ -71,6 +71,17 @@ const RATINGS_FEED_LIST_FETCH_MIN = 10;
 const RATINGS_FEED_PRODUCT_ENRICH_CAP = 15;
 const RATINGS_FEED_DISTILLERY_LOGO_CAP = 8;
 
+/**
+ * Javni katalozi — `GET /api/public/distilleries` i `GET /api/public/products` (lista dokumenata po `pageSize`).
+ * Klijent ne može preći `*_MAX` (parseLimit); niži default smanjuje read-ove kad nema `limit` u URL-u.
+ */
+const PUBLIC_DISTILLERIES_LIST_DEFAULT = 60;
+const PUBLIC_DISTILLERIES_LIST_MAX = 100;
+const PUBLIC_PRODUCTS_LIST_DEFAULT = 80;
+const PUBLIC_PRODUCTS_LIST_MAX = 120;
+const PUBLIC_DISTILLERIES_BY_IDS_MAX = 32;
+const PUBLIC_PRODUCTS_BY_IDS_MAX = 32;
+
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
 let rateLimitState = new Map<string, { count: number; resetAt: number }>();
 let isolateCache = new Map<string, { data: string; expiresAt: number }>();
@@ -1073,7 +1084,7 @@ export default {
 
       if (url.pathname === "/api/public/distilleries") {
         return servePublicCached(request, env, ctx, async () => {
-          const limitCount = parseLimit(url, 80, 120);
+          const limitCount = parseLimit(url, PUBLIC_DISTILLERIES_LIST_DEFAULT, PUBLIC_DISTILLERIES_LIST_MAX);
           const rows = await fetchCollection(env, "distilleries", limitCount);
           const filtered = rows.filter((d) => d.isArchived !== true && d.isVerified === true);
           const lightItems = filtered.map((row) => toDistilleryListItem(row));
@@ -1091,7 +1102,7 @@ export default {
                 .map((x) => String(x || "").trim())
                 .filter((x) => x.length > 0),
             ),
-          ).slice(0, 40);
+          ).slice(0, PUBLIC_DISTILLERIES_BY_IDS_MAX);
           if (ids.length === 0) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
 
           const rows = await Promise.all(ids.map((id) => fetchDocumentById(env, "distilleries", id)));
@@ -1102,7 +1113,7 @@ export default {
 
       if (url.pathname === "/api/public/products") {
         return servePublicCached(request, env, ctx, async () => {
-          const limitCount = parseLimit(url, 100, 140);
+          const limitCount = parseLimit(url, PUBLIC_PRODUCTS_LIST_DEFAULT, PUBLIC_PRODUCTS_LIST_MAX);
           const rows = await fetchCollection(env, "products", limitCount);
           const filtered = rows.filter(
             (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
@@ -1205,7 +1216,7 @@ export default {
                 .map((x) => String(x || "").trim())
                 .filter((x) => x.length > 0),
             ),
-          ).slice(0, 40);
+          ).slice(0, PUBLIC_PRODUCTS_BY_IDS_MAX);
           if (ids.length === 0) return new Response(JSON.stringify({ items: [] }), { headers: jsonHeaders });
 
           const rows = await Promise.all(ids.map((id) => fetchDocumentById(env, "products", id)));

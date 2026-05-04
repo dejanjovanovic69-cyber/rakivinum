@@ -83,6 +83,18 @@ Konstante `RATINGS_FEED_*` u `workers/index.ts`:
 
 **Primer** (`limit=20` u URL-u): ~**20** ocena + **15** proizvoda + **8** destilerija = **43** read-a u najgorem slučaju (ranije je gornja granica mogla biti znatno viša pri `limit=30` i 40 proizvoda).
 
+### 5.3. Javni katalozi (`distilleries`, `products`, `*-by-ids`)
+
+Konstante u `workers/index.ts` (`PUBLIC_*_LIST_*`, `PUBLIC_*_BY_IDS_MAX`):
+
+| Ruta | Ranije (max / default lista) | Sada |
+|------|------------------------------|------|
+| `GET /api/public/distilleries` | 120 / 80 | **100** / **60** |
+| `GET /api/public/products` | 140 / 100 | **120** / **80** |
+| `distilleries-by-ids` / `products-by-ids` (broj ID-jeva) | 40 | **32** |
+
+**Klijent (`dataService`):** podrazumevani `limitCount` za `fetchPublicDistilleries` / `fetchPublicProducts` je sada **100** / **120** (ranije 250 / 350 — i dalje ograničeno Workera, ali manji URL i jasniji keš ključevi). Zajednica / stranica destilerija koriste usklađene limite + novi keš ključevi (`v4` / `v2`).
+
 ---
 
 ## 6. Šta sledeće **inženjerski** (kad imamo zapis iz tačke 4)
