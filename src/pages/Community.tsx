@@ -105,7 +105,7 @@ function formatRatingDate(value: RatingItem["createdAt"]): string {
   return "Sada";
 }
 
-const COMMUNITY_RATINGS_CACHE_KEY = "rakivinum_cache_community_ratings_v2";
+const COMMUNITY_RATINGS_CACHE_KEY = "rakivinum_cache_community_ratings_v3";
 
 /** Null = nema važećeg keša (prvi ulazak); niz (može prazan) = odmah prikaži bez „buradi“ pri povratku na stranicu. */
 function readCommunityRatingsCache(): RatingItem[] | null {
@@ -226,7 +226,7 @@ export default function Community() {
         const [prodResult, distResult] = await Promise.allSettled([
           fetchPublicProducts({
             limitCount: PRODUCTS_FETCH_LIMIT,
-            cacheKey: "rakivinum_MASTER_products_cache_v2",
+            cacheKey: "rakivinum_MASTER_products_cache_v3",
             ttlMs: CACHE_TTL.HOME_RECOMMENDATIONS_6H,
           }),
           fetchPublicDistilleries({
@@ -243,7 +243,7 @@ export default function Community() {
         } else {
           console.error("Error fetching products:", prodResult.reason);
           if (isQuotaError(prodResult.reason)) setQuotaExceeded(true);
-          const cachedProducts = readCache<ProductItem[]>("rakivinum_MASTER_products_cache_v2");
+          const cachedProducts = readCache<ProductItem[]>("rakivinum_MASTER_products_cache_v3");
           if (cachedProducts && cachedProducts.length > 0) setProducts(cachedProducts);
         }
 

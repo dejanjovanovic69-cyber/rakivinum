@@ -329,7 +329,7 @@ function parseHomeBundleJson(json: Record<string, unknown>): HomeBundlePublic {
 export async function fetchPublicHomeBundle(visitorId: string | null | undefined): Promise<HomeBundlePublic | null> {
   const v = String(visitorId || "").trim();
   const dedupeKey = `homeBundle:${v || "anon"}`;
-  const cacheKey = v ? `rakivinum_cache_home_bundle_${v}_v5` : `rakivinum_cache_home_bundle_anon_v5`;
+  const cacheKey = v ? `rakivinum_cache_home_bundle_${v}_v6` : `rakivinum_cache_home_bundle_anon_v6`;
 
   return dedupe(dedupeKey, async () => {
     const cached = readCache<HomeBundlePublic>(cacheKey);
@@ -428,7 +428,7 @@ export async function fetchCommunityRatings(options?: {
   ttlMs?: number;
 }): Promise<CommunityRatingPublic[]> {
   const limitCount = options?.limitCount ?? 20;
-  const cacheKey = options?.cacheKey ?? "rakivinum_cache_community_ratings_v2";
+  const cacheKey = options?.cacheKey ?? "rakivinum_cache_community_ratings_v3";
   const ttlMs = options?.ttlMs ?? CACHE_TTL.COMMUNITY_EVENTS_6H;
 
   return dedupe(`ratingsFeed:${limitCount}:${cacheKey}`, async () => {
@@ -648,7 +648,7 @@ export async function fetchPublicProductById(id: string): Promise<ProductPublic 
   const safeId = String(id || "").trim();
   if (!safeId) return null;
   return dedupe(`productById:${safeId}`, async () => {
-    const cacheKey = `rakivinum_cache_product_by_id_${safeId}_v2`;
+    const cacheKey = `rakivinum_cache_product_by_id_${safeId}_v3`;
     const cached = readCache<{ found: boolean; item: ProductPublic | null }>(cacheKey);
     if (cached) return cached.found ? cached.item : null;
 
@@ -810,7 +810,7 @@ export async function fetchPublicLabelView(productId: string): Promise<LabelView
   const safeId = String(productId || "").trim();
   if (!safeId) return { product: null, distillery: null, reviews: [] };
   return dedupe(`labelView:${safeId}`, async () => {
-    const cacheKey = `rakivinum_cache_label_view_${safeId}_v2`;
+    const cacheKey = `rakivinum_cache_label_view_${safeId}_v3`;
     const cached = readCache<LabelViewPublic>(cacheKey);
     if (cached) return cached;
 

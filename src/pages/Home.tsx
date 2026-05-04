@@ -138,7 +138,7 @@ export default function Home() {
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
     const visitorId = localStorage.getItem("rakivinum_visitor_id");
-    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v5` : `rakivinum_cache_home_bundle_anon_v5`;
+    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v6` : `rakivinum_cache_home_bundle_anon_v6`;
 
     const applyBundle = (b: HomeBundlePublic) => {
       const clubs = b.memberships
