@@ -193,7 +193,9 @@ export default function Home() {
       }
     };
 
-    const shouldWarmNow = shouldRunRefresh("home:initial-bundle", REFRESH_INTERVAL.USER_LIGHT_1H);
+    /** Jedan ključ za mount i focus/visibility — inače se pri povratku sa npr. etikete `home:focus-bundle` tretira kao „nov“ i pali drugi pun `home-bundle` na Workera iako je `readCache` svež. */
+    const bundleRefreshGateKey = "home:public-bundle";
+    const shouldWarmNow = shouldRunRefresh(bundleRefreshGateKey, REFRESH_INTERVAL.USER_LIGHT_1H);
     if (!cached || shouldWarmNow) void refreshBundle();
 
     if (DISABLE_HOME_FOCUS_REFRESH) {
@@ -201,7 +203,7 @@ export default function Home() {
     }
     const onFocusRefresh = () => {
       if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh("home:focus-bundle", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      if (!shouldRunRefresh(bundleRefreshGateKey, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
       void refreshBundle();
     };
     const onVisibilityRefresh = () => {

@@ -27,6 +27,7 @@ Cilj: da **testiranje na `rakivinum.com`** ima jasnu vezu sa onim što vidiš u 
 - **`home-bundle`:** više unutrašnjih kolekcija u jednom odgovoru (članstva ako ima `visitor`, akcije, proizvodi za dnevni izbor, imena destilerija) — opet **jedan** HTTP poziv sa strane klijenta, **više** read-ova na backendu.
 - **Paralelno:** više kartica/endpointa odjednom = zbir read-ova u istom minutu.
 - **Spolja:** botovi, drugi korisnik, drugi uređaj, skripte (`npm run cf:smoke:edge`, monitor), indeksiranje.
+- **Dupli `home-bundle` u istoj sesiji (rešeno u kodu):** ranije su `focus` / `visibility` koristili **drugi** `shouldRunRefresh` ključ od prvog učitavanja, pa je povratak sa etikete na početnu često ponovo palio pun Worker poziv i duplirao read-ove u istom minutu. Sada je **jedan** zajednički ključ u `Home.tsx`.
 
 ---
 
