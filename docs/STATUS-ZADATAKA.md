@@ -8,6 +8,32 @@
 
 **Frontend (Firestore / dupli poziv):** `shouldRunRefresh` — **isti ključ** za mount i `focus`/`visibility` gde je isti mrežni tok: `Home.tsx` (`home-bundle`), `Distillery.tsx`, `DistilleryDashboard.tsx` (club panel), `Menu.tsx` (članstva; ako je gate u cooldown-u, samo lokalni `clubs_*` bez novog fetch-a), `AdminAudit.tsx`. Pravilo u `src/lib/refreshGate.ts`. **Deploy (2026-05-04):** Cloudflare Pages `master.rakivinum.pages.dev` + Firebase hosting `gen-lang-client-0889534325.web.app` (isti `dist`); ako `rakivinum.com` ide preko CF, trebalo bi da povuče novi bundle posle propagacije.
 
+---
+
+## Handoff — dokle smo stigli (za sutra)
+
+**Repo / produkcija (poslednja sesija):**  
+- **Firestore playbook** (`docs/FIRESTORE-SPIKE-PLAYBOOK.md`): šta graf meri, šablon za pik, **budžeti 5.1–5.3** (`home-bundle`, `ratings-feed`, javni katalozi), **sekcija 8** (smoke + `x-cache-status` / edge meter).  
+- **Worker** `a0a45960-…`: CORS `x-cache-status`, manji fan-out (`HOME_BUNDLE_*`, `RATINGS_FEED_*`, `PUBLIC_*`), `by-ids` max 32.  
+- **Frontend:** jedan `shouldRunRefresh` ključ gde je trebalo (dupli `home-bundle` fix); Community/Distilleries limiti i novi keš ključevi; deploy Pages + Firebase hosting uz novi `dist`.  
+- **Git:** grana `master` — poslednji smisleni commit oko ovoga: `405f5bf` (katalozi); pre toga `86f0455` (ratings-feed), `22a2693` (home-bundle caps), `db8157b` (refresh gate širom stranica), itd.
+
+**Šta možeš sad da testiraš na `rakivinum.com`:**  
+1. **Inkognito** ili jedan **hard refresh** (PWA/SW ponekad kešira stari JS).  
+2. **Početna → preporuka dana (etiketa) → ocena → nazad** — Firestore minut bi trebalo da bude **niži** nego ranije dupli `home-bundle` (isti scenario ~30+ read umesto duplog paketa).  
+3. **Zajednica** — tabovi koji učitavaju katalog (**Tops / Proizvođači / …**): lista je **manja** po hladnom miss-u (120 proizvoda / 100 destilerija cap) — proveri da li UI i dalje izgleda prihvatljivo.  
+4. **Destilerije** (spisak): do **100** stavki; pretraga lokalna po učitanom.  
+5. Po želji: DevTools → Network → **`x-cache-status`** (`miss-store` prvi put, zatim `cf-hit` / …); konzola `__rakivinumEdgeMeterEnable()` pa reload (vidi playbook 8).
+
+**Šta dalje raditi (sledeći koraci u repou):**  
+- **Straničenje** ili „Load more“ za **ceo** katalog proizvoda/destilerija ako treba više od trenutnih cap-ova bez skoka read-ova.  
+- **Još Worker ruta** po istom obrascu: `club-actions`, `community_events` / `community_links` — default/max `parseLimit` i konstante u jednom mestu.  
+- **Sadržaj u bazi:** proizvodi sa samo **`data:`** slikama — u **Adminu** prebaciti na **HTTPS** (Storage) da budu prave slike posle `sanitizeImageUrl`.  
+- **Admin** panel: poseban audit read-ova (već delimično u `FIRESTORE-READ-AUDIT.md`).  
+- **Opciono:** Cloudflare **Analytics** za Worker (broj zahteva po ruti) uz Firebase graf.
+
+---
+
 **Poslednji zapis:** 2026-05-04 — **Produkcija `rakivinum.com`:** (A) „Lagan“ prolaz (početna → preporuka → Zajednica bez drill-downa → samo spisak destilerija) — Firestore graf **u redu**. (B) Jači scenario (~1.5 min, gost): Zajednica + pregled utisaka + spisak destilerija — **visok pik read-ova** + **nestale prave slike** (umanjeno i uvećano); juče je problem bio uglavnom **mali tile** na Home, detail je radio. **Uzrok slika:** Worker `sanitizeImageUrl` skida `data:` iz javnog JSON-a; na `ratings` / listama je ostajalo prazno kad je u bazi bio samo base64. **Fix u repou (`workers/index.ts`):** `ratings-feed` dopunjava `productImage` iz **`products`** (`toProductListItemWithDailyThumb`, zatim logo destilerije); **`/api/public/products`**, **`products-by-distillery`**, **`products-by-ids`** takođe koriste `toProductListItemWithDailyThumb`. **Graf:** konzola broji i **Worker** Firestore read-ove; `ratings-feed` na **cache miss** sada radi dodatne **get** po proizvodu/destileriji — ponovljeni zahtevi treba da padnu na **edge keš**. **Deploy (2026-05-04, komplet za `rakivinum.com`):** Cloudflare **Worker** (`cb1e7ad3…` poslednji push) + **Pages** (`master.rakivinum.pages.dev`, deploy sa `functions_tmp` trikom) + **Firebase hosting** (`firebase deploy --only hosting` → `gen-lang-client-0889534325.web.app`, isti `dist`). **Klijent keš ključevi** podignuti na **v3/v6** (`community_ratings`, master products, `product_by_id`, `label_view`, `home_bundle`) da jedan ulazak ne vuče stari `localStorage`. Kod: Community filter, Worker/Label galerija, itd. — vidi git `20bc46a`, `fe6d69c`. **Ti:** jednom otvori `rakivinum.com` (PWA ponekad traži jedan refresh da preuzme novi SW). **Pikovi kad „nisi ulazio“:** agent (Cursor) **ne** posećuje sajt; mogući uzroci su botovi, tuđi korisnici, drugi uređaj/tab, ili lokalne/mrežne **smoke/monitor** skripte ka Workeru/Firestore. **Fallback slika:** `picsum.photos` često blokiran — zamenjeno sa **`/placeholder-bottle.svg`** (silueta, bez teksta „RV“) + `Distillery` katalog; Worker listni proizvodi sada mogu uključiti **`galleryImages`** (HTTPS lista). **Graf 0 read u minutu:** moguće kad sve ide iz **edge keša** (Worker nije u tom minutu čitao Firestore) ili agregacija u konzoli; klijent na `rakivinum.com` često **ne** šalje direktne Firestore read-ove.
 
 **(2026-05-03, kraj sesije)** — **Home „Preporuka dana“ — mala sličica:** Uočeno da produkcioni `home-bundle` za primer proizvoda (`KdFJmcevo3BYOzJUt3c6`) i dalje može vratiti **`bottleImageUrl` kao ogroman `data:...;base64`** (mali `<img>` u Firefoxu često prazan; veliki hero na etiketi može da radi). **U repo-u (lokalno, commitovano):** (1) klijent **`dataService`** — čišćenje `data:` / prevelikih stringova za dnevne proizvode pri parsiranju **i** pri čitanju iz `readCache`; **`pickHttpProductThumbForHome`** + keš ključevi **`home-bundle` `_v5`**, **`daily-recommendations` `_v2`**; (2) **`Home.tsx`** — `HomeDailyThumbImg` koristi taj picker; (3) **Worker** — za dnevni izbor **`toProductListItemWithDailyThumb`**: prvi validan **`galleryImages`** ako nema HTTP u `image`/`bottleImageUrl`; ranije dodato i **logo destilerije** kad oba polja nedostaju nakon stripa. **Git:** `b111771` (logo + swap na grešci), `6dfccfe` (strip base64 na klijentu + gallery na Workeru). **Šta sutra prvo:** deploy **Pages (frontend)** pa provera male sličice; zatim deploy **Workera** da API više ne šalje base64 u javnom JSON-u (lokalni kod već `sanitizeImageUrl` u list helperima — produkcija treba da prati granu); po želji u **Adminu** za problematičan proizvod zameniti base64 **`https://`** (Storage). **Proces:** dogovoriti kratku listu „1 min smoke“ + šta na Firestore grafu očekujemo za taj scenario (korisnik želi jasnije korake, ne samo „mirno je“).
@@ -16,7 +42,7 @@
 
 **Prethodni zapis:** 2026-04-30 (kraj sesije) — **Firestore read spike / sajam priprema:** Admin read-amplification, `DistilleryAnalyticsModal`, `DistilleryDashboard`, `logProductScan` dedupe, slike 400×400, `VITE_DISABLE_ONLINE_PRESENCE`, globalni cap-ovi, deploy Firebase + Worker + Pages.
 
-**Sutra / sledeći koraci (prioritet):** (1) Deploy **frontend** → Home sličica; (2) Deploy **Worker** → manji `home-bundle`, strip base64 na serveru; (3) smoke: Home + jedna etiketa + (opciono) Zajednica skrol — uporediti Firestore reads; (4) ostalo iz starog plana: cache miss vs neuhvaćeni `getDocs`; indeksi ako treba; presence posle sajma.
+**Sutra / sledeći koraci (prioritet):** vidi odeljak **„Handoff — dokle smo stigli“** iznad; ukratko: test na produkciji + eventualno straničenje kataloga, cap-ovi za preostale javne Worker rute, HTTPS slike u Adminu, admin read audit.
 
 Ovaj fajl sluzi da **sledeci put** odmah znas sta je uradjeno i sta ostaje, bez kopanja po cetu. Azuriraj ga ukratko posle vecih promena.
 
