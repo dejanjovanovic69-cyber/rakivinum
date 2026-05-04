@@ -72,4 +72,42 @@ Broj **read-ova po jednom HTTP 200** zavisi od toga koliko dokumenata Worker stv
 
 ---
 
-**Kratko:** graf meri **projekat**, ne samo tvoj laptop; pik često znači **hladni keš + Worker**, ne „nevidljivi haker“. Sa zapisom iz tačke 4 može se ići **ciljano** do uzroka.
+## 8. Paket za test (ti samo odradi ovaj tok)
+
+### A) Standardni „smoke“ kroz sajt (uporedi sa Firestore grafom)
+
+1. Zatvori druge tabove sa `rakivinum.com` (da ne mešaju read-ove).
+2. **Inkognito** (ili obriši keš sajta + `localStorage` za domen ako želiš „hladno“).
+3. Uradi redom: **Početna** → klik na **preporuku dana** (etiketa) → **Destilerije** (spisak) → **Zajednica** (skrol do kraja) → nazad na **Početnu** → zatvori tab.
+4. U Firebase konzoli otvori **Firestore → Usage** i nađi minut koji odgovara tom testu; uporedi sa **tačkom 4** iznad ako nešto deluje čudno.
+
+### B) Da vidiš da li Worker odgovara iz keša (bez nagađanja)
+
+**Opcija 1 — DevTools (uvek radi):** F12 → **Network** → filtriraj po hostu API-ja (npr. `workers.dev` / ono što koristi produkcija). Klikni na jedan `GET` ka `/api/public/home-bundle` ili `/api/public/ratings-feed`. U **Response Headers** traži **`x-cache-status`**:
+
+| Vrednost | Značenje (grubo) |
+|----------|------------------|
+| `miss-store` | Handler je radio posao (Firestore read-ovi su verovatno legli u taj minut); odgovor je keširan za sledeće |
+| `mem-hit` | Isti Worker izolat, kratkotrajan memorijski keš |
+| `kv-hit` | Keš u Workers KV |
+| `cf-hit` | Keš na Cloudflare Cache API (često deliš sa drugim korisnicima istog URL-a) |
+
+**Opcija 2 — brojač u konzoli (posle deploy-a Workera sa `Access-Control-Expose-Headers`):** na `rakivinum.com` u konzoli:
+
+```text
+__rakivinumEdgeMeterEnable()
+```
+
+Posle reload-a, radi scenario iz tačke A; povremeno u konzoli će se pojaviti `[rakivinum-edge-meter] …` sa `cache:miss-store` / `cache:cf-hit` itd. Ručno: `__rakivinumEdgeMeter()` (tabela), `__rakivinumEdgeMeterReset()` pre novog kruga.
+
+*(Ako `cache:` uvek piše `none`, Worker u produkciji još nema novi CORS expose header — i dalje koristi **Opciju 1** u Network tabu.)*
+
+**Opcija 3 — klijentski Firestore (samo fallback):** `__rakivinumDbReadsEnable()` — broji **samo** ono što pregledač šalje direktno Firestore SDK-u, **ne** Worker read-ove. Korisno ako sumnjaš da neki put i dalje padaš na `getDocs` u klijentu.
+
+### C) Slike „nekad jesu, nekad nisu“
+
+To **nije** isto što i broj read-ova: često znači da za taj proizvod nema validnog **HTTPS** URL-a u podacima posle `sanitizeImageUrl` (npr. samo `data:` u bazi). Rešenje u sadržaju: **Storage / HTTPS** u Adminu za taj proizvod.
+
+---
+
+**Kratko:** graf meri **projekat**, ne samo tvoj laptop; pik často znači **hladni keš + Worker**, ne „nevidljivi haker“. Sa zapisom iz tačke 4 može se ići **ciljano** do uzroka.

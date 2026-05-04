@@ -36,6 +36,8 @@ const jsonHeaders = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-allow-headers": "content-type,authorization",
+  /** Da `fetch()` na glavnom domenu vidi header (CORS); koristi `requestMeter` / DevTools. */
+  "access-control-expose-headers": "x-cache-status",
 };
 
 const GCP_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -96,6 +98,7 @@ function withDefaultHeaders(response: Response): Response {
   if (!headers.has("access-control-allow-origin")) headers.set("access-control-allow-origin", "*");
   if (!headers.has("access-control-allow-methods")) headers.set("access-control-allow-methods", "GET,POST,OPTIONS");
   if (!headers.has("access-control-allow-headers")) headers.set("access-control-allow-headers", "content-type,authorization");
+  if (!headers.has("access-control-expose-headers")) headers.set("access-control-expose-headers", "x-cache-status");
   return new Response(response.body, { status: response.status, headers });
 }
 
@@ -288,6 +291,7 @@ async function servePublicCached(
           "access-control-allow-origin": "*",
           "access-control-allow-methods": "GET,POST,OPTIONS",
           "access-control-allow-headers": "content-type,authorization",
+          "access-control-expose-headers": "x-cache-status",
         });
         ctx.waitUntil(
           caches.default
