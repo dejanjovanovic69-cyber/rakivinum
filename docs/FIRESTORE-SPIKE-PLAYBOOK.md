@@ -70,6 +70,19 @@ Konstante u `workers/index.ts` (`HOME_BUNDLE_*`) — **gornja granica** read-ova
 
 **Grubi maksimum** (gost sa `visitor`, svi listovi puni): bilo ~**42** read-a po jednom miss-u → sada ~**30** (+ ista margina za dnevni logo). Keš i dalje drži većinu ponovljenih ulazaka van Firestore-a.
 
+### 5.2. Budžet za `ratings-feed` (hladan miss)
+
+Konstante `RATINGS_FEED_*` u `workers/index.ts`:
+
+| Deo | Ranije (grubo) | Sada |
+|-----|----------------|------|
+| Max `limit` iz query-ja | 30 | **24** |
+| Lista `ratings` (fetch cap) | do 30, min 12 | do **24**, min **10** |
+| `get` po `productId` (thumb) | do 40 jedinstvenih | do **15** |
+| `get` destilerija (logo fallback) | neograničeno u praksi | do **8** |
+
+**Primer** (`limit=20` u URL-u): ~**20** ocena + **15** proizvoda + **8** destilerija = **43** read-a u najgorem slučaju (ranije je gornja granica mogla biti znatno viša pri `limit=30` i 40 proizvoda).
+
 ---
 
 ## 6. Šta sledeće **inženjerski** (kad imamo zapis iz tačke 4)

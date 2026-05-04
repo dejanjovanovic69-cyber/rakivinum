@@ -60,6 +60,17 @@ const HOME_BUNDLE_CLUB_ACTIONS_FETCH = 10;
 const HOME_BUNDLE_PRODUCTS_SAMPLE = 6;
 const HOME_BUNDLE_DISTILLERY_NAME_CAP = 4;
 
+/**
+ * `GET /api/public/ratings-feed` — lista `ratings` zatim `get` po `productId` (+ logo destilerije kad nema slike).
+ * Gornje granice na hladnom miss-u; `parseLimit` i dalje ograničava klijentski `limit` query.
+ */
+const RATINGS_FEED_URL_LIMIT_DEFAULT = 12;
+const RATINGS_FEED_URL_LIMIT_MAX = 24;
+const RATINGS_FEED_LIST_FETCH_MAX = 24;
+const RATINGS_FEED_LIST_FETCH_MIN = 10;
+const RATINGS_FEED_PRODUCT_ENRICH_CAP = 15;
+const RATINGS_FEED_DISTILLERY_LOGO_CAP = 8;
+
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
 let rateLimitState = new Map<string, { count: number; resetAt: number }>();
 let isolateCache = new Map<string, { data: string; expiresAt: number }>();
@@ -605,7 +616,7 @@ async function enrichCommunityRatingItemsWithProductThumbs(
 
   const uniqueProductIds = Array.from(
     new Set(filtered.map((r) => String(asText(r.productId) || "").trim()).filter((id) => id.length > 0)),
-  ).slice(0, 40);
+  ).slice(0, RATINGS_FEED_PRODUCT_ENRICH_CAP);
 
   if (uniqueProductIds.length === 0) return items;
 
@@ -639,7 +650,7 @@ async function enrichCommunityRatingItemsWithProductThumbs(
 
   if (distilleryIds.size === 0) return merged;
 
-  const distIdList = [...distilleryIds];
+  const distIdList = [...distilleryIds].slice(0, RATINGS_FEED_DISTILLERY_LOGO_CAP);
   const distRows = await Promise.all(distIdList.map((id) => fetchDocumentById(env, "distilleries", id)));
   const logoByDistillery = new Map<string, string>();
   distIdList.forEach((id, i) => {
@@ -1237,8 +1248,8 @@ export default {
 
       if (url.pathname === "/api/public/ratings-feed") {
         return servePublicCached(request, env, ctx, async () => {
-          const limitCount = parseLimit(url, 12, 30);
-          const fetchCap = Math.min(30, Math.max(limitCount, 12));
+          const limitCount = parseLimit(url, RATINGS_FEED_URL_LIMIT_DEFAULT, RATINGS_FEED_URL_LIMIT_MAX);
+          const fetchCap = Math.min(RATINGS_FEED_LIST_FETCH_MAX, Math.max(limitCount, RATINGS_FEED_LIST_FETCH_MIN));
           const rows = await fetchCollection(env, "ratings", fetchCap);
           const filtered = rows
             .filter((r) => r.isFlagged !== true)
