@@ -538,6 +538,68 @@ function toCommunityRatingItem(row: Record<string, unknown>): Record<string, unk
   };
 }
 
+/** Posle stripovanja `data:` na oceni, HTTP thumb iz live proizvoda (galerija) ili logo destilerije — bez base64 u JSON-u. */
+async function enrichCommunityRatingItemsWithProductThumbs(
+  env: Env,
+  filtered: Record<string, unknown>[],
+): Promise<Record<string, unknown>[]> {
+  const items = filtered.map((row) => toCommunityRatingItem(row) as Record<string, unknown>);
+
+  const uniqueProductIds = Array.from(
+    new Set(filtered.map((r) => String(asText(r.productId) || "").trim()).filter((id) => id.length > 0)),
+  ).slice(0, 40);
+
+  if (uniqueProductIds.length === 0) return items;
+
+  const productRows = await Promise.all(uniqueProductIds.map((id) => fetchDocumentById(env, "products", id)));
+  const productById = new Map<string, Record<string, unknown>>();
+  uniqueProductIds.forEach((id, i) => {
+    const p = productRows[i];
+    if (p && isPublicProductRow(p)) productById.set(id, p);
+  });
+
+  const merged = items.map((item, idx) => {
+    if (asText(item.productImage)) return item;
+    const row = filtered[idx];
+    const pid = String(asText(row?.productId) || "").trim();
+    const p = productById.get(pid);
+    if (!p) return item;
+    const light = toProductListItemWithDailyThumb(p);
+    const thumb = sanitizeImageUrl(light.image) || sanitizeImageUrl(light.bottleImageUrl);
+    return thumb ? { ...item, productImage: thumb } : item;
+  });
+
+  const distilleryIds = new Set<string>();
+  merged.forEach((item, idx) => {
+    if (asText(item.productImage)) return;
+    const pid = String(asText(filtered[idx]?.productId) || "").trim();
+    const p = productById.get(pid);
+    const did = p ? String(asText(p.distilleryId) || "").trim() : "";
+    if (did) distilleryIds.add(did);
+  });
+
+  if (distilleryIds.size === 0) return merged;
+
+  const distIdList = [...distilleryIds];
+  const distRows = await Promise.all(distIdList.map((id) => fetchDocumentById(env, "distilleries", id)));
+  const logoByDistillery = new Map<string, string>();
+  distIdList.forEach((id, i) => {
+    const d = distRows[i];
+    if (!d || d.isArchived === true || d.isVerified !== true) return;
+    const logo = sanitizeImageUrl(d.logoUrl);
+    if (logo) logoByDistillery.set(id, logo);
+  });
+
+  return merged.map((item, idx) => {
+    if (asText(item.productImage)) return item;
+    const pid = String(asText(filtered[idx]?.productId) || "").trim();
+    const p = productById.get(pid);
+    const did = p ? String(asText(p.distilleryId) || "").trim() : "";
+    const logo = did ? logoByDistillery.get(did) : undefined;
+    return logo ? { ...item, productImage: logo } : item;
+  });
+}
+
 function toCommunityLinkItem(row: Record<string, unknown>): Record<string, unknown> {
   return {
     id: asText(row.id) || "",
@@ -975,7 +1037,7 @@ export default {
           const filtered = rows.filter(
             (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
           );
-          const lightItems = filtered.map((row) => toProductListItem(row));
+          const lightItems = filtered.map((row) => toProductListItemWithDailyThumb(row));
           return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
         });
       }
@@ -1080,7 +1142,7 @@ export default {
           const byId = new Map<string, Record<string, unknown>>();
           filtered.forEach((row) => {
             const id = String(row.id || "").trim();
-            if (id) byId.set(id, toProductListItem(row));
+            if (id) byId.set(id, toProductListItemWithDailyThumb(row));
           });
           const items = ids.map((id) => byId.get(id)).filter((row): row is Record<string, unknown> => Boolean(row));
           return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
@@ -1116,9 +1178,9 @@ export default {
           const filtered = rows
             .filter((r) => r.isFlagged !== true)
             .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-            .slice(0, limitCount)
-            .map((row) => toCommunityRatingItem(row));
-          return new Response(JSON.stringify({ items: filtered }), { headers: jsonHeaders });
+            .slice(0, limitCount);
+          const items = await enrichCommunityRatingItemsWithProductThumbs(env, filtered);
+          return new Response(JSON.stringify({ items }), { headers: jsonHeaders });
         });
       }
 
@@ -1179,7 +1241,7 @@ export default {
           const filtered = rows.filter(
             (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
           );
-          const lightItems = filtered.map((row) => toProductListItem(row));
+          const lightItems = filtered.map((row) => toProductListItemWithDailyThumb(row));
           return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
         });
       }
