@@ -95,9 +95,8 @@ export default function AdminAudit() {
     const usersCacheKey = "rakivinum_cache_admin_audit_users_v1";
     const blocksCacheKey = "rakivinum_cache_admin_audit_blocks_v1";
 
+    const auditDataGateKey = "admin-audit:data-refresh";
     const refreshAuditData = async () => {
-      // Throttle quick focus/visibility bursts.
-      if (!shouldRunRefresh("admin-audit:refresh", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
       try {
         const logsQuery = query(collection(db, 'rating_logs'), orderBy('createdAt', 'desc'), limit(80));
         const logsSnap = await getDocs(logsQuery);
@@ -161,11 +160,14 @@ export default function AdminAudit() {
     if (cachedUsers) setUsers(cachedUsers);
     if (cachedBlocks) setAbuseBlocks(cachedBlocks);
 
-    if (!cachedLogs || !cachedUsers || !cachedBlocks || shouldRunRefresh("admin-audit:initial", REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+    const warmAudit = shouldRunRefresh(auditDataGateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+    const needsAuditData = !cachedLogs || !cachedUsers || !cachedBlocks || warmAudit;
+    if (needsAuditData) {
       void refreshAuditData();
     }
     const onFocusRefresh = () => {
       if (document.visibilityState !== "visible") return;
+      if (!shouldRunRefresh(auditDataGateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
       void refreshAuditData();
     };
     const onVisibilityRefresh = () => {

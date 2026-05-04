@@ -17,6 +17,7 @@
 - Javni read: **`src/lib/dataService.ts`** — uvek Worker-first (`VITE_EDGE_API_BASE`), zatim `getDoc` / `getDocs` kao fallback gde ima smisla.
 - Novi Worker endpoint: **`workers/index.ts`**, zatim helper u `dataService` + po mogućnosti stavka u **`scripts/smoke-edge.ps1`**.
 - Privatni / korisnički podaci (saved, lične ocene, admin): **ne** izlagati javnim GET rutama bez auth modela.
+- **`shouldRunRefresh`** (`src/lib/refreshGate.ts`): za mount + `focus`/`visibility` istog API paketa koristi **jedan** ključ — ne „initial“ vs „focus“ odvojeno.
 
 ## Provera pre commit-a
 

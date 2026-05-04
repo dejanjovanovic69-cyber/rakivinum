@@ -340,7 +340,9 @@ export default function Distillery() {
     if (typeof cachedMembership === "boolean") setIsMember(cachedMembership);
     if (typeof cachedCount === "number") setTotalMembers(cachedCount);
 
-    const shouldWarmNow = shouldRunRefresh(`distillery:${id || "unknown"}:initial`, REFRESH_INTERVAL.USER_LIGHT_1H);
+    /** Jedan ključ za mount i focus — izbegava dupli `club_memberships` / count odmah posle učitavanja (isti obrazac kao `Home`). */
+    const distilleryRefreshGateKey = `distillery:${id || "unknown"}:public-refresh`;
+    const shouldWarmNow = shouldRunRefresh(distilleryRefreshGateKey, REFRESH_INTERVAL.USER_LIGHT_1H);
     const needProfileWarm = !cachedProfile || shouldWarmNow;
     const needProductsWarm = activeTab === "products" && (!cachedProducts || shouldWarmNow);
     if (needProfileWarm || needProductsWarm) {
@@ -350,7 +352,7 @@ export default function Distillery() {
     if (typeof cachedCount !== "number" || shouldWarmNow) void refreshTotalMembers();
     const onFocusRefresh = () => {
       if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh(`distillery:${id || "unknown"}:members-focus`, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      if (!shouldRunRefresh(distilleryRefreshGateKey, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
       void refreshMembership();
       void refreshTotalMembers();
     };

@@ -209,8 +209,8 @@ export default function DistilleryDashboard() {
     const actionsCacheKey = `rakivinum_cache_dist_dashboard_actions_${distillery.id}_v1`;
     const memberCountCacheKey = `rakivinum_cache_dist_dashboard_member_count_${distillery.id}_v1`;
 
+    const clubPanelGateKey = `dist-dashboard:${distillery.id}:club-panel`;
     const refreshClubPanel = async () => {
-      if (!shouldRunRefresh(`dist-dashboard:${distillery.id}:club-panel`, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
       try {
         const rowActions = await fetchPublicClubActionsForDistillery(distillery.id, 40);
         const nextActions = rowActions.map((d) => ({ id: d.id, ...d }));
@@ -244,11 +244,14 @@ export default function DistilleryDashboard() {
     const cachedCount = readCache<number>(memberCountCacheKey);
     if (cachedActions) setClubActions(cachedActions);
     if (typeof cachedCount === "number") setClubMembersCount(cachedCount);
-    if (!cachedActions || typeof cachedCount !== "number" || shouldRunRefresh(`dist-dashboard:${distillery.id}:initial-club-panel`, REFRESH_INTERVAL.USER_LIGHT_1H)) {
+    const warmClubPanelGate = shouldRunRefresh(clubPanelGateKey, REFRESH_INTERVAL.USER_LIGHT_1H);
+    const needsClubPanelData = !cachedActions || typeof cachedCount !== "number" || warmClubPanelGate;
+    if (needsClubPanelData) {
       void refreshClubPanel();
     }
     const onFocusRefresh = () => {
       if (document.visibilityState !== "visible") return;
+      if (!shouldRunRefresh(clubPanelGateKey, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
       void refreshClubPanel();
     };
     const onVisibilityRefresh = () => {

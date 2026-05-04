@@ -1,5 +1,9 @@
 /**
  * Evidencija zadataka i „gde smo stali“: `docs/STATUS-ZADATAKA.md`
+ *
+ * **Pravilo (Firestore / edge):** za isti mrežni paket (npr. `home-bundle`, članstva na Meniju)
+ * koristi **isti `key`** i na prvom učitavanju i u `focus` / `visibilitychange` handleru.
+ * Dva različita ključa za „initial“ vs „focus“ dovode do duplog poziva odmah posle navigacije.
  */
 const lastRunByKey = new Map<string, number>();
 

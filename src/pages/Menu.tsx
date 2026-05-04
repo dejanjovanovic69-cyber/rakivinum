@@ -407,10 +407,19 @@ export default function Menu() {
       }
     };
 
-    void refreshJoinedClubs();
+    const menuJoinedClubsGateKey = "menu:public-joined-clubs";
+    const warmJoined = shouldRunRefresh(menuJoinedClubsGateKey, REFRESH_INTERVAL.USER_LIGHT_1H);
+    if (warmJoined) {
+      void refreshJoinedClubs();
+    } else {
+      void (async () => {
+        const merged = mergeIdsFromFirestore([]);
+        await resolveClubRows(merged);
+      })();
+    }
     const onFocusRefresh = () => {
       if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh("menu:focus-joined-clubs", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      if (!shouldRunRefresh(menuJoinedClubsGateKey, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
       void refreshJoinedClubs();
     };
     const onVisibilityRefresh = () => {
