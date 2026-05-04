@@ -5,7 +5,13 @@ import { db } from "../lib/firebase";
 import { doc, updateDoc } from "firebase/firestore";
 import { cn } from "../lib/utils";
 import { isQuotaError, readCache } from "../lib/resilience";
-import { fetchCommunityEvents, fetchCommunityRatings, fetchPublicDistilleries, fetchPublicProducts } from "../lib/dataService";
+import {
+  fetchCommunityEvents,
+  fetchCommunityRatings,
+  fetchPublicDistilleries,
+  fetchPublicProducts,
+  stripHttpProductImgUrl,
+} from "../lib/dataService";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
 
@@ -76,6 +82,16 @@ function safeStr(v: unknown): string {
   return "";
 }
 
+function pickRatingListThumb(rating: RatingItem, catalog: ProductItem[]): string {
+  const fromRating = stripHttpProductImgUrl(rating.productImage);
+  if (fromRating) return fromRating;
+  const prod = catalog.find((p) => p.id === rating.productId);
+  const fromProd =
+    stripHttpProductImgUrl(prod?.bottleImageUrl) || stripHttpProductImgUrl(prod?.image);
+  if (fromProd) return fromProd;
+  return `https://picsum.photos/seed/rakivinum_${encodeURIComponent(rating.productId)}/200/300`;
+}
+
 function formatRatingDate(value: RatingItem["createdAt"]): string {
   if (!value) return "Sada";
   if (typeof value === "string") {
@@ -89,7 +105,7 @@ function formatRatingDate(value: RatingItem["createdAt"]): string {
   return "Sada";
 }
 
-const COMMUNITY_RATINGS_CACHE_KEY = "rakivinum_cache_community_ratings_v1";
+const COMMUNITY_RATINGS_CACHE_KEY = "rakivinum_cache_community_ratings_v2";
 
 /** Null = nema važećeg keša (prvi ulazak); niz (može prazan) = odmah prikaži bez „buradi“ pri povratku na stranicu. */
 function readCommunityRatingsCache(): RatingItem[] | null {
@@ -210,7 +226,7 @@ export default function Community() {
         const [prodResult, distResult] = await Promise.allSettled([
           fetchPublicProducts({
             limitCount: PRODUCTS_FETCH_LIMIT,
-            cacheKey: "rakivinum_MASTER_products_cache_v1",
+            cacheKey: "rakivinum_MASTER_products_cache_v2",
             ttlMs: CACHE_TTL.HOME_RECOMMENDATIONS_6H,
           }),
           fetchPublicDistilleries({
@@ -227,7 +243,7 @@ export default function Community() {
         } else {
           console.error("Error fetching products:", prodResult.reason);
           if (isQuotaError(prodResult.reason)) setQuotaExceeded(true);
-          const cachedProducts = readCache<ProductItem[]>("rakivinum_MASTER_products_cache_v1");
+          const cachedProducts = readCache<ProductItem[]>("rakivinum_MASTER_products_cache_v2");
           if (cachedProducts && cachedProducts.length > 0) setProducts(cachedProducts);
         }
 
@@ -438,9 +454,8 @@ export default function Community() {
     : communityEvents.filter((ev) => ev.eventDate && String(ev.eventDate) < todayIso));
   const hasSearchQuery = searchQuery.trim() !== "";
   const isResultsMode = activeSection === "search";
-  const activeProductIds = new Set(catalogProducts.map((p) => p.id));
-  // If catalog is unavailable/empty, never hide existing ratings.
-  const visibleRatings = activeProductIds.size > 0 ? ratings.filter((r) => activeProductIds.has(r.productId)) : ratings;
+  /** Uvek sve utiske na tabu „Utisci“ — filter po master listi od ~140 proizvoda slučajno skrivao ~polovinu ocena. */
+  const visibleRatings = ratings;
 
   const handleReport = async (e: React.MouseEvent, ratingId: string) => {
     e.stopPropagation();
@@ -763,9 +778,16 @@ export default function Community() {
                             </div>
                             <div className="flex gap-3 items-start">
                               <div className="w-14 h-[72px] rounded-xl bg-black/60 border border-gold-500/55 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)] overflow-hidden shrink-0">
-                                <img src={rating.productImage || `https://picsum.photos/seed/rakivinum_${rating.productId}/200/300`}
-                                  alt="Piće" referrerPolicy="no-referrer"
-                                  className="h-full w-full object-contain object-center p-0.5 media-crisp group-hover:scale-[1.03] transition-transform duration-500" />
+                                <img
+                                  src={pickRatingListThumb(rating, catalogProducts)}
+                                  alt="Piće"
+                                  referrerPolicy="no-referrer"
+                                  className="h-full w-full object-contain object-center p-0.5 media-crisp group-hover:scale-[1.03] transition-transform duration-500"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).src =
+                                      `https://picsum.photos/seed/rakivinum_${encodeURIComponent(rating.productId)}/200/300`;
+                                  }}
+                                />
                               </div>
                               <div className="flex-1 space-y-1.5 pt-0.5 min-w-0">
                                 <h4 className="eyebrow-label text-gold-500/80 tracking-[0.12em] truncate">

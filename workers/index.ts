@@ -423,11 +423,23 @@ function toProductListItem(row: Record<string, unknown>): Record<string, unknown
   };
 }
 
+function galleryImageUrlFromUnknown(x: unknown): string | undefined {
+  if (typeof x === "string") return sanitizeImageUrl(x);
+  if (x && typeof x === "object" && !Array.isArray(x)) {
+    const o = x as Record<string, unknown>;
+    for (const k of ["url", "src", "href", "image", "thumb", "thumbnail"] as const) {
+      const u = sanitizeImageUrl(o[k]);
+      if (u) return u;
+    }
+  }
+  return undefined;
+}
+
 function firstSanitizedGalleryUrl(row: Record<string, unknown>): string | undefined {
   const g = row.galleryImages;
   if (!Array.isArray(g)) return undefined;
   for (const x of g) {
-    const u = sanitizeImageUrl(x);
+    const u = galleryImageUrlFromUnknown(x);
     if (u) return u;
   }
   return undefined;
@@ -555,7 +567,8 @@ async function enrichCommunityRatingItemsWithProductThumbs(
   const productById = new Map<string, Record<string, unknown>>();
   uniqueProductIds.forEach((id, i) => {
     const p = productRows[i];
-    if (p && isPublicProductRow(p)) productById.set(id, p);
+    // Thumbnail only: koristi postojeći proizvod čak i ako nije u „javnom“ filtru (ocene i dalje postoje u feed-u).
+    if (p) productById.set(id, p);
   });
 
   const merged = items.map((item, idx) => {

@@ -551,9 +551,15 @@ export default function Home() {
               >
                 <div className="aspect-[2/3] rounded-xl overflow-hidden bg-black mb-2 border border-white/5">
                   <img
-                    src={item.image || `https://picsum.photos/seed/${item.id}/200/300`}
+                    src={
+                      stripHttpProductImgUrl(item.image) ||
+                      `https://picsum.photos/seed/${encodeURIComponent(item.id)}/200/300`
+                    }
                     alt={item.name}
                     className="h-full w-full object-contain object-center p-1.5 media-crisp"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = `https://picsum.photos/seed/rakivinum/200/200`;
+                    }}
                   />
                 </div>
                 <p className="text-[11px] font-black text-white truncate px-1 italic">{item.name}</p>

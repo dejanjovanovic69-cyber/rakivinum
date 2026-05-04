@@ -428,7 +428,7 @@ export async function fetchCommunityRatings(options?: {
   ttlMs?: number;
 }): Promise<CommunityRatingPublic[]> {
   const limitCount = options?.limitCount ?? 20;
-  const cacheKey = options?.cacheKey ?? "rakivinum_cache_community_ratings_v1";
+  const cacheKey = options?.cacheKey ?? "rakivinum_cache_community_ratings_v2";
   const ttlMs = options?.ttlMs ?? CACHE_TTL.COMMUNITY_EVENTS_6H;
 
   return dedupe(`ratingsFeed:${limitCount}:${cacheKey}`, async () => {
