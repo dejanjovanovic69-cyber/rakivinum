@@ -51,6 +51,15 @@ const KV_CACHE_TTL_SECONDS = 6 * 60 * 60;
 const CF_CACHE_S_MAXAGE_SECONDS = 3600;
 const EMERGENCY_CACHE_ONLY_MODE = false;
 
+/**
+ * `GET /api/public/home-bundle` (i usklađeni `daily-recommendations`) — Firestore read fan-out.
+ * Svaka vrednost je max dokumenata po listi / get-u na hladnom miss-u (grubo: zbir cap-ova + do 2 destilerije za dnevni thumb).
+ */
+const HOME_BUNDLE_MEMBERSHIP_CAP = 8;
+const HOME_BUNDLE_CLUB_ACTIONS_FETCH = 10;
+const HOME_BUNDLE_PRODUCTS_SAMPLE = 6;
+const HOME_BUNDLE_DISTILLERY_NAME_CAP = 4;
+
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
 let rateLimitState = new Map<string, { count: number; resetAt: number }>();
 let isolateCache = new Map<string, { data: string; expiresAt: number }>();
@@ -1101,18 +1110,24 @@ export default {
             const visitorRaw = String(url.searchParams.get("visitor") || "").trim();
             let membershipItems: Record<string, unknown>[] = [];
             if (visitorRaw) {
-              const mRows = await fetchCollectionWhereEquals(env, "club_memberships", "visitorId", visitorRaw, 12);
+              const mRows = await fetchCollectionWhereEquals(
+                env,
+                "club_memberships",
+                "visitorId",
+                visitorRaw,
+                HOME_BUNDLE_MEMBERSHIP_CAP,
+              );
               membershipItems = mRows.map((r) => toClubMembershipItem(r));
             }
 
-            const clubRows = await fetchCollection(env, "club_actions", 14);
+            const clubRows = await fetchCollection(env, "club_actions", HOME_BUNDLE_CLUB_ACTIONS_FETCH);
             const actions = clubRows
               .filter((r) => r.isActive === true)
               .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
               .slice(0, 12)
               .map((r) => toClubActionItem(r));
 
-            const productRows = await fetchCollection(env, "products", 8);
+            const productRows = await fetchCollection(env, "products", HOME_BUNDLE_PRODUCTS_SAMPLE);
             const dailyRaw = dailyRecommendationsFromRows(productRows);
             const daily = {
               rakija: await enrichDailyItemWithDistilleryLogoFallback(env, dailyRaw.rakija),
@@ -1125,7 +1140,7 @@ export default {
                   .map((a) => String((a as { distilleryId?: string }).distilleryId || "").trim())
                   .filter((id) => id.length > 0),
               ),
-            ).slice(0, 6);
+            ).slice(0, HOME_BUNDLE_DISTILLERY_NAME_CAP);
             const distilleryNames: Record<string, string> = {};
             if (distilleryIds.length > 0) {
               const dRows = await Promise.all(distilleryIds.map((id) => fetchDocumentById(env, "distilleries", id)));
@@ -1157,7 +1172,7 @@ export default {
           env,
           ctx,
           async () => {
-            const rows = await fetchCollection(env, "products", 8);
+            const rows = await fetchCollection(env, "products", HOME_BUNDLE_PRODUCTS_SAMPLE);
             const dailyRaw = dailyRecommendationsFromRows(rows);
             const daily = {
               rakija: await enrichDailyItemWithDistilleryLogoFallback(env, dailyRaw.rakija),

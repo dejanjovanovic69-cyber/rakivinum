@@ -56,6 +56,20 @@ Bez toga je nemoguće pouzdano reći „da li je ovo OK pik ili bug“.
 
 Broj **read-ova po jednom HTTP 200** zavisi od toga koliko dokumenata Worker stvarno pročita u tom handleru — tačan broj je u kodu `workers/index.ts` (REST list / get po id).
 
+### 5.1. Budžet za `home-bundle` (hladan miss na Workera)
+
+Konstante u `workers/index.ts` (`HOME_BUNDLE_*`) — **gornja granica** read-ova po komponenti pre dodatnih `get` za dnevni thumb (0–2):
+
+| Komponenta | Raniji tipični max | Sada (cap) |
+|------------|-------------------|------------|
+| `club_memberships` (ako ima `visitor`) | 12 | **8** |
+| `club_actions` (lista) | 14 | **10** |
+| `products` (uzorak za dnevni izbor + usklađeni `daily-recommendations`) | 8 | **6** |
+| `distilleries` po `distilleryId` iz akcija (imena) | 6 | **4** |
+| + dnevni thumb (logo) | 0–2 | 0–2 |
+
+**Grubi maksimum** (gost sa `visitor`, svi listovi puni): bilo ~**42** read-a po jednom miss-u → sada ~**30** (+ ista margina za dnevni logo). Keš i dalje drži većinu ponovljenih ulazaka van Firestore-a.
+
 ---
 
 ## 6. Šta sledeće **inženjerski** (kad imamo zapis iz tačke 4)
