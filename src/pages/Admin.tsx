@@ -27,7 +27,7 @@ import {
 import DistilleryAnalyticsModal from "../components/admin/DistilleryAnalyticsModal";
 import { isSuperuserEmail } from "../lib/authz";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
-import { shouldRunRefresh } from "../lib/refreshGate";
+import { hasRefreshGate, seedRefreshGate, shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
 import { DISABLE_ONLINE_PRESENCE_TRACKING } from "../lib/presence";
@@ -43,6 +43,20 @@ const ADMIN_FLAGGED_RATINGS_CACHE_KEY = "rakivinum_cache_admin_flagged_ratings_v
 const ADMIN_RECENT_RATINGS_CACHE_KEY = "rakivinum_cache_admin_recent_ratings_v1";
 const ADMIN_BLOCKED_USERS_CACHE_KEY = "rakivinum_cache_admin_blocked_users_v1";
 const ADMIN_LICENSES_CACHE_KEY = "rakivinum_cache_admin_licenses_v1";
+
+/** Posle `readCache`: prvi put u sesiji ne pali Firestore ako je keš još validan; posle toga 10m gate. */
+function shouldSkipAdminNetworkAfterCache(
+  optsForce: boolean | undefined,
+  cached: unknown,
+  gateKey: string,
+): boolean {
+  if (optsForce || cached == null) return false;
+  if (!hasRefreshGate(gateKey)) {
+    seedRefreshGate(gateKey);
+    return true;
+  }
+  return !shouldRunRefresh(gateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+}
 
 // Helper function to resize and compress image to base64
 const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality: number = 0.6): Promise<string> => {
@@ -798,7 +812,7 @@ export default function Admin() {
           if (current && cached.some((d) => d.id === current)) return current;
           return cached[0]?.id || "";
         });
-        if (!shouldRunRefresh("admin:distilleries:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, "admin:distilleries:network")) {
           return;
         }
       } else {
@@ -845,7 +859,7 @@ export default function Admin() {
       const cached = readCache<ProductListItem[]>(productsCacheKey);
       if (!opts?.force && cached != null) {
         setAdminProducts(cached);
-        if (!shouldRunRefresh(gateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, gateKey)) {
           return;
         }
       } else {
@@ -893,7 +907,7 @@ export default function Admin() {
       const cached = readCache<ProductListItem[]>(ADMIN_PENDING_APPROVALS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setPendingProductApprovals(cached);
-        if (!shouldRunRefresh("admin:pending_approvals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, "admin:pending_approvals:network")) return;
       } else {
         shouldRunRefresh("admin:pending_approvals:network", 0);
       }
@@ -930,7 +944,7 @@ export default function Admin() {
       const cached = readCache<EventProposalItem[]>(ADMIN_EVENT_PROPOSALS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setEventProposals(cached);
-        if (!shouldRunRefresh("admin:event_proposals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, "admin:event_proposals:network")) return;
       } else {
         shouldRunRefresh("admin:event_proposals:network", 0);
       }
@@ -960,7 +974,7 @@ export default function Admin() {
       const cached = readCache<CommunityLinkItem[]>(ADMIN_COMMUNITY_LINKS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setCommunityLinks(cached);
-        if (!shouldRunRefresh("admin:community_links:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, "admin:community_links:network")) return;
       } else {
         shouldRunRefresh("admin:community_links:network", 0);
       }
@@ -991,7 +1005,7 @@ export default function Admin() {
       const cached = readCache<CommunityEventItem[]>(ADMIN_COMMUNITY_EVENTS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setCommunityEvents(cached);
-        if (!shouldRunRefresh("admin:community_events:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, "admin:community_events:network")) return;
       } else {
         shouldRunRefresh("admin:community_events:network", 0);
       }
@@ -1022,7 +1036,7 @@ export default function Admin() {
       const cached = readCache<RatingRow[]>(ADMIN_FLAGGED_RATINGS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setFlaggedRatings(cached);
-        if (!shouldRunRefresh("admin:ratings_flagged:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, "admin:ratings_flagged:network")) return;
       } else {
         shouldRunRefresh("admin:ratings_flagged:network", 0);
       }
@@ -1086,7 +1100,7 @@ export default function Admin() {
       const cached = readCache<string[]>(ADMIN_BLOCKED_USERS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setBlockedUsers(cached);
-        if (!shouldRunRefresh("admin:blocked_users:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, "admin:blocked_users:network")) return;
       } else {
         shouldRunRefresh("admin:blocked_users:network", 0);
       }
@@ -1159,7 +1173,7 @@ export default function Admin() {
       const cached = readCache<LicenseItem[]>(ADMIN_LICENSES_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setLicenses(cached);
-        if (!shouldRunRefresh("admin:licenses:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, "admin:licenses:network")) return;
       } else {
         shouldRunRefresh("admin:licenses:network", 0);
       }
