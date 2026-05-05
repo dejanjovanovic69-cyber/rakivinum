@@ -6,6 +6,15 @@
 2. Za detalje Firestore read migracija vidi **`docs/FIRESTORE-READ-AUDIT.md`**.
 3. Na samom početku proveri stanje grane: `git status -sb`.
 
+## PRIORITET #1 (uvek prvo)
+
+- **Ne uvoditi per-visitor cache ključ** za javni `home-bundle` tok. `GET /api/public/home-bundle` mora ostati globalan (bez `?visitor` u pozivu i bez `visitor` u Worker cache ključu).
+- **Home članstva se vuku odvojeno** preko `fetchPublicClubMembershipsByVisitorId(...)`; `home-bundle` ostaje samo globalni payload.
+- **Cache-first na klijentu ostaje obavezan**: pre mreže proveriti `readCache`, pa tek onda edge/fallback.
+- **MyClubs progres obavezno koristi lokalni cache + refresh gate** (`rakivinum_cache_myclubs_progress_<visitorId>_v1`, `myclubs:progress:<visitorId>`).
+- Kod svake izmene javnog read toka obavezan redosled: `npm run build` -> `npm run cf:smoke:edge` -> `npm run cf:deploy:resilient`.
+- Posle deploy-a obavezno proveriti da je novi bundle stvarno aktivan na `master.rakivinum.pages.dev` (da nema starih `v6` ključeva i `?visitor` u `home-bundle` toku), pa tek onda validirati na `rakivinum.com`.
+
 ## Kako da radiš autonomno (bez stalnog „nastavi“)
 
 - U **jednoj** sesiji uradi ceo smisleni paket (kod + provera + commit), umesto da čekaš dodatnu poruku posle svakog koraka.
