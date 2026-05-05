@@ -9,6 +9,9 @@ import {
   fetchPublicClubMembershipsByVisitorId,
   fetchPublicDistilleriesByIds,
 } from "../lib/dataService";
+import { readCache, writeCache } from "../lib/resilience";
+import { REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { shouldRunRefresh } from "../lib/refreshGate";
 
 type ClubTarget = { label: string; current: number; target: number };
 type ClubAction = {
@@ -85,7 +88,15 @@ export default function MyClubs() {
         // Read visitor progress once, then reuse per-club to avoid N x Firestore queries.
         const scansByDistillery = new Map<string, number>();
         const ratingsByDistillery = new Map<string, number>();
-        if (!EMERGENCY_READ_FREEZE) {
+        const progressCacheKey = `rakivinum_cache_myclubs_progress_${visitorId}_v1`;
+        const cachedProgress = readCache<{ scans: Record<string, number>; ratings: Record<string, number> }>(
+          progressCacheKey,
+        );
+
+        if (cachedProgress && !shouldRunRefresh(`myclubs:progress:${visitorId}`, REFRESH_INTERVAL.USER_LIGHT_1H)) {
+          Object.entries(cachedProgress.scans).forEach(([k, v]) => scansByDistillery.set(k, v));
+          Object.entries(cachedProgress.ratings).forEach(([k, v]) => ratingsByDistillery.set(k, v));
+        } else if (!EMERGENCY_READ_FREEZE) {
           const [scansSnap, ratingsSnap] = await Promise.all([
             getDocs(
               query(
@@ -103,18 +114,26 @@ export default function MyClubs() {
               ),
             ),
           ]);
+          const scansObj: Record<string, number> = {};
+          const ratingsObj: Record<string, number> = {};
           scansSnap.forEach((d) => {
             const row = d.data() as { distilleryId?: unknown };
             const distilleryId = String(row?.distilleryId || "").trim();
             if (!distilleryId) return;
-            scansByDistillery.set(distilleryId, (scansByDistillery.get(distilleryId) || 0) + 1);
+            const count = (scansByDistillery.get(distilleryId) || 0) + 1;
+            scansByDistillery.set(distilleryId, count);
+            scansObj[distilleryId] = count;
           });
           ratingsSnap.forEach((d) => {
             const row = d.data() as { distilleryId?: unknown };
             const distilleryId = String(row?.distilleryId || "").trim();
             if (!distilleryId) return;
-            ratingsByDistillery.set(distilleryId, (ratingsByDistillery.get(distilleryId) || 0) + 1);
+            const count = (ratingsByDistillery.get(distilleryId) || 0) + 1;
+            ratingsByDistillery.set(distilleryId, count);
+            ratingsObj[distilleryId] = count;
           });
+
+          writeCache(progressCacheKey, { scans: scansObj, ratings: ratingsObj }, REFRESH_INTERVAL.USER_LIGHT_1H);
         }
 
         const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);

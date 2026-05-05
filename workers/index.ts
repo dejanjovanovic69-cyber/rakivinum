@@ -55,7 +55,6 @@ const EMERGENCY_CACHE_ONLY_MODE = false;
  * `GET /api/public/home-bundle` (i usklađeni `daily-recommendations`) — Firestore read fan-out.
  * Svaka vrednost je max dokumenata po listi / get-u na hladnom miss-u (grubo: zbir cap-ova + do 2 destilerije za dnevni thumb).
  */
-const HOME_BUNDLE_MEMBERSHIP_CAP = 8;
 const HOME_BUNDLE_CLUB_ACTIONS_FETCH = 10;
 const HOME_BUNDLE_PRODUCTS_SAMPLE = 6;
 const HOME_BUNDLE_DISTILLERY_NAME_CAP = 4;
@@ -200,11 +199,6 @@ async function servePublicCached(
   }
   if (cacheUrl.pathname === "/api/public/product-lookup") {
     if (cacheUrl.searchParams.has("n")) allowedParams.set("n", String(cacheUrl.searchParams.get("n") || ""));
-  }
-  if (cacheUrl.pathname === "/api/public/home-bundle") {
-    if (cacheUrl.searchParams.has("visitor")) {
-      allowedParams.set("visitor", String(cacheUrl.searchParams.get("visitor") || ""));
-    }
   }
   if (cacheUrl.pathname.startsWith("/api/public/products-by-distillery/")) {
     if (cacheUrl.searchParams.has("after")) {
@@ -1129,19 +1123,6 @@ export default {
           env,
           ctx,
           async () => {
-            const visitorRaw = String(url.searchParams.get("visitor") || "").trim();
-            let membershipItems: Record<string, unknown>[] = [];
-            if (visitorRaw) {
-              const mRows = await fetchCollectionWhereEquals(
-                env,
-                "club_memberships",
-                "visitorId",
-                visitorRaw,
-                HOME_BUNDLE_MEMBERSHIP_CAP,
-              );
-              membershipItems = mRows.map((r) => toClubMembershipItem(r));
-            }
-
             const clubRows = await fetchCollection(env, "club_actions", HOME_BUNDLE_CLUB_ACTIONS_FETCH);
             const actions = clubRows
               .filter((r) => r.isActive === true)
@@ -1176,7 +1157,7 @@ export default {
 
             return new Response(
               JSON.stringify({
-                memberships: membershipItems,
+                memberships: [],
                 actions,
                 daily,
                 distilleryNames,

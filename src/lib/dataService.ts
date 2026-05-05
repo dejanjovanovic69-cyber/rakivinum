@@ -324,18 +324,16 @@ function parseHomeBundleJson(json: Record<string, unknown>): HomeBundlePublic {
   return { memberships, actions, daily, distilleryNames };
 }
 
-/** Jedan edge poziv za Home: članstva + akcije + dnevna preporuka + imena destilerija (manje Firestore rundi na Workeru). */
-export async function fetchPublicHomeBundle(visitorId: string | null | undefined): Promise<HomeBundlePublic | null> {
-  const v = String(visitorId || "").trim();
-  const dedupeKey = `homeBundle:${v || "anon"}`;
-  const cacheKey = v ? `rakivinum_cache_home_bundle_${v}_v6` : `rakivinum_cache_home_bundle_anon_v6`;
+/** Jedan edge poziv za Home: globalni bundle (akcije + dnevna preporuka + imena), bez visitor parametra. */
+export async function fetchPublicHomeBundle(): Promise<HomeBundlePublic | null> {
+  const dedupeKey = "homeBundle:global";
+  const cacheKey = "rakivinum_cache_home_bundle_global_v7";
 
   return dedupe(dedupeKey, async () => {
     const cached = readCache<HomeBundlePublic>(cacheKey);
     if (cached) return sanitizeHomeBundleDailyCached(cached);
 
-    const qs = v ? `?visitor=${encodeURIComponent(v)}` : "";
-    const json = await fetchEdgeRawJson(`/api/public/home-bundle${qs}`);
+    const json = await fetchEdgeRawJson("/api/public/home-bundle");
     if (!json || typeof json !== "object") {
       return readStaleCacheValue<HomeBundlePublic>(cacheKey);
     }

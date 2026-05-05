@@ -8,6 +8,7 @@ import { isQuotaError, readCache } from "../lib/resilience";
 import type { HomeBundlePublic } from "../lib/dataService";
 import {
   fetchPublicHomeBundle,
+  fetchPublicClubMembershipsByVisitorId,
   fetchPublicLicenseByToken,
   pickHttpProductThumbForHome,
   stripHttpProductImgUrl,
@@ -137,20 +138,18 @@ export default function Home() {
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
     const visitorId = localStorage.getItem("rakivinum_visitor_id");
-    const bundleCacheKey = visitorId ? `rakivinum_cache_home_bundle_${visitorId}_v6` : `rakivinum_cache_home_bundle_anon_v6`;
+    const bundleCacheKey = "rakivinum_cache_home_bundle_global_v7";
+
+    if (visitorId) {
+      try {
+        const localClubs = JSON.parse(localStorage.getItem(`clubs_${visitorId}`) || "[]");
+        if (Array.isArray(localClubs)) setJoinedClubs(localClubs);
+      } catch {
+        // ignore storage errors
+      }
+    }
 
     const applyBundle = (b: HomeBundlePublic) => {
-      const clubs = b.memberships
-        .map((d) => d.distilleryId)
-        .filter((x): x is string => typeof x === "string" && x.trim() !== "");
-      setJoinedClubs(clubs);
-      if (visitorId) {
-        try {
-          localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
-        } catch {
-          // ignore storage errors
-        }
-      }
       const filteredActions = (b.actions as ClubActionLite[])
         .filter((action) => {
           if (!action.endsAt) return true;
@@ -180,8 +179,20 @@ export default function Home() {
       if (homeBundleRefreshInFlight.current) return;
       homeBundleRefreshInFlight.current = true;
       try {
-        const b = await fetchPublicHomeBundle(visitorId);
+        const b = await fetchPublicHomeBundle();
         if (b) applyBundle(b);
+        if (visitorId) {
+          const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 30);
+          const clubs = memberships
+            .map((m) => m.distilleryId)
+            .filter((x): x is string => typeof x === "string" && x.trim() !== "");
+          setJoinedClubs(clubs);
+          try {
+            localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
+          } catch {
+            // ignore storage errors
+          }
+        }
       } catch (err) {
         console.error("Greška pri učitavanju Home paketa:", err);
         if (isQuotaError(err)) setQuotaExceeded(true);
