@@ -239,6 +239,7 @@ export default function Admin() {
   /** Tab datasets loaded at least once — avoids refetch when switching away/back (e.g. empty list stays length 0). */
   const [loadedDataTabs, setLoadedDataTabs] = useState<Set<AdminTab>>(() => new Set());
   const adminProductsFetchKeyRef = useRef<string>("");
+  const adminFetchInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
   const [isModerating, setIsModerating] = useState(false);
   const [isGeneratingLicense, setIsGeneratingLicense] = useState(false);
   const [onlineUsersCount, setOnlineUsersCount] = useState<number | null>(null);
@@ -781,20 +782,27 @@ export default function Admin() {
   };
 
   const fetchDistilleries = async (opts?: { force?: boolean }) => {
+    const inFlightKey = "admin:fetch:distilleries";
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!opts?.force) {
-        const cached = readCache<DistilleryListItem[]>(ADMIN_DISTILLERIES_LIST_CACHE_KEY);
-        if (cached != null) {
-          setDistilleries(cached);
-          setSelectedDistilleryId((current) => {
-            if (current === "all") return current;
-            if (current && cached.some((d) => d.id === current)) return current;
-            return cached[0]?.id || "";
-          });
-          if (!shouldRunRefresh("admin:distilleries:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
-            return;
-          }
+      const cached = readCache<DistilleryListItem[]>(ADMIN_DISTILLERIES_LIST_CACHE_KEY);
+      if (!opts?.force && cached != null) {
+        setDistilleries(cached);
+        setSelectedDistilleryId((current) => {
+          if (current === "all") return current;
+          if (current && cached.some((d) => d.id === current)) return current;
+          return cached[0]?.id || "";
+        });
+        if (!shouldRunRefresh("admin:distilleries:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+          return;
         }
+      } else {
+        shouldRunRefresh("admin:distilleries:network", 0);
       }
 
       const snap = await getDocs(query(collection(db, 'distilleries'), limit(ADMIN_DISTILLERIES_LIMIT)));
@@ -811,24 +819,37 @@ export default function Admin() {
     } catch (err) {
       console.error("Greška pri učitavanju destilerija", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const fetchAdminProducts = async (opts?: { force?: boolean }) => {
+    if (!selectedDistilleryId) {
+      setAdminProducts([]);
+      return;
+    }
+    const allMode = selectedDistilleryId === "all" && isSuperAdminUser;
+    const productsCacheKey = `rakivinum_cache_admin_products_v2_${allMode ? "all" : selectedDistilleryId}`;
+    const gateKey = `admin:products:network:${productsCacheKey}`;
+    const inFlightKey = `admin:fetch:products:${productsCacheKey}`;
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!selectedDistilleryId) {
-        setAdminProducts([]);
-        return;
-      }
-      const allMode = selectedDistilleryId === "all" && isSuperAdminUser;
-      const productsCacheKey = `rakivinum_cache_admin_products_v2_${allMode ? "all" : selectedDistilleryId}`;
-      if (!opts?.force) {
-        const cached = readCache<ProductListItem[]>(productsCacheKey);
-        if (cached != null) {
-          setAdminProducts(cached);
-          if (!shouldRunRefresh(`admin:products:network:${productsCacheKey}`, REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
-            return;
-          }
+      const cached = readCache<ProductListItem[]>(productsCacheKey);
+      if (!opts?.force && cached != null) {
+        setAdminProducts(cached);
+        if (!shouldRunRefresh(gateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+          return;
         }
+      } else {
+        shouldRunRefresh(gateKey, 0);
       }
 
       // Super admin vidi sve ako želi, ili filtrira po izabranoj destileriji
@@ -853,16 +874,28 @@ export default function Admin() {
     } catch (err) {
       console.error("Greška pri učitavanju proizvoda", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const fetchPendingProductApprovals = async (opts?: { force?: boolean }) => {
+    const inFlightKey = "admin:fetch:pending_approvals";
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!opts?.force) {
-        const cached = readCache<ProductListItem[]>(ADMIN_PENDING_APPROVALS_CACHE_KEY);
-        if (cached != null) {
-          setPendingProductApprovals(cached);
-          if (!shouldRunRefresh("admin:pending_approvals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
-        }
+      const cached = readCache<ProductListItem[]>(ADMIN_PENDING_APPROVALS_CACHE_KEY);
+      if (!opts?.force && cached != null) {
+        setPendingProductApprovals(cached);
+        if (!shouldRunRefresh("admin:pending_approvals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      } else {
+        shouldRunRefresh("admin:pending_approvals:network", 0);
       }
       const q = query(collection(db, "products"), where("isApproved", "==", false), limit(ADMIN_PENDING_APPROVALS_LIMIT));
       const snap = await getDocs(q);
@@ -878,16 +911,28 @@ export default function Admin() {
     } catch (err) {
       console.error("Greška pri učitavanju promena za odobrenje", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const fetchEventProposals = async (opts?: { force?: boolean }) => {
+    const inFlightKey = "admin:fetch:event_proposals";
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!opts?.force) {
-        const cached = readCache<EventProposalItem[]>(ADMIN_EVENT_PROPOSALS_CACHE_KEY);
-        if (cached != null) {
-          setEventProposals(cached);
-          if (!shouldRunRefresh("admin:event_proposals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
-        }
+      const cached = readCache<EventProposalItem[]>(ADMIN_EVENT_PROPOSALS_CACHE_KEY);
+      if (!opts?.force && cached != null) {
+        setEventProposals(cached);
+        if (!shouldRunRefresh("admin:event_proposals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      } else {
+        shouldRunRefresh("admin:event_proposals:network", 0);
       }
       const snap = await getDocs(query(collection(db, 'eventProposals'), limit(ADMIN_EVENT_PROPOSALS_LIMIT)));
       const rows = snap.docs.map(d => ({ id: d.id, ...d.data() } as EventProposalItem));
@@ -896,16 +941,28 @@ export default function Admin() {
     } catch (err) {
       console.error("Error fetching event proposals:", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const fetchCommunityLinks = async (opts?: { force?: boolean }) => {
+    const inFlightKey = "admin:fetch:community_links";
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!opts?.force) {
-        const cached = readCache<CommunityLinkItem[]>(ADMIN_COMMUNITY_LINKS_CACHE_KEY);
-        if (cached != null) {
-          setCommunityLinks(cached);
-          if (!shouldRunRefresh("admin:community_links:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
-        }
+      const cached = readCache<CommunityLinkItem[]>(ADMIN_COMMUNITY_LINKS_CACHE_KEY);
+      if (!opts?.force && cached != null) {
+        setCommunityLinks(cached);
+        if (!shouldRunRefresh("admin:community_links:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      } else {
+        shouldRunRefresh("admin:community_links:network", 0);
       }
       const snap = await getDocs(query(collection(db, 'community_links'), limit(ADMIN_LINKS_LIMIT)));
       const list: CommunityLinkItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityLinkItem) }));
@@ -915,16 +972,28 @@ export default function Admin() {
     } catch (err) {
       console.error("Greška pri učitavanju korisnih linkova:", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const fetchCommunityEvents = async (opts?: { force?: boolean }) => {
+    const inFlightKey = "admin:fetch:community_events";
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!opts?.force) {
-        const cached = readCache<CommunityEventItem[]>(ADMIN_COMMUNITY_EVENTS_CACHE_KEY);
-        if (cached != null) {
-          setCommunityEvents(cached);
-          if (!shouldRunRefresh("admin:community_events:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
-        }
+      const cached = readCache<CommunityEventItem[]>(ADMIN_COMMUNITY_EVENTS_CACHE_KEY);
+      if (!opts?.force && cached != null) {
+        setCommunityEvents(cached);
+        if (!shouldRunRefresh("admin:community_events:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      } else {
+        shouldRunRefresh("admin:community_events:network", 0);
       }
       const snap = await getDocs(query(collection(db, 'community_events'), limit(ADMIN_EVENTS_LIMIT)));
       const list: CommunityEventItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityEventItem) }));
@@ -934,16 +1003,28 @@ export default function Admin() {
     } catch (err) {
       console.error("Greška pri učitavanju događaja:", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const fetchFlaggedRatings = async (opts?: { force?: boolean }) => {
+    const inFlightKey = "admin:fetch:ratings_flagged";
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!opts?.force) {
-        const cached = readCache<RatingRow[]>(ADMIN_FLAGGED_RATINGS_CACHE_KEY);
-        if (cached != null) {
-          setFlaggedRatings(cached);
-          if (!shouldRunRefresh("admin:ratings_flagged:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
-        }
+      const cached = readCache<RatingRow[]>(ADMIN_FLAGGED_RATINGS_CACHE_KEY);
+      if (!opts?.force && cached != null) {
+        setFlaggedRatings(cached);
+        if (!shouldRunRefresh("admin:ratings_flagged:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      } else {
+        shouldRunRefresh("admin:ratings_flagged:network", 0);
       }
       const q = query(collection(db, "ratings"), where("isFlagged", "==", true), limit(ADMIN_FLAGGED_RATINGS_LIMIT));
       const snap = await getDocs(q);
@@ -954,16 +1035,28 @@ export default function Admin() {
     } catch (err) {
       console.error("Error fetching flagged ratings:", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const fetchRecentRatings = async (opts?: { force?: boolean }) => {
+    const inFlightKey = "admin:fetch:ratings_recent";
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!opts?.force) {
-        const cached = readCache<RatingRow[]>(ADMIN_RECENT_RATINGS_CACHE_KEY);
-        if (cached != null) {
-          setAllRatings(cached);
-          if (!shouldRunRefresh("admin:ratings_recent:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
-        }
+      const cached = readCache<RatingRow[]>(ADMIN_RECENT_RATINGS_CACHE_KEY);
+      if (!opts?.force && cached != null) {
+        setAllRatings(cached);
+        if (!shouldRunRefresh("admin:ratings_recent:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      } else {
+        shouldRunRefresh("admin:ratings_recent:network", 0);
       }
       const q = query(collection(db, "ratings"), orderBy("createdAt", "desc"), limit(40));
       const snap = await getDocs(q);
@@ -974,16 +1067,28 @@ export default function Admin() {
     } catch (err) {
       console.error("Error fetching ratings:", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const fetchBlockedUsers = async (opts?: { force?: boolean }) => {
+    const inFlightKey = "admin:fetch:blocked_users";
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!opts?.force) {
-        const cached = readCache<string[]>(ADMIN_BLOCKED_USERS_CACHE_KEY);
-        if (cached != null) {
-          setBlockedUsers(cached);
-          if (!shouldRunRefresh("admin:blocked_users:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
-        }
+      const cached = readCache<string[]>(ADMIN_BLOCKED_USERS_CACHE_KEY);
+      if (!opts?.force && cached != null) {
+        setBlockedUsers(cached);
+        if (!shouldRunRefresh("admin:blocked_users:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      } else {
+        shouldRunRefresh("admin:blocked_users:network", 0);
       }
       const snap = await getDocs(query(collection(db, 'blocked_users'), limit(ADMIN_BLOCKED_USERS_LIMIT)));
       const rows = snap.docs.map(d => d.id);
@@ -992,6 +1097,11 @@ export default function Admin() {
     } catch (err) {
       console.error("Error fetching blocked users:", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const handleBlockUser = async (userId: string) => {
@@ -1038,13 +1148,20 @@ export default function Admin() {
   };
 
   const fetchLicenses = async (opts?: { force?: boolean }) => {
+    const inFlightKey = "admin:fetch:licenses";
+    const active = adminFetchInFlightRef.current.get(inFlightKey);
+    if (active) {
+      await active;
+      return;
+    }
+    const run = (async () => {
     try {
-      if (!opts?.force) {
-        const cached = readCache<LicenseItem[]>(ADMIN_LICENSES_CACHE_KEY);
-        if (cached != null) {
-          setLicenses(cached);
-          if (!shouldRunRefresh("admin:licenses:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
-        }
+      const cached = readCache<LicenseItem[]>(ADMIN_LICENSES_CACHE_KEY);
+      if (!opts?.force && cached != null) {
+        setLicenses(cached);
+        if (!shouldRunRefresh("admin:licenses:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      } else {
+        shouldRunRefresh("admin:licenses:network", 0);
       }
       const snap = await getDocs(query(collection(db, 'licenses'), limit(ADMIN_LICENSES_LIMIT)));
       const rows = snap.docs.map(d => ({ id: d.id, ...d.data() } as LicenseItem));
@@ -1053,6 +1170,11 @@ export default function Admin() {
     } catch (err) {
       console.error("Error fetching licenses:", err);
     }
+    })().finally(() => {
+      adminFetchInFlightRef.current.delete(inFlightKey);
+    });
+    adminFetchInFlightRef.current.set(inFlightKey, run);
+    await run;
   };
 
   const handleApproveProduct = async (productId: string) => {
@@ -1331,7 +1453,7 @@ export default function Admin() {
     if (EMERGENCY_READ_FREEZE) return;
 
     if (activeTab === "distilleries") {
-      if (selectedDistilleryId) {
+      if (selectedDistilleryId && distilleryTab === "pica") {
         const productsFetchKey =
           selectedDistilleryId === "all" && isSuperAdminUser
             ? "products:all"
@@ -1369,7 +1491,7 @@ export default function Admin() {
         setLoadedDataTabs((prev) => new Set(prev).add("licensing"));
       })();
     }
-  }, [activeTab, selectedDistilleryId, EMERGENCY_READ_FREEZE, loadedDataTabs, isSuperAdminUser]);
+  }, [activeTab, selectedDistilleryId, distilleryTab, EMERGENCY_READ_FREEZE, loadedDataTabs, isSuperAdminUser]);
 
   const handleSaveCommunityLink = async (e: React.FormEvent) => {
     e.preventDefault();
