@@ -21,6 +21,11 @@
 - Ne pitaj korisnika za potvrdu sitnica; ako postoji više opcija, biraš **najbezbedniju** (Worker-first + Firebase fallback, bez slabljenja pravila pristupa).
 - Ako nešto blokira (nema mreže, nema kredencijala), dokumentuj u `STATUS-ZADATAKA.md` šta je ostalo i završi ono što može lokalno.
 
+## Ručno testiranje (da vlasnik ne bude „CI“ posle svake sitnice)
+
+- **Agent prvo automatski:** `npm run lint`, `npm run build`, po pravilu `npm run cf:smoke:edge` kad diraš Worker/edge; `npm run test:e2e` kad menjaš rute / layout / javne stranice (vidi `docs/QA-E2E.md`). Tek u odgovoru jasno napiši šta je mašinski provereno i **šta eventualno** treba ručno (kratko, jednom po smislenom paketu).
+- **Ne tražiti** korisnika da posle svake male izmene ponovo prolazi ceo sajt ili Firestore graf; ručno validiranje — **jedan prolaz** kad je paket gotov, po mogućstvu prvo na `master.rakivinum.pages.dev`, pa `rakivinum.com` kad korisnik potvrdi mirno ponašanje.
+
 ## Konvencije u ovom repou
 
 - Javni read: **`src/lib/dataService.ts`** — uvek Worker-first (`VITE_EDGE_API_BASE`), zatim `getDoc` / `getDocs` kao fallback gde ima smisla.
