@@ -201,6 +201,19 @@ export default function DistilleryDashboard() {
     return Number.isNaN(d.getTime()) ? new Date(0) : d;
   };
 
+  const safeText = (value: unknown, fallback = ""): string => {
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (!value) return fallback;
+    if (typeof value === "object") {
+      const obj = value as Record<string, unknown>;
+      const firstString = Object.values(obj).find((v) => typeof v === "string");
+      if (typeof firstString === "string") return firstString;
+      return fallback;
+    }
+    return fallback;
+  };
+
   const distilleryUrl = distillery ? `${window.location.origin}/distillery/${distillery.id}` : '';
 
   useEffect(() => {
@@ -824,19 +837,6 @@ export default function DistilleryDashboard() {
      ].sort((a,b) => b.count - a.count);
   };
   const timeOfDayData = computeTimeOfDayData();
-
-  const safeText = (value: unknown, fallback = ""): string => {
-    if (typeof value === "string") return value;
-    if (typeof value === "number" || typeof value === "boolean") return String(value);
-    if (!value) return fallback;
-    if (typeof value === "object") {
-      const obj = value as Record<string, unknown>;
-      const firstString = Object.values(obj).find((v) => typeof v === "string");
-      if (typeof firstString === "string") return firstString;
-      return fallback;
-    }
-    return fallback;
-  };
 
   // Compute Activity Feed (Live Feed)
   const computeActivityFeed = () => {
