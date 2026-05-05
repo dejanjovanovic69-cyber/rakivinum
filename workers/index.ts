@@ -50,6 +50,9 @@ const KV_CACHE_TTL_SECONDS = 6 * 60 * 60;
 /** Workers Cache API (POP); many concurrent clients share one cached body per normalized URL. */
 const CF_CACHE_S_MAXAGE_SECONDS = 3600;
 const EMERGENCY_CACHE_ONLY_MODE = false;
+/** Temporary compatibility mode while legacy products still store images as base64 data URLs. */
+const ALLOW_DATA_IMAGE_FALLBACK = true;
+const DATA_IMAGE_MAX_CHARS = 2_500_000;
 
 /**
  * `GET /api/public/home-bundle` (i usklađeni `daily-recommendations`) — Firestore read fan-out.
@@ -67,8 +70,8 @@ const RATINGS_FEED_URL_LIMIT_DEFAULT = 12;
 const RATINGS_FEED_URL_LIMIT_MAX = 24;
 const RATINGS_FEED_LIST_FETCH_MAX = 24;
 const RATINGS_FEED_LIST_FETCH_MIN = 10;
-const RATINGS_FEED_PRODUCT_ENRICH_CAP = 15;
-const RATINGS_FEED_DISTILLERY_LOGO_CAP = 8;
+const RATINGS_FEED_PRODUCT_ENRICH_CAP = 32;
+const RATINGS_FEED_DISTILLERY_LOGO_CAP = 24;
 
 /**
  * Javni katalozi — `GET /api/public/distilleries` i `GET /api/public/products` (lista dokumenata po `pageSize`).
@@ -200,9 +203,17 @@ async function servePublicCached(
   if (cacheUrl.pathname === "/api/public/product-lookup") {
     if (cacheUrl.searchParams.has("n")) allowedParams.set("n", String(cacheUrl.searchParams.get("n") || ""));
   }
+  if (cacheUrl.pathname === "/api/public/ratings-feed") {
+    if (cacheUrl.searchParams.has("imgv")) {
+      allowedParams.set("imgv", String(cacheUrl.searchParams.get("imgv") || ""));
+    }
+  }
   if (cacheUrl.pathname.startsWith("/api/public/products-by-distillery/")) {
     if (cacheUrl.searchParams.has("after")) {
       allowedParams.set("after", String(cacheUrl.searchParams.get("after") || ""));
+    }
+    if (cacheUrl.searchParams.has("imgv")) {
+      allowedParams.set("imgv", String(cacheUrl.searchParams.get("imgv") || ""));
     }
   }
   cacheUrl.search = allowedParams.toString();
@@ -402,8 +413,10 @@ function asText(value: unknown): string | undefined {
 function sanitizeImageUrl(value: unknown): string | undefined {
   const v = asText(value);
   if (!v) return undefined;
-  // Inline base64 blows up JSON, edge cache, and bandwidth; public responses should use https/storage URLs.
-  if (/^\s*data:/i.test(v)) return undefined;
+  if (/^\s*data:/i.test(v)) {
+    if (!ALLOW_DATA_IMAGE_FALLBACK) return undefined;
+    return v.length <= DATA_IMAGE_MAX_CHARS ? v : undefined;
+  }
   return v;
 }
 

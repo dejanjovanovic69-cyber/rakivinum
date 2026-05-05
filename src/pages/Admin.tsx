@@ -32,6 +32,7 @@ import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
 import { DISABLE_ONLINE_PRESENCE_TRACKING } from "../lib/presence";
 import { readCache, writeCache } from "../lib/resilience";
+import { RAKIVINUM_MARK_FALLBACK, hasUsablePublicProductImage, isImgFallbackUrl, pickBestProductImageUrl } from "../lib/imageFallback";
 
 const ADMIN_DISTILLERIES_LIST_CACHE_KEY = "rakivinum_cache_admin_distilleries_list_v1";
 const ADMIN_PENDING_APPROVALS_CACHE_KEY = "rakivinum_cache_admin_pending_approvals_v1";
@@ -256,6 +257,7 @@ export default function Admin() {
   const [lastGeneratedBatchTokens, setLastGeneratedBatchTokens] = useState<string[]>([]);
   const [confirmDeleteLicenseId, setConfirmDeleteLicenseId] = useState<string | null>(null);
   const [licenseLogSearch, setLicenseLogSearch] = useState("");
+  const productsMissingPublicImage = adminProducts.filter((p) => !hasUsablePublicProductImage(p));
 
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) {
@@ -2230,15 +2232,32 @@ export default function Admin() {
           <h3 className="text-sm font-bold text-white flex items-center gap-2">
             <Database className="w-4 h-4 text-gold-500" /> Registrovane rakije ({adminProducts.length})
           </h3>
+          {productsMissingPublicImage.length > 0 && (
+            <div className="rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-3 space-y-2">
+              <p className="text-xs font-black uppercase tracking-wide text-yellow-500">
+                Slike za migraciju ({productsMissingPublicImage.length})
+              </p>
+              <p className="text-[11px] text-yellow-100/90">
+                Ovi proizvodi nemaju validan javni HTTP image URL (`image`/`bottleImageUrl`/`galleryImages`).
+              </p>
+              <p className="text-[11px] text-yellow-100/80 line-clamp-2">
+                {productsMissingPublicImage.slice(0, 8).map((p) => p.name || p.id).join(" | ")}
+              </p>
+            </div>
+          )}
           <div className="space-y-3">
             {adminProducts.map(prod => (
               <div key={prod.id} className="bg-bg-card-elevated border border-border-subtle rounded-xl p-3 flex flex-col sm:flex-row sm:items-center gap-4">
                 <div className="flex items-center gap-4 flex-1 min-w-0">
                   <img 
-                    src={prod.bottleImageUrl} 
+                    src={pickBestProductImageUrl(prod)}
                     alt={prod.name} 
                     className="w-12 h-12 object-cover rounded bg-bg-base shrink-0" 
-                    onError={(e) => { (e.target as HTMLImageElement).src = 'https://picsum.photos/seed/rakija/100/100'; }}
+                    onError={(e) => {
+                      const el = e.target as HTMLImageElement;
+                      if (isImgFallbackUrl(el.src)) return;
+                      el.src = RAKIVINUM_MARK_FALLBACK;
+                    }}
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -2317,10 +2336,14 @@ export default function Admin() {
                 <div key={prod.id} className="bg-bg-card-elevated border border-border-subtle rounded-xl p-3 flex flex-col sm:flex-row sm:items-center gap-4">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <img
-                      src={prod.bottleImageUrl || "https://picsum.photos/seed/rakija/100/100"}
+                      src={pickBestProductImageUrl(prod)}
                       alt={prod.name}
                       className="w-12 h-12 object-cover rounded bg-bg-base shrink-0"
-                      onError={(e) => { (e.target as HTMLImageElement).src = 'https://picsum.photos/seed/rakija/100/100'; }}
+                      onError={(e) => {
+                        const el = e.target as HTMLImageElement;
+                        if (isImgFallbackUrl(el.src)) return;
+                        el.src = RAKIVINUM_MARK_FALLBACK;
+                      }}
                     />
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-bold text-white truncate">{prod.name}</p>

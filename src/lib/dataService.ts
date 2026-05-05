@@ -46,10 +46,14 @@ type DailyRecommendationsPublic = {
 };
 
 /** Za `<img src>`: bez `data:` (ogroman JSON / loš mali tile u Firefoxu) i bez ekstremno dugih stringova. */
+const ALLOW_DATA_IMAGE_FALLBACK = true;
+const DATA_IMAGE_MAX_CHARS = 2_500_000;
+
 export function stripHttpProductImgUrl(v: unknown): string {
   if (typeof v !== "string") return "";
   const t = v.trim();
-  if (!t || /^\s*data:/i.test(t) || t.length > 120_000) return "";
+  if (!t || t.length > DATA_IMAGE_MAX_CHARS) return "";
+  if (/^\s*data:/i.test(t) && !ALLOW_DATA_IMAGE_FALLBACK) return "";
   return t;
 }
 
@@ -139,7 +143,7 @@ function readStaleCacheValue<T>(key: string): T | null {
 async function fetchEdgeItems<T>(
   path: string,
   limitCount: number,
-  pageOpts?: { after?: string },
+  pageOpts?: { after?: string; imgv?: string },
 ): Promise<T[] | null> {
   if (!EDGE_API_BASE) return null;
   try {
@@ -147,6 +151,7 @@ async function fetchEdgeItems<T>(
     const qs = new URLSearchParams();
     qs.set("limit", String(limitCount));
     if (pageOpts?.after) qs.set("after", pageOpts.after);
+    if (pageOpts?.imgv) qs.set("imgv", pageOpts.imgv);
     const res = await fetch(`${base}${path}?${qs.toString()}`, {
       method: "GET",
       headers: { accept: "application/json" },
@@ -245,7 +250,7 @@ export async function fetchPublicProducts(options?: {
   ttlMs?: number;
 }): Promise<ProductPublic[]> {
   const limitCount = options?.limitCount ?? 120;
-  const cacheKey = options?.cacheKey ?? "rakivinum_cache_public_products_v1";
+  const cacheKey = options?.cacheKey ?? "rakivinum_cache_public_products_v2";
   const ttlMs = options?.ttlMs ?? CACHE_TTL.PRODUCTS_6H;
 
   return dedupe(`products:${limitCount}:${cacheKey}`, async () => {
@@ -425,12 +430,14 @@ export async function fetchCommunityRatings(options?: {
   ttlMs?: number;
 }): Promise<CommunityRatingPublic[]> {
   const limitCount = options?.limitCount ?? 20;
-  const cacheKey = options?.cacheKey ?? "rakivinum_cache_community_ratings_v3";
+  const cacheKey = options?.cacheKey ?? "rakivinum_cache_community_ratings_v4";
   const ttlMs = options?.ttlMs ?? CACHE_TTL.COMMUNITY_EVENTS_6H;
 
   return dedupe(`ratingsFeed:${limitCount}:${cacheKey}`, async () => {
     try {
-      const edgeRows = await fetchEdgeItems<CommunityRatingPublic>("/api/public/ratings-feed", limitCount);
+      const edgeRows = await fetchEdgeItems<CommunityRatingPublic>("/api/public/ratings-feed", limitCount, {
+        imgv: "2",
+      });
       if (Array.isArray(edgeRows)) {
         writeCache(cacheKey, edgeRows, ttlMs);
         return edgeRows;
@@ -556,7 +563,7 @@ export async function fetchPublicProductsByIds(ids: string[]): Promise<ProductPu
   const safeIds = [...uniqueIds].sort((a, b) => a.localeCompare(b));
   if (safeIds.length === 0) return [];
   return dedupe(`productsByIds:${safeIds.join(",")}`, async () => {
-    const cacheKey = `rakivinum_cache_products_by_ids_${safeIds.join("_")}_v1`;
+    const cacheKey = `rakivinum_cache_products_by_ids_${safeIds.join("_")}_v2`;
     const cached = readCache<ProductPublic[]>(cacheKey);
     if (cached) return cached;
 
@@ -604,14 +611,14 @@ export async function fetchPublicProductsByDistilleryId(
   const after = String(afterProductId || "").trim();
   return dedupe(`productsByDistillery:${safeId}:${limitCount}:${after}`, async () => {
     try {
-      const cacheKey = `rakivinum_cache_products_by_distillery_${safeId}_${limitCount}_${after || "_0"}_v2`;
+      const cacheKey = `rakivinum_cache_products_by_distillery_${safeId}_${limitCount}_${after || "_0"}_v3`;
       const cached = readCache<ProductPublic[]>(cacheKey);
       if (cached) return cached;
 
       const edgeRows = await fetchEdgeItems<ProductPublic>(
         `/api/public/products-by-distillery/${encodeURIComponent(safeId)}`,
         limitCount,
-        after ? { after } : undefined,
+        { ...(after ? { after } : {}), imgv: "2" },
       );
       if (Array.isArray(edgeRows)) {
         const rows = edgeRows.filter(
@@ -633,7 +640,7 @@ export async function fetchPublicProductsByDistilleryId(
       return rows;
     } catch (err) {
       if (isQuotaError(err)) {
-        const cacheKey = `rakivinum_cache_products_by_distillery_${safeId}_${limitCount}_${after || "_0"}_v2`;
+        const cacheKey = `rakivinum_cache_products_by_distillery_${safeId}_${limitCount}_${after || "_0"}_v3`;
         return readCache<ProductPublic[]>(cacheKey) || [];
       }
       throw err;

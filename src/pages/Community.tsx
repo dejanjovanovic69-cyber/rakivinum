@@ -9,10 +9,12 @@ import {
   fetchCommunityEvents,
   fetchCommunityRatings,
   fetchPublicDistilleries,
+  fetchPublicLabelView,
   fetchPublicProducts,
+  fetchPublicProductsByIds,
   stripHttpProductImgUrl,
 } from "../lib/dataService";
-import { RAKIVINUM_MARK_FALLBACK, isImgFallbackUrl } from "../lib/imageFallback";
+import { RAKIVINUM_MARK_FALLBACK, isImgFallbackUrl, pickBestProductImageUrl } from "../lib/imageFallback";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
 
@@ -106,7 +108,7 @@ function formatRatingDate(value: RatingItem["createdAt"]): string {
   return "Sada";
 }
 
-const COMMUNITY_RATINGS_CACHE_KEY = "rakivinum_cache_community_ratings_v3";
+const COMMUNITY_RATINGS_CACHE_KEY = "rakivinum_cache_community_ratings_v4";
 
 /** Null = nema važećeg keša (prvi ulazak); niz (može prazan) = odmah prikaži bez „buradi“ pri povratku na stranicu. */
 function readCommunityRatingsCache(): RatingItem[] | null {
@@ -125,6 +127,7 @@ export default function Community() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSection, setActiveSection] = useState<"reviews" | "tops" | "compare" | "producers" | "search" | "events">("reviews");
   const [products, setProducts] = useState<ProductItem[]>([]);
+  const [ratingThumbOverrides, setRatingThumbOverrides] = useState<Record<string, string>>({});
   const [distilleries, setDistilleries] = useState<DistilleryItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [activeProductFilter, setActiveProductFilter] = useState("all");
@@ -295,6 +298,92 @@ export default function Community() {
       cancelled = true;
     };
   }, [activeSection]);
+
+  // Ratings feed can include products outside current catalog cap.
+  // Backfill missing product rows by IDs so thumbnails in "Utisci" are not stuck on placeholder.
+  useEffect(() => {
+    const ratingProductIds = Array.from(
+      new Set(
+        ratings
+          .map((r) => String(r.productId || "").trim())
+          .filter((id) => id.length > 0),
+      ),
+    );
+    if (ratingProductIds.length === 0) return;
+
+    const known = new Set(products.map((p) => String(p.id || "").trim()).filter((id) => id.length > 0));
+    const missing = ratingProductIds.filter((id) => !known.has(id)).slice(0, 32);
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const backfilled = await fetchPublicProductsByIds(missing);
+        if (cancelled || backfilled.length === 0) return;
+        setProducts((prev) => {
+          const byId = new Map(prev.map((p) => [String(p.id || ""), p]));
+          backfilled.forEach((p) => {
+            const id = String((p as { id?: unknown }).id || "").trim();
+            if (!id) return;
+            byId.set(id, p as ProductItem);
+          });
+          return Array.from(byId.values());
+        });
+      } catch {
+        // best-effort only; UI already has placeholder fallback
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ratings, products]);
+
+  useEffect(() => {
+    const missingIds = Array.from(
+      new Set(
+        ratings
+          .map((r) => String(r.productId || "").trim())
+          .filter((id) => id.length > 0)
+          .filter((id) => {
+            if (ratingThumbOverrides[id]) return false;
+            const row = ratings.find((r) => String(r.productId || "").trim() === id);
+            if (!row) return false;
+            return pickRatingListThumb(row, products) === RAKIVINUM_MARK_FALLBACK;
+          }),
+      ),
+    ).slice(0, 20);
+    if (missingIds.length === 0) return;
+
+    let cancelled = false;
+    void (async () => {
+      const next: Record<string, string> = {};
+      for (const id of missingIds) {
+        try {
+          const view = await fetchPublicLabelView(id);
+          const p = view?.product as ProductItem | null;
+          const d = (view?.distillery as { logoUrl?: unknown } | null) || null;
+          const galleryFirst = Array.isArray((p as { galleryImages?: unknown[] } | null)?.galleryImages)
+            ? (p as { galleryImages?: unknown[] }).galleryImages?.find((x) => typeof x === "string")
+            : "";
+          const thumb =
+            stripHttpProductImgUrl(p?.image) ||
+            stripHttpProductImgUrl(p?.bottleImageUrl) ||
+            stripHttpProductImgUrl(galleryFirst) ||
+            stripHttpProductImgUrl(d?.logoUrl);
+          if (thumb) next[id] = thumb;
+        } catch {
+          // keep placeholder when label lookup is not available
+        }
+      }
+      if (cancelled || Object.keys(next).length === 0) return;
+      setRatingThumbOverrides((prev) => ({ ...prev, ...next }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ratings, products, ratingThumbOverrides]);
 
   useEffect(() => {
     try {
@@ -626,7 +715,7 @@ export default function Community() {
                   <button key={prod.id} type="button" onClick={() => openLabelWithReturn(prod.id, searchReturnTo)}
                     className="card-elevated border border-white/8 rounded-[20px] p-3.5 flex flex-col items-center gap-2.5 text-center hover:border-gold-500/30 transition-all active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base">
                     <div className="w-16 h-20 rounded-xl bg-black/60 border border-gold-500/45 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.16)] flex items-center justify-center overflow-hidden">
-                      <img src={prod.bottleImageUrl || prod.image || RAKIVINUM_MARK_FALLBACK}
+                      <img src={pickBestProductImageUrl(prod)}
                         className="h-full w-full object-contain object-center media-crisp p-0.5"
                         onError={(e) => {
                           const el = e.target as HTMLImageElement;
@@ -784,7 +873,10 @@ export default function Community() {
                             <div className="flex gap-3 items-start">
                               <div className="w-14 h-[72px] rounded-xl bg-black/60 border border-gold-500/55 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.18)] overflow-hidden shrink-0">
                                 <img
-                                  src={pickRatingListThumb(rating, catalogProducts)}
+                                  src={
+                                    ratingThumbOverrides[String(rating.productId || "").trim()] ||
+                                    pickRatingListThumb(rating, catalogProducts)
+                                  }
                                   alt="Piće"
                                   referrerPolicy="no-referrer"
                                   className="h-full w-full object-contain object-center p-0.5 media-crisp group-hover:scale-[1.03] transition-transform duration-500"
@@ -1010,7 +1102,7 @@ export default function Community() {
                             title="Otvori etiketu"
                           >
                             <img
-                              src={p.bottleImageUrl || p.image || RAKIVINUM_MARK_FALLBACK}
+                              src={pickBestProductImageUrl(p)}
                               alt={p.name || "Piće"}
                               className="w-full h-36 object-contain object-center p-2 media-crisp"
                               onError={(e) => {

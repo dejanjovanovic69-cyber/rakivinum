@@ -9,6 +9,7 @@ import { readCache, writeCache } from "../lib/resilience";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { meterDbRead } from "../lib/requestMeter";
 import { fetchPublicProductsByIds } from "../lib/dataService";
+import { RAKIVINUM_MARK_FALLBACK, isImgFallbackUrl, pickBestProductImageUrl } from "../lib/imageFallback";
 
 type PendingQueueItem = { id: string };
 type AuthUserLite = { uid: string } | null;
@@ -398,9 +399,14 @@ export default function Collection() {
 
                 <div className="w-[min(100%,9rem)] h-40 sm:w-24 sm:h-32 mx-auto sm:mx-0 rounded-2xl overflow-hidden bg-black shrink-0 border border-white/10 shadow-lg relative z-10">
                   <img 
-                    src={item.product.bottleImageUrl || item.product.image || `https://picsum.photos/seed/${item.product.id}/200/300`} 
+                    src={pickBestProductImageUrl(item.product)}
                     className="h-full w-full object-contain object-center p-1 transition-transform duration-500 sm:group-hover:scale-[1.02]" 
                     alt={item.product.name} 
+                    onError={(e) => {
+                      const el = e.target as HTMLImageElement;
+                      if (isImgFallbackUrl(el.src)) return;
+                      el.src = RAKIVINUM_MARK_FALLBACK;
+                    }}
                   />
                 </div>
 
