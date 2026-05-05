@@ -27,6 +27,12 @@ export const CACHE_TTL = {
 
 export const REFRESH_INTERVAL = {
   USER_LIGHT_1H: 60 * 60 * 1000,
+  /** Kratki gate za delove admina gde i dalje želimo češnji osvežaj (npr. brojač prisustva). */
   ADMIN_PANEL_10M: 10 * 60 * 1000,
+  /**
+   * Admin liste u `localStorage` + isti interval za `shouldRunRefresh` posle keša — jedan „hladan“
+   * prolaz, zatim isti dan bez ponovnog Firestore-a pri kliku po tabovima (osim force / isteka 24h).
+   */
+  ADMIN_PANEL_24H: 24 * 60 * 60 * 1000,
 } as const;
 

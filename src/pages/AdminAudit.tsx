@@ -91,9 +91,9 @@ export default function AdminAudit() {
       return;
     }
     let cancelled = false;
-    const logsCacheKey = "rakivinum_cache_admin_audit_logs_v1";
-    const usersCacheKey = "rakivinum_cache_admin_audit_users_v1";
-    const blocksCacheKey = "rakivinum_cache_admin_audit_blocks_v1";
+    const logsCacheKey = "rakivinum_cache_admin_audit_logs_v2";
+    const usersCacheKey = "rakivinum_cache_admin_audit_users_v2";
+    const blocksCacheKey = "rakivinum_cache_admin_audit_blocks_v2";
 
     const auditDataGateKey = "admin-audit:data-refresh";
     const refreshAuditData = async () => {
@@ -106,7 +106,7 @@ export default function AdminAudit() {
           setLogs(nextLogs);
           setLoading(false);
         }
-        writeCache(logsCacheKey, nextLogs, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+        writeCache(logsCacheKey, nextLogs, REFRESH_INTERVAL.ADMIN_PANEL_24H);
       } catch (err) {
         console.error("AdminAudit logs refresh failed", err);
         if (!cancelled) {
@@ -122,7 +122,7 @@ export default function AdminAudit() {
         meterDbRead("adminAudit:users", usersSnap.size);
         const nextUsers = usersSnap.docs.map(d => ({ id: d.id, ...d.data() })) as AuditUser[];
         if (!cancelled) setUsers(nextUsers);
-        writeCache(usersCacheKey, nextUsers, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+        writeCache(usersCacheKey, nextUsers, REFRESH_INTERVAL.ADMIN_PANEL_24H);
       } catch (err) {
         console.error("AdminAudit users refresh failed", err);
         if (!cancelled) {
@@ -140,7 +140,7 @@ export default function AdminAudit() {
           next[d.id] = d.data();
         });
         if (!cancelled) setAbuseBlocks(next);
-        writeCache(blocksCacheKey, next, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+        writeCache(blocksCacheKey, next, REFRESH_INTERVAL.ADMIN_PANEL_24H);
       } catch (err) {
         console.error("AdminAudit abuse blocks refresh failed", err);
         if (!cancelled) {
@@ -160,14 +160,14 @@ export default function AdminAudit() {
     if (cachedUsers) setUsers(cachedUsers);
     if (cachedBlocks) setAbuseBlocks(cachedBlocks);
 
-    const warmAudit = shouldRunRefresh(auditDataGateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M);
+    const warmAudit = shouldRunRefresh(auditDataGateKey, REFRESH_INTERVAL.ADMIN_PANEL_24H);
     const needsAuditData = !cachedLogs || !cachedUsers || !cachedBlocks || warmAudit;
     if (needsAuditData) {
       void refreshAuditData();
     }
     const onFocusRefresh = () => {
       if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh(auditDataGateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+      if (!shouldRunRefresh(auditDataGateKey, REFRESH_INTERVAL.ADMIN_PANEL_24H)) return;
       void refreshAuditData();
     };
     const onVisibilityRefresh = () => {
