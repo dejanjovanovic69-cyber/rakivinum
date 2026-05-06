@@ -34,17 +34,17 @@ import { DISABLE_ONLINE_PRESENCE_TRACKING } from "../lib/presence";
 import { readCache, writeCache } from "../lib/resilience";
 import { RAKIVINUM_MARK_FALLBACK, hasUsablePublicProductImage, isImgFallbackUrl, pickBestProductImageUrl } from "../lib/imageFallback";
 
-const ADMIN_DISTILLERIES_LIST_CACHE_KEY = "rakivinum_cache_admin_distilleries_list_v2";
-const ADMIN_PENDING_APPROVALS_CACHE_KEY = "rakivinum_cache_admin_pending_approvals_v2";
-const ADMIN_EVENT_PROPOSALS_CACHE_KEY = "rakivinum_cache_admin_event_proposals_v2";
-const ADMIN_COMMUNITY_LINKS_CACHE_KEY = "rakivinum_cache_admin_community_links_v2";
-const ADMIN_COMMUNITY_EVENTS_CACHE_KEY = "rakivinum_cache_admin_community_events_v2";
-const ADMIN_FLAGGED_RATINGS_CACHE_KEY = "rakivinum_cache_admin_flagged_ratings_v2";
-const ADMIN_RECENT_RATINGS_CACHE_KEY = "rakivinum_cache_admin_recent_ratings_v2";
-const ADMIN_BLOCKED_USERS_CACHE_KEY = "rakivinum_cache_admin_blocked_users_v2";
-const ADMIN_LICENSES_CACHE_KEY = "rakivinum_cache_admin_licenses_v2";
+const ADMIN_DISTILLERIES_LIST_CACHE_KEY = "rakivinum_cache_admin_distilleries_list_v1";
+const ADMIN_PENDING_APPROVALS_CACHE_KEY = "rakivinum_cache_admin_pending_approvals_v1";
+const ADMIN_EVENT_PROPOSALS_CACHE_KEY = "rakivinum_cache_admin_event_proposals_v1";
+const ADMIN_COMMUNITY_LINKS_CACHE_KEY = "rakivinum_cache_admin_community_links_v1";
+const ADMIN_COMMUNITY_EVENTS_CACHE_KEY = "rakivinum_cache_admin_community_events_v1";
+const ADMIN_FLAGGED_RATINGS_CACHE_KEY = "rakivinum_cache_admin_flagged_ratings_v1";
+const ADMIN_RECENT_RATINGS_CACHE_KEY = "rakivinum_cache_admin_recent_ratings_v1";
+const ADMIN_BLOCKED_USERS_CACHE_KEY = "rakivinum_cache_admin_blocked_users_v1";
+const ADMIN_LICENSES_CACHE_KEY = "rakivinum_cache_admin_licenses_v1";
 
-/** Posle `readCache`: prvi put u sesiji ne pali Firestore ako je keš još validan; posle toga 24h gate (usklađeno sa TTL u `writeCache`). */
+/** Posle `readCache`: prvi put u sesiji ne pali Firestore ako je keš još validan; posle toga 10m gate. */
 function shouldSkipAdminNetworkAfterCache(
   optsForce: boolean | undefined,
   cached: unknown,
@@ -55,7 +55,7 @@ function shouldSkipAdminNetworkAfterCache(
     seedRefreshGate(gateKey);
     return true;
   }
-  return !shouldRunRefresh(gateKey, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+  return !shouldRunRefresh(gateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M);
 }
 
 // Helper function to resize and compress image to base64
@@ -310,7 +310,7 @@ export default function Admin() {
     void refreshPresenceCount();
     const onTick = () => {
       if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh("admin:presence-count", REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      if (!shouldRunRefresh("admin:presence-count", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
       void refreshPresenceCount();
     };
     const onVisibilityRefresh = () => {
@@ -823,7 +823,7 @@ export default function Admin() {
       meterDbRead("admin:distilleries", snap.size);
       const list: DistilleryListItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as DistilleryListItem) }));
       list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "sr"));
-      writeCache(ADMIN_DISTILLERIES_LIST_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+      writeCache(ADMIN_DISTILLERIES_LIST_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setDistilleries(list);
       setSelectedDistilleryId((current) => {
         if (current === "all") return current;
@@ -846,7 +846,7 @@ export default function Admin() {
       return;
     }
     const allMode = selectedDistilleryId === "all" && isSuperAdminUser;
-    const productsCacheKey = `rakivinum_cache_admin_products_v3_${allMode ? "all" : selectedDistilleryId}`;
+    const productsCacheKey = `rakivinum_cache_admin_products_v2_${allMode ? "all" : selectedDistilleryId}`;
     const gateKey = `admin:products:network:${productsCacheKey}`;
     const inFlightKey = `admin:fetch:products:${productsCacheKey}`;
     const active = adminFetchInFlightRef.current.get(inFlightKey);
@@ -871,7 +871,7 @@ export default function Admin() {
         const snap = await getDocs(query(collection(db, "products"), limit(ADMIN_PRODUCTS_ALL_LIMIT)));
         meterDbRead("admin:products_all", snap.size);
         const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) }));
-        writeCache(productsCacheKey, rows, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+        writeCache(productsCacheKey, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
         setAdminProducts(rows);
       } else {
         const q = query(
@@ -882,7 +882,7 @@ export default function Admin() {
         const snap = await getDocs(q);
         meterDbRead("admin:products_by_distillery", snap.size);
         const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as ProductListItem) }));
-        writeCache(productsCacheKey, rows, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+        writeCache(productsCacheKey, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
         setAdminProducts(rows);
       }
     } catch (err) {
@@ -920,7 +920,7 @@ export default function Admin() {
         const bTs = b.updatedAt?.toMillis?.() || b.createdAt?.toMillis?.() || 0;
         return bTs - aTs;
       });
-      writeCache(ADMIN_PENDING_APPROVALS_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+      writeCache(ADMIN_PENDING_APPROVALS_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setPendingProductApprovals(list);
     } catch (err) {
       console.error("Greška pri učitavanju promena za odobrenje", err);
@@ -950,7 +950,7 @@ export default function Admin() {
       }
       const snap = await getDocs(query(collection(db, 'eventProposals'), limit(ADMIN_EVENT_PROPOSALS_LIMIT)));
       const rows = snap.docs.map(d => ({ id: d.id, ...d.data() } as EventProposalItem));
-      writeCache(ADMIN_EVENT_PROPOSALS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+      writeCache(ADMIN_EVENT_PROPOSALS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setEventProposals(rows);
     } catch (err) {
       console.error("Error fetching event proposals:", err);
@@ -981,7 +981,7 @@ export default function Admin() {
       const snap = await getDocs(query(collection(db, 'community_links'), limit(ADMIN_LINKS_LIMIT)));
       const list: CommunityLinkItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityLinkItem) }));
       list.sort((a, b) => (a.label || "").localeCompare(b.label || "", 'sr'));
-      writeCache(ADMIN_COMMUNITY_LINKS_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+      writeCache(ADMIN_COMMUNITY_LINKS_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setCommunityLinks(list);
     } catch (err) {
       console.error("Greška pri učitavanju korisnih linkova:", err);
@@ -1012,7 +1012,7 @@ export default function Admin() {
       const snap = await getDocs(query(collection(db, 'community_events'), limit(ADMIN_EVENTS_LIMIT)));
       const list: CommunityEventItem[] = snap.docs.map(d => ({ id: d.id, ...(d.data() as CommunityEventItem) }));
       list.sort((a, b) => String(a.eventDate || "").localeCompare(String(b.eventDate || "")));
-      writeCache(ADMIN_COMMUNITY_EVENTS_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+      writeCache(ADMIN_COMMUNITY_EVENTS_CACHE_KEY, list, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setCommunityEvents(list);
     } catch (err) {
       console.error("Greška pri učitavanju događaja:", err);
@@ -1044,7 +1044,7 @@ export default function Admin() {
       const snap = await getDocs(q);
       meterDbRead("admin:ratings_flagged", snap.size);
       const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RatingRow));
-      writeCache(ADMIN_FLAGGED_RATINGS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+      writeCache(ADMIN_FLAGGED_RATINGS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setFlaggedRatings(rows);
     } catch (err) {
       console.error("Error fetching flagged ratings:", err);
@@ -1068,7 +1068,7 @@ export default function Admin() {
       const cached = readCache<RatingRow[]>(ADMIN_RECENT_RATINGS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setAllRatings(cached);
-        if (shouldSkipAdminNetworkAfterCache(opts?.force, cached, "admin:ratings_recent:network")) return;
+        if (!shouldRunRefresh("admin:ratings_recent:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
       } else {
         shouldRunRefresh("admin:ratings_recent:network", 0);
       }
@@ -1076,7 +1076,7 @@ export default function Admin() {
       const snap = await getDocs(q);
       meterDbRead("admin:ratings_recent", snap.size);
       const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() } as RatingRow));
-      writeCache(ADMIN_RECENT_RATINGS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+      writeCache(ADMIN_RECENT_RATINGS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setAllRatings(rows);
     } catch (err) {
       console.error("Error fetching ratings:", err);
@@ -1106,7 +1106,7 @@ export default function Admin() {
       }
       const snap = await getDocs(query(collection(db, 'blocked_users'), limit(ADMIN_BLOCKED_USERS_LIMIT)));
       const rows = snap.docs.map(d => d.id);
-      writeCache(ADMIN_BLOCKED_USERS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+      writeCache(ADMIN_BLOCKED_USERS_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setBlockedUsers(rows);
     } catch (err) {
       console.error("Error fetching blocked users:", err);
@@ -1179,7 +1179,7 @@ export default function Admin() {
       }
       const snap = await getDocs(query(collection(db, 'licenses'), limit(ADMIN_LICENSES_LIMIT)));
       const rows = snap.docs.map(d => ({ id: d.id, ...d.data() } as LicenseItem));
-      writeCache(ADMIN_LICENSES_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_24H);
+      writeCache(ADMIN_LICENSES_CACHE_KEY, rows, REFRESH_INTERVAL.ADMIN_PANEL_10M);
       setLicenses(rows);
     } catch (err) {
       console.error("Error fetching licenses:", err);
