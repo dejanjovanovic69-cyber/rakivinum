@@ -10,30 +10,12 @@ const lastRunByKey = new Map<string, number>();
 /**
  * Prevents frequent duplicate refresh calls (focus/visibility bursts).
  * Returns true only when enough time has passed for the provided key.
- *
- * Note: do **not** treat a missing key as timestamp `0` — that made `now - last` huge so the
- * first `minIntervalMs > 0` check always "passed" and fired network even right after hydrating
- * from `readCache` (seen in Admin panel tab switches).
  */
 export function shouldRunRefresh(key: string, minIntervalMs: number): boolean {
   const now = Date.now();
-  if (minIntervalMs === 0) {
-    lastRunByKey.set(key, now);
-    return true;
-  }
-  const last = lastRunByKey.get(key);
-  if (last !== undefined && now - last < minIntervalMs) return false;
+  const last = lastRunByKey.get(key) ?? 0;
+  if (now - last < Math.max(0, minIntervalMs)) return false;
   lastRunByKey.set(key, now);
   return true;
-}
-
-/** True if this key has been used with {@link shouldRunRefresh} or {@link seedRefreshGate}. */
-export function hasRefreshGate(key: string): boolean {
-  return lastRunByKey.has(key);
-}
-
-/** Mark a gate as "just satisfied" without a network round-trip (e.g. served fresh data from `readCache`). */
-export function seedRefreshGate(key: string): void {
-  lastRunByKey.set(key, Date.now());
 }
 

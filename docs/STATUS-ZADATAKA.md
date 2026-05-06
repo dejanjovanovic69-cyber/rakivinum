@@ -34,8 +34,7 @@
 
 ---
 
-**Poslednji zapis:** 2026-05-05 (kasnije) — **Admin panel / `shouldRunRefresh`:** ispravljen `last ?? 0` u `refreshGate.ts` (prvi poziv sa intervalom više nije „lažno istekao“); u `Admin.tsx` dodato `seedRefreshGate` + `hasRefreshGate` preko `shouldSkipAdminNetworkAfterCache` da prvi put u sesiji, kada već postoji validan `readCache`, ne pali ponovo Firestore pri svakom ulasku u tab (ponašanje kao jedan početni pik, zatim 0 dok traje TTL / 10m gate).  
-**Poslednji zapis (ranije isti dan):** 2026-05-05 — **Kritičan read-leak fix (Home + MyClubs) potvrđen u produkciji (stabilan graf).**  
+**Poslednji zapis:** 2026-05-05 — **Kritičan read-leak fix (Home + MyClubs) potvrđen u produkciji (stabilan graf).**  
 **Worker (`workers/index.ts`)**: za `GET /api/public/home-bundle` izbačen `visitor` iz cache ključa i uklonjen membership fetch iz bundle-a; odgovor sada vraća globalne podatke (`actions`, `daily`, `distilleryNames`) + `memberships: []`, pa Cloudflare cache radi globalno umesto per korisnik.  
 **Klijent (`src/lib/dataService.ts`, `src/pages/Home.tsx`)**: `fetchPublicHomeBundle()` je globalan (`homeBundle:global`, `rakivinum_cache_home_bundle_global_v7`) bez query `visitor`; članstva se vuku odvojeno preko `fetchPublicClubMembershipsByVisitorId(visitorId, 30)` (sa lokalnim `clubs_<visitorId>` warm prikazom).  
 **MyClubs (`src/pages/MyClubs.tsx`)**: dodato lokalno keširanje progresa skenova/ocena po visitor-u (`rakivinum_cache_myclubs_progress_<visitorId>_v1`) + refresh gate (`myclubs:progress:<visitorId>` / `USER_LIGHT_1H`), pa se pri ulasku na tab ne rade nepotrebni ponovljeni Firestore upiti.  
