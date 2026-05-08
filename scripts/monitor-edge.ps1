@@ -1,5 +1,5 @@
 param(
-  [string]$BaseUrl = "https://rakivinum-api.ldjs1969.workers.dev",
+  [string]$BaseUrl = "https://rakivinum-api.dejanjovanovic69.workers.dev",
   [string]$SampleProductId = "MVP-mvp-sljiva-stara",
   [int]$TimeoutSec = 25,
   [int]$Runs = 5,

@@ -17,6 +17,7 @@ import { isQuotaError, readCache, writeCache } from "./resilience";
 import { CACHE_TTL, REFRESH_INTERVAL } from "./cachePolicy";
 import { meterDbRead, meterEdgeRequest } from "./requestMeter";
 import { RAKIVINUM_MARK_FALLBACK } from "./imageFallback";
+import { resolveEdgeApiBase } from "./edgeApiBase";
 
 type DistilleryPublic = { id: string; isArchived?: boolean; isVerified?: boolean; [key: string]: unknown };
 type ProductPublic = { id: string; isApproved?: boolean; isArchivedByDistillery?: boolean; publicLabelDisabled?: boolean; [key: string]: unknown };
@@ -100,7 +101,7 @@ export type HomeBundlePublic = {
 };
 
 const inFlight = new Map<string, Promise<unknown>>();
-const EDGE_API_BASE = String(import.meta.env.VITE_EDGE_API_BASE || "").trim();
+const EDGE_API_BASE = resolveEdgeApiBase();
 const DISABLE_DIRECT_FIRESTORE_READS = true;
 
 /**
