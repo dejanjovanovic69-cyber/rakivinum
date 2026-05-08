@@ -1,13 +1,14 @@
 name = "rakivinum-api"
 main = "workers/index.ts"
 compatibility_date = "2026-04-25"
+account_id = "4bfb2cebddd33ff87d2bafeb4b4fc514"
 
 [observability]
 enabled = true
 
 [[kv_namespaces]]
 binding = "FIRESTORE_CACHE"
-id = "2443f1a11ddf4ea49e78bc46bfd39293"
+id = "65329c1f79a34c73b01554f1dfba66da"
 
 # Postavi ove varijable kroz:
 # `wrangler secret put FIREBASE_PROJECT_ID`
