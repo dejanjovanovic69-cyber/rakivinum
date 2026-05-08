@@ -1,6 +1,201 @@
 ﻿# Rakivinum - status zadataka i "gde smo stali"
 
+## OBAVEZAN DEPLOY PROTOKOL (bez maltretiranja sutra)
+
+**Cilj:** svaka izmena ide do javnog `rakivinum.com` (ne završavamo na lokalnom/test bez produkcije).
+
+### 1) Šta se menja gde
+
+- **Frontend UI / stranice / `src/*`** -> build + **Cloudflare Pages deploy** (jer to servira sajt).
+- **Edge API / `workers/*`** -> **Cloudflare Worker deploy** (jer to servira `/api/...`).
+- Ako si dirao i frontend i worker: deploy-uj **oba**.
+
+### 2) Uvek isti redosled komandi (iz `C:\rakivinum`)
+
+1. `npm run lint`
+2. `npm run build`
+3. `npm run cf:worker:deploy`
+4. `npm run cf:pages:deploy`
+
+`npm run cf:pages:deploy` sada pokreće **`scripts/pages-deploy.ps1`**: privremeno preimenuje Firebase folder **`functions/` → `functions_tmp`** dok Wrangler ne završi upload, jer Wrangler inače tretira root **`functions/`** kao **Cloudflare Pages Functions** i puca na `functions/node_modules/ci-info` (`.d.ts` „must be initialized“). Posle deploy-a folder se vraća na `functions/`.  
+**Ne mešati** u isti `wrangler.toml` i **`main`** (Worker) i **`pages_build_output_dir`** — Wrangler to odbija.
+
+### 3) Kako potvrdiš da je stvarno javno
+
+1. Otvori deploy URL koji vrati Pages (`https://<hash>.rakivinum-6gk.pages.dev`) i proveri Home + Menu + Moja Riznica.
+2. Otvori `https://rakivinum.com` u Incognito i uradi hard refresh.
+3. Proveri iste 3 stranice i da nema starih bundle-a.
+4. Tek tada smatraj deploy završenim.
+
+### 4) Pravilo za ubuduće
+
+- Ne stajemo na "radi lokalno" ili "radi na pages preview".
+- Završetak zadatka = radi na javnom `rakivinum.com`.
+
+---
+
+## Zapis 2026-05-09 — Javni sajt, Worker, Pages, Firestore (šta se desilo i šta važi)
+
+### Gde živi `rakivinum.com`
+
+- **`rakivinum.com` ide preko Cloudflare Pages** (projekat `rakivinum`, `rakivinum-6gk.pages.dev`, custom domen „+1“). Zaglavlje odgovora često uključuje **`Server: cloudflare`**.
+- **`firebase deploy --only hosting`** ažurira **`*.web.app`** (npr. `gen-lang-client-0889534325.web.app`) za taj Firebase projekat — to **nije** isti izvor kao javni domen ako DNS i dalje pokazuje na Cloudflare.
+- Posle izmene frontenda: **`npm run build`** → **`npm run cf:pages:deploy`** (ne samo Firebase), pa provera da li **`rakivinum.com`** u HTML-u učitava **isti** `index-….js` kao svež Pages deploy (ne stari hash).
+
+### Dva Worker URL-a (klasična zabuna)
+
+- U bundle-u je ranije bio uključen **`https://rakivinum-api.ldjs1969.workers.dev`** — taj endpoint je vraćao **isečene** liste (npr. 5 destilerija / 5 proizvoda), dok je Worker deploy iz ovog repoa išao na **`https://rakivinum-api.dejanjovanovic69.workers.dev`** (puniji katalog).
+- U kodu postoji **`src/lib/edgeApiBase.ts`** (`resolveEdgeApiBase()`): ako je env i dalje **`…ldjs1969.workers.dev`**, klijent preusmerava na kanonski host koji prati `wrangler deploy` iz ovog naloga. **`wrangler.toml` `account_id`** odgovara tom nalogu (subdomen `dejanjovanovic69.workers.dev`).
+
+### Pages: produkcija vs `master.*.pages.dev`
+
+- Ako je svež build vidljiv na **`https://master.rakivinum.pages.dev`**, a **`rakivinum.com`** i koreni **`rakivinum-6gk.pages.dev`** i dalje stari `index-….js`, deploy je verovatno išao u **preview** granu, a **production** slot (custom domen) nije ažuriran.
+- U **`package.json`**, `cf:pages:deploy` koristi **`--branch master`** usklađeno sa podešavanjem **Production branch** u Cloudflare Pages (ili koristi **Promote to production** u konzoli za poslednji uspešan deployment).
+
+### Pages deploy i folder `functions/` (Firebase)
+
+- Root **`functions/`** = Firebase Cloud Functions kod; Wrangler ga meša sa **Pages Functions**. Rešenje: **`scripts/pages-deploy.ps1`** (privremeno preimenovanje tokom uploada). **`npm run cf:deploy:resilient`** i dalje može privremeno preimenovati `functions` pre istog deploy koraka.
+
+### Firestore — da li je „pokvareno“
+
+- Ove izmene **ne menjaju šemu podataka** u Firestore-u niti pravila sama po sebi.
+- **Broj read-ova može privremeno porasti**: pun katalog umesto isečenog, prazan keš posle deploy-a, više uspešnih edge poziva → više Worker čitanja iz Firestore-a dok se keš ne napuni. To je **očekivano ponašanje**, ne znak oštećenja baze.
+
+### Backup
+
+- Lokalna arhiva: **`backups/`**, skripta **`scripts/backup-project.ps1`**: `npm run backup:local` (izabrani fajlovi), `npm run backup:full` (šire), vidi **`BACKUP_AND_RECOVERY.md`**.
+
+## HITNO — handoff 2026-05-08 (quota „nuklearni“ režim + ne možeš više da testiraš)
+
+**Napomena o „dobroj verziji“:** Agent **nema** posebnu arhivu koda van ovog repozitorijuma. Jedina pouzdana tačka je **`git`** (commitovi na `origin/master`) + ono što je trenutno **lokalno izmenjeno / necommitovano** na mašini.  
+**Dodatak (lokalna arhiva):** u repou postoji folder **`backups/`** (množina; **`backup/`** ne postoji). Skripta je `scripts/backup-project.ps1` (`npm run backup:local` / `backup:local:keep30` / `backup:full`); uputstvo u `BACKUP_AND_RECOVERY.md`. U `backups/` se vide snapshoti `rakivinum_backup_daily_*` (često oko **22:00** po timestampu imena). Za povratak kopiraj sadržaj željenog snapshot-a preko projekta (vidi MD).
+
+- **Poslednji commit na grani** (pre sutrašnjeg nastavka proveri `git log -1`): trenutno u sesiji viđeno `c7b71e4` (npr. revert admin fixeva) — **proveri kod sebe** sa `git log -1 --oneline`.
+- **Riznica / `workers/helpers/riznicaHelpers.ts`:** veliki deo Riznice je bio **necommitovan** (`?? workers/helpers/`, `?? src/pages/MojaRiznica.tsx`, servisi, tipovi…). Znači „pre Riznice“ u smislu čistog repoa najčešće znači **stanje pre tih lokalnih fajlova**, ne jedan automatski SHA koji agent „pamti“.
+
+### Šta je u poslednjim danima „unakazeno“ (smisao izmena — da bi se lako vratilo sutra)
+
+| Oblast | Fajl (glavni) | Ponašanje |
+|--------|----------------|-----------|
+| Globalni prekidač | `src/lib/quotaSaver.ts` | `QUOTA_SAVER_MODE` / `FORCE_EDGE_ONLY` ostaju **true**; `HARD_LOCK_SAVED_READS_THRESHOLD` spušten na **1000**. |
+| Klijentski limiti | `src/lib/dataService.ts` | `GLOBAL_SAFETY_LIMIT = 5` + `clampGlobalListLimit` na javnim listama (proizvodi, destilerije, događaji, linkovi, ratings feed, klub akcije, članstva, …); stroži fallback capovi gde je bilo veliki `limit(...)` itd. |
+| Moji klubovi | `src/pages/MyClubs.tsx` | Ako je `isQuotaSaverActive()` → **odmah** `setClubs([])`, `setIsLoading(false)`, `return` — **nema** Firestore skenova/ratings/memberships/actions. |
+| Meni | `src/pages/Menu.tsx` | Članstva u meniju: **24h** `shouldRunRefresh` po visitoru (`menu:clubs:refresh:…`), prvo lokalni merge ID-jeva. |
+| Zajednica | `src/pages/Community.tsx` | Ranije: katalog (proizvodi/destilerije) **isključen** u `useEffect` (prazni tabovi Top/Uporedi/… dok se ne vrati). |
+| Admin | `src/pages/Admin.tsx` | **Uklonjen** auto `fetchDistilleries()` na mount; dodato dugme **„Osveži destilerije“** kada je lista prazna. |
+| Worker liste | `workers/index.ts` | `WORKER_FIRESTORE_LIST_CAP = 5`: `fetchCollection` uvek `pageSize=5`; `fetchCollectionWhereEquals` i `fetchProductsByDistilleryPaged` ograničeni na 5. |
+| Riznica helper | `workers/helpers/riznicaHelpers.ts` | `fetchProductsByIdsBatch`: max **5** ID-jeva po pozivu, chunk 5, `runQuery` + `IN`. |
+| Ranije u istom nizu | `src/lib/cachePolicy.ts`, `refreshGate.ts`, `requestMeter.ts`, `Community.tsx`, `workers/index.ts` (home-bundle, `servePublicCached` TTL/log), itd. | Delimično dokumentovano u starijim blokovima ispod; detalj u `git diff`. |
+
+**Deploy (mašinski, u toku dana):** Worker verzije koje su spominjane u četu uključuju npr. `ec7dfd54-4d2b-426f-94e9-4b69132c9598` (posle cap-5) — **Firebase hosting** i **Worker** su deploy-ovani sa ovim agresivnim podešavanjima.
+
+### Šta uraditi sutra (kratko)
+
+1. **Odluka:** da li vraćamo **samo** quota/MyClubs/Admin/dataService/Worker cap, ili ceo **lokalni** paket pre Riznice.  
+2. **Za tracked fajlove:** `git diff`, `git checkout -- <fajl>` ili vraćanje na konkretan commit (`git log --oneline`).  
+3. **Za necommitovanu Riznicu:** nemoj `git clean -fd` dok ne odlučiš — obriše `??` fajlove.  
+4. Kad stabilizuješ: vrati razumne limite (npr. `GLOBAL_SAFETY_LIMIT` 10→…), ukloni ran `return` u `MyClubs`, vrati Admin mount `fetchDistilleries` ako treba, Worker `WORKER_FIRESTORE_LIST_CAP` ili samo `fetchCollection` logika, itd.
+
+---
+
 ## Spremno za test (Firestore fokus)
+
+**Poslednji zapis:** 2026-05-07 — **Moja Riznica označena kao DONE (100%).**  
+- Legacy cleanup: uklonjen stari ekran `src/pages/Collection.tsx`; ruta `/collection` ostaje samo alias redirect ka `/moja-riznica`.  
+- Micro UX polish (`MojaRiznica`): naslov sada prikazuje broj stavki (`Moja Riznica (N)`), share sekcija dobila jači QR (veći, border/senka), info tekst za javnost linka/QR-a i jasniji copy feedback (`Link kopiran!` sa ikonom u toast-u).  
+- Micro UX polish (`PublicRiznica`): unapređen owner header (izraženiji avatar + bolji naslov), dodat CTA „Nazad na moju riznicu“ kada isti ulogovani korisnik gleda svoj public link, poboljšan fallback za privatnu/nepostojeću riznicu.  
+- Terminologija: u `TonightRecommendations` preimenovano „Iz moje kolekcije“ -> „Iz moje Riznice“.  
+- Home brza kartica potvrđena i zadržana: „Moja riznica“ (ukupno boca + prosečna ocena, klik ka `/moja-riznica`).  
+- Arhitektura ostaje ista: Worker-first + cache-first + refresh gate + privacy toggle tok preko private Worker endpointa.
+
+**Verifikacija (lokalno):**
+- `npm run lint` ✅
+- `npm run build` ✅
+- `npm run cf:smoke:edge` ✅
+- Napomena: `npm run build -- --report` nije podržan u trenutnoj Vite CLI konfiguraciji (`Unknown option --report`); korišćen standardni build output za proveru bundle veličina.
+
+**Poslednji zapis:** 2026-05-07 — **Riznica privatnost kontrole (toggle + Worker settings endpoint) implementirane.**  
+- Worker: dodat `GET/POST /api/private/riznica/settings` u `workers/index.ts` (auth obavezan, `no-store` headers).  
+- Helper: `workers/helpers/riznicaHelpers.ts` proširen sa `getRiznicaPrivacySettings(...)` i `updateRiznicaPrivacySettings(...)` koje upisuju `users/{uid}.riznicaPublic`, `users/{uid}.riznicaPublicNotes`, `users/{uid}.riznicaLastSharedAt`.  
+- Frontend servis: `src/services/riznicaService.ts` dobio `getPrivacySettings()` i `updatePrivacySettings(...)`; zadržan Worker-first obrazac i edge metering.  
+- UI: `src/pages/MojaRiznica.tsx` dobio sekciju **Deljenje Riznice** (2 toggle-a, copy share link, QR prikaz); `riznicaPublicNotes` je disabled dok `riznicaPublic` nije uključeno.  
+- Public stranica: `src/pages/PublicRiznica.tsx` sada prikazuje avatar vlasnika + tekst „Podeljeno od ...“, a public payload nosi i `ownerAvatar`.  
+- Menu: dodat ulaz „Privatnost Riznice“ u sekciji podešavanja koji vodi na `/moja-riznica`.
+
+**Verifikacija (lokalno):**
+- `npm run lint` ✅
+- `npm run build` ✅
+- `npm run cf:smoke:edge` ✅
+
+**Poslednji zapis:** 2026-05-07 — **Javna read-only Riznica (`/riznica/:uid`) implementirana.**  
+- Worker: dodat `GET /api/public/riznica/:uid` u `workers/index.ts` (servePublicCached, Worker-first public tok).  
+- Helper: `workers/helpers/riznicaHelpers.ts` proširen sa `getPublicRiznica(userId)` — vraća samo javne podatke (bez `purchasePrice`, `purchaseDate`; `notes` samo ako `riznicaPublicNotes === true`).  
+- Privatnost: ako `users/{uid}.riznicaPublic !== true`, endpoint vraća `isPublic: false` i frontend prikazuje ekran „Riznica je privatna“.  
+- Frontend: nova stranica `src/pages/PublicRiznica.tsx` (read-only police + statistike + filter/search, bez drag/edit/remove), rute dodate: `/riznica/:uid` i `/public/riznica/:uid`.  
+- PDF/QR: `MojaRiznica` QR sada vodi na javni link `https://rakivinum.pages.dev/riznica/${uid}`.  
+- Share meta: dodati osnovni OG tagovi u `index.html`, a `PublicRiznica` dinamički osvežava `og:title/description/url`.  
+- Smoke skripta: `scripts/smoke-edge.ps1` dobio opcioni `-SampleRiznicaUserId` za proveru javnog endpointa.
+
+**Verifikacija (lokalno):**
+- `npm run lint` ✅
+- `npm run build` ✅
+- `npm run cf:smoke:edge` ✅
+- `npm run test:e2e` ✅
+
+**Poslednji zapis:** 2026-05-07 — **FINALNO poliranje "Moja Riznica" (UX + performanse + Worker disciplina).**  
+- `src/pages/MojaRiznica.tsx`: vizuelno unapređene police (jači 3D/senke), poboljšan responsive raspored, moderniji `BottleCard` (kategorija + ikona/boja, ocena, cena, brze akcije), kombinovani search/filter/sort, type-distribution progress bar, offline/info/error stanja i prazan state sa CTA ka skeneru.  
+- Drag/drop + touch-friendly drop: kartice su prenosive između polica uz optimistički update (`shelf`, `position`) i Worker sync preko `riznicaService.updateRiznicaItem`.  
+- PDF export: unapređen sadržaj (`Moja Riznica - [ime korisnika]`, statistike, grupisanje po policama, datum generisanja).  
+- Integracije: Home preusmeren na `/moja-riznica` (umesto stare kolekcije), `Label` koristi `riznicaService` za add/remove/check kod ulogovanih korisnika.  
+- Ograničenja/zaštita: limit 300 stavki i dedupe (`drinkId`) sprovedeni na private Worker write helper-u (`workers/helpers/riznicaHelpers.ts`).  
+- `src/services/riznicaService.ts`: optimistički cache update za add/update/remove, robustniji edge error mapping (`riznica_limit_reached`), zadržan cache-first read obrazac.  
+- Dokumentacija: dopunjen `README.md` sa sekcijom za `Moja Riznica`.
+
+**Verifikacija (lokalno):**
+- `npm run lint` ✅
+- `npm run build` ✅
+- `npm run cf:smoke:edge` ✅
+- `npm run test:e2e` ✅ (3/3 smoke scenarija)
+
+**Poslednji zapis:** 2026-05-07 — **Final touch poliranje (premium UX + animacije + PDF+QR + pristupačnost).**  
+- `MojaRiznica.tsx`: dodat premium UI polish (stagger fade-in polica, jači 3D shelf slojevi, hover/active lift, touch-friendly horizontal shelf scroll na malim ekranima).  
+- `BottleCard`: jasniji category badge (ikonice + tematske boje), dodat feedback za move (`scale/ring`), unapređene tranzicije i edit modal sa laganim ulazom.  
+- Stat kartice: dodat count-up efekat (broj boca, prosečna ocena, ukupna vrednost) + unapređen progress prikaz distribucije tipova.  
+- Empty state: proširen sa tri CTA akcije (`/scan`, `/distilleries`, `/tonight`).  
+- PDF export: profesionalniji sadržaj sa naslovom korisnika, datumom, statistikama, grupisanjem po policama, pokušajem ubacivanja slika (data URL) i QR kodom ka `/moja-riznica`.  
+- Toast poruke: unificirani UX feedback (`sačuvano`, `premešteno`, `uklonjeno`, `exportovano`).  
+- Accessibility: dodati `aria-label` za drop zone i kartice u polici.  
+- Integracije: Home linkovi i copy kompletno prebačeni na Riznicu; `/collection` ruta ostavljena kao alias ka novoj Riznici.  
+- Read disciplina: `Label` za ulogovanog korisnika sada koristi `riznicaService` (private Worker tok) za check/add/remove.
+
+**Poslednji zapis:** 2026-05-07 — **Riznica private Worker-first tok završen (read/write endpointi + deploy).**  
+- `workers/index.ts`: dodate privatne rute `GET /api/private/riznica`, `POST /api/private/riznica/add`, `POST /api/private/riznica/update`, `POST /api/private/riznica/remove`.  
+- Auth: uvedena Bearer verifikacija Firebase ID tokena (tokeninfo + `aud/iss` provera) pre pristupa privatnim rutama.  
+- Novi helper: `workers/helpers/riznicaHelpers.ts` (`getUserRiznica`, `addToRiznica`, `updateRiznicaItem`, `removeFromRiznica`) preko Firestore REST API-ja.  
+- Klijent: `src/services/riznicaService.ts` sada koristi private Worker endpointe za list/add/update/remove; Firestore direktni fallback je uklonjen za Riznicu (ostaje cache fallback).  
+- Smoke: `scripts/smoke-edge.ps1` proširen opcionalnim private proverama (`-SampleAuthToken`), standardni `npm run cf:smoke:edge` prošao.  
+- Deploy: `npm run cf:deploy:resilient` uspešan, Worker verzija `a940afc8-f8bb-41d0-a9d5-466862cd915b`; private ruta bez tokena vraća `401` (očekivano).
+
+## Quota Saver Status (2026-05-06)
+
+- **Global mode:** aktivan kroz `src/lib/quotaSaver.ts` (`getCurrentMode`, `getReadSavingEstimate`, local override za superadmin).
+- **Admin (strogo):** kada je saver ON, svi teški tab fetch-ovi su cache-only dok se ručno ne klikne `Force Full Refresh`; osnovna lista destilerija i dalje može da se osveži.
+- **Monitoring:** dodat `savedReadsToday` brojač u `src/lib/requestMeter.ts`; Admin header prikazuje dnevnu procenu (`Uštedeo: ... reads danas`).
+- **Hard Lock:** prag spušten na `10_000` saved reads/dan (lako promenljivo kroz `HARD_LOCK_SAVED_READS_THRESHOLD`); postoji i force override (`ON/OFF/Clear`) za test.
+- **Diagnostics panel:** novi superadmin tab `Quota Diagnostics` u `Admin` prikazuje mode, hard lock status, saved reads, top 5 sekcija i kontrolne akcije (`Reset Daily Counter`, `Force Hard Lock`).
+- **Diagnostics export:** u `Quota Diagnostics` dodat `Copy Diagnostics JSON` za brzi copy kompletne dijagnostike (`getDiagnostics()`).
+- **Global hard-lock ponašanje:** `dataService` preskače i edge fetch helper-e kada je hard lock aktivan (cache-only + warning log).
+- **UI signalizacija:** floating badge u donjem desnom uglu prikazuje `Saved: Xk today` (u dev ili saver modu).
+- **Cost procena:** `estimatedMonthlyCost` koristi konzervativnu formulu `$0.03 / 100k reads` za realniji forecast.
+- **Quota-aware stranice:** pojačani pattern je dodat na `Distillery`, `DistilleryDashboard`, `ProductAnalytics`, `MyClubs`, `Workshop`, `Scanner` (manji limiti, cache-first, saver logovi).
+- **Operativni cilj:** sa saver ON aplikacija radi gotovo isključivo iz keša/edge; sa saver OFF vraća se normalan refresh obrazac.
+
+**Kratko uputstvo (superadmin):**
+1. Otvori `Admin -> Quota Diagnostics`.
+2. Klikni `Reset Daily Counter` pre test sesije.
+3. Prođi standardnu korisničku putanju 3-5 min.
+4. Proveri `Saved reads`, `Top 5 sekcija`, `Hard Lock` status.
+5. Koristi `Copy Diagnostics JSON` za čuvanje snapshot-a pre/posle testa.
 
 **Vodič:** `docs/FIRESTORE-SPIKE-PLAYBOOK.md` — šta Firebase graf meri (uključujući Worker), kad je **0 read/min** normalno, šta očekivati od `ratings-feed` / `home-bundle` na hladnom kešu, **šablon zapisa** kad prijaviš pik, i **sekcija 8** u playbooku (smoke scenario + `x-cache-status` u Network / `__rakivinumEdgeMeterEnable`).
 
@@ -33,6 +228,26 @@
 - **Opciono:** Cloudflare **Analytics** za Worker (broj zahteva po ruti) uz Firebase graf.
 
 ---
+
+**Poslednji zapis:** 2026-05-07 — **Početak feature-a "Moja Riznica" (Faza 1-3, frontend + servis).**  
+**Novo uvedeno:** `src/types/riznica.ts` (model + stats tipovi), `src/services/riznicaService.ts` (cache-first, refreshGate, Worker-first pokušaj na `/api/private/riznica` uz Firestore fallback), nova stranica `src/pages/MojaRiznica.tsx` sa statistikama, policama (polica-1..5), filter/search, kategorijama, cenom i `Export PDF` (print tok).  
+**Routing / navigacija:** dodata ruta `/moja-riznica` u `App`, bottom-nav stavka prebačena na "Riznica", Menu kartica preimenovana na "Moja Riznica".  
+**Integracija sa etiketom:** `Label.tsx` za ulogovanog korisnika sada upisuje/čita iz `users/{uid}/riznica/{drinkId}` (umesto `savedItems`) i koristi nova polja (`drinkId`, `addedAt`, `category`, `purchasePrice`, ...); guest fallback ostaje netaknut.  
+**Tonight preporuke:** kolekcijski pull za ulogovanog korisnika prebačen na `users/{uid}/riznica` (`addedAt`, `drinkId`).  
+**Verifikacija:** lokalno prošli `npm run lint` i `npm run build`.  
+**Sledeće (otvoreno):** Worker privatna ruta za riznicu (`/api/private/riznica`) trenutno je samo klijentski hook; treba implementirati endpoint + auth verifikaciju za puni Worker-first tok i dodati smoke korak.
+
+---
+
+**Poslednji zapis:** 2026-05-06 — **Stabilizacija posle vraćanja na proverenu admin tačku + ciljane UX ispravke.**  
+**Vraćeno stanje (namerno):** ostavljen je admin paket iz `655e93e` (single-flight + lazy tab fetch), a revertovani su kasniji eksperimenti nad gate/TTL (`712242a`, `6050dd8`) kroz commitove `330d62e` i `c7b71e4`.  
+**Aktivno trenutno (ponovo dodato po zahtevu):**  
+- `Workshop`: tekst „Preporuka odvojiti prvenac“.  
+- `Community`: tab font povećan jednoobrazno (`Utisci`, `Top 10`, `Uporedi`, `Destilerije`, `Pretraga`, `Događaji`).  
+- `Community` povratak na tab „Utisci“: cache-first prikaz + mrežni fetch samo kad nema važećeg keša ili gate dozvoli (da ne ostaje prazno bez full refresh-a).  
+**Debug korelacija (Analytics, ne Firestore query profiler):** dodat minimalni set eventa za DebugView timeline: `community_open`, `dist_dashboard_open`, `admin_tab_switch` (`src/lib/analytics.ts` + pozivi iz relevantnih stranica).  
+**Verifikacija/deploy:** više puta odrađeni `npm run lint`, `npm run build`, `npm run cf:smoke:edge`, zatim `npm run cf:deploy:resilient` + `firebase deploy --only hosting`.  
+**Trenutni operativni korak:** korisnik danas radi realan „običan korisnik“ test na telefonu; čeka se večernji set Firestore grafova za finalnu potvrdu da je obrazac pikova i dalje prihvatljiv.  
 
 **Poslednji zapis:** 2026-05-05 — **Kritičan read-leak fix (Home + MyClubs) potvrđen u produkciji (stabilan graf).**  
 **Worker (`workers/index.ts`)**: za `GET /api/public/home-bundle` izbačen `visitor` iz cache ključa i uklonjen membership fetch iz bundle-a; odgovor sada vraća globalne podatke (`actions`, `daily`, `distilleryNames`) + `memberships: []`, pa Cloudflare cache radi globalno umesto per korisnik.  
