@@ -8,6 +8,7 @@ import { recordClubMembershipAchievement } from "../lib/achievements";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { readCache, writeCache } from "../lib/resilience";
+import { meterSavedReads } from "../lib/requestMeter";
 import {
   fetchPublicClubMembershipCount,
   fetchPublicClubMembershipsByVisitorId,
@@ -16,6 +17,7 @@ import {
   stripHttpProductImgUrl,
 } from "../lib/dataService";
 import { RAKIVINUM_MARK_FALLBACK, isImgFallbackUrl } from "../lib/imageFallback";
+import { getReadSavingEstimate, isQuotaSaverActive } from "../lib/quotaSaver";
 
 type DistilleryProfile = {
   id: string;
@@ -56,6 +58,11 @@ type ProductCard = {
   isArchivedByDistillery?: boolean;
   publicLabelDisabled?: boolean;
 };
+type ClubNotice = {
+  title: string;
+  message: string;
+  tone?: "success" | "warning" | "error";
+};
 
 function pickDistilleryProductThumb(p: ProductCard): string {
   const a = stripHttpProductImgUrl(p.bottleImageUrl);
@@ -93,7 +100,7 @@ function mergeDistilleryProductPages(prev: ProductCard[], more: ProductCard[]): 
   return out;
 }
 
-const DISTILLERY_PRODUCTS_PAGE_SIZE = 6;
+const DISTILLERY_PRODUCTS_PAGE_SIZE = isQuotaSaverActive() ? 4 : 6;
 
 function tabFromSearch(search: string): "products" | "about" {
   const t = new URLSearchParams(search).get("tab");
@@ -101,6 +108,7 @@ function tabFromSearch(search: string): "products" | "about" {
 }
 
 export default function Distillery() {
+  const QUOTA_SAVER = isQuotaSaverActive();
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -131,6 +139,10 @@ export default function Distillery() {
   };
   
   const [distillery, setDistillery] = useState<DistilleryProfile | null>(null);
+  useEffect(() => {
+    if (!QUOTA_SAVER) return;
+    console.info("[QuotaSaver] Distillery mount: smaller page size for product pagination.");
+  }, [QUOTA_SAVER]);
   const [products, setProducts] = useState<ProductCard[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"products" | "about">(() => tabFromSearch(location.search));
@@ -152,8 +164,16 @@ export default function Distillery() {
   productsRef.current = products;
 
   const loadMoreLock = useRef(false);
+  /** Posle greške pri load-more ne ponavljaj dok korisnik ne promeni kontekst (druga destilerija / novi fetch prve strane). */
+  const loadMoreFailedRef = useRef(false);
+
+  useEffect(() => {
+    loadMoreFailedRef.current = false;
+  }, [id]);
+
   const loadMoreProducts = useCallback(async () => {
-    if (!id || activeTab !== "products" || !hasMoreProducts || loadMoreLock.current) return;
+    if (!id || activeTab !== "products" || !hasMoreProducts || loadMoreLock.current || loadMoreFailedRef.current)
+      return;
     const lastId = productsRef.current.at(-1)?.id;
     if (!lastId) return;
     loadMoreLock.current = true;
@@ -171,8 +191,10 @@ export default function Distillery() {
         return merged;
       });
       setHasMoreProducts(more.length >= DISTILLERY_PRODUCTS_PAGE_SIZE);
+      loadMoreFailedRef.current = false;
     } catch (e) {
       console.error("Load more distillery products failed", e);
+      loadMoreFailedRef.current = true;
     } finally {
       loadMoreLock.current = false;
       setIsLoadingMore(false);
@@ -268,6 +290,7 @@ export default function Distillery() {
           const filteredProducts = (await fetchPublicProductsByDistilleryId(id, DISTILLERY_PRODUCTS_PAGE_SIZE)) as ProductCard[];
           setProducts(filteredProducts);
           setHasMoreProducts(filteredProducts.length >= DISTILLERY_PRODUCTS_PAGE_SIZE);
+          loadMoreFailedRef.current = false;
           if (productsCacheKey) writeCache(productsCacheKey, filteredProducts, REFRESH_INTERVAL.USER_LIGHT_1H);
         } else {
           setHasMoreProducts(false);
@@ -343,6 +366,9 @@ export default function Distillery() {
     /** Jedan ključ za mount i focus — izbegava dupli `club_memberships` / count odmah posle učitavanja (isti obrazac kao `Home`). */
     const distilleryRefreshGateKey = `distillery:${id || "unknown"}:public-refresh`;
     const shouldWarmNow = shouldRunRefresh(distilleryRefreshGateKey, REFRESH_INTERVAL.USER_LIGHT_1H);
+    if (QUOTA_SAVER && cachedProfile && cachedProducts && !shouldWarmNow) {
+      meterSavedReads(getReadSavingEstimate("distillery"), "Distillery:skip refresh with warm cache");
+    }
     const needProfileWarm = !cachedProfile || shouldWarmNow;
     const needProductsWarm = activeTab === "products" && (!cachedProducts || shouldWarmNow);
     if (needProfileWarm || needProductsWarm) {
@@ -360,22 +386,29 @@ export default function Distillery() {
       if (document.visibilityState !== "visible") return;
       onFocusRefresh();
     };
-    window.addEventListener("focus", onFocusRefresh);
-    document.addEventListener("visibilitychange", onVisibilityRefresh);
+    if (!QUOTA_SAVER) {
+      window.addEventListener("focus", onFocusRefresh);
+      document.addEventListener("visibilitychange", onVisibilityRefresh);
+    }
 
     return () => {
       window.removeEventListener("focus", onFocusRefresh);
       document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
-  }, [id, activeTab]);
+  }, [id, activeTab, QUOTA_SAVER]);
 
   const [isJoining, setIsJoining] = useState(false);
+  const [clubNotice, setClubNotice] = useState<ClubNotice | null>(null);
 
   const toggleClubMembership = async () => {
     if (isJoining) return;
     const visitorId = localStorage.getItem("rakivinum_visitor_id");
     if (!visitorId) {
-      alert("Potreban je identifikator uređaja za članstvo u klubu.");
+      setClubNotice({
+        title: "Članstvo nije dostupno",
+        message: "Potreban je identifikator uređaja za članstvo u klubu.",
+        tone: "warning",
+      });
       return;
     }
     const storageKey = `clubs_${visitorId}`;
@@ -405,7 +438,11 @@ export default function Distillery() {
       } else {
         // JOIN CLUB
         if (clubs.length >= 5) {
-          alert("Možete biti član najviše 5 klubova istovremeno. Odjavite se iz nekog kluba kako biste se učlanili u novi.");
+          setClubNotice({
+            title: "Dostignut limit klubova",
+            message: "Možete biti član najviše 5 klubova istovremeno. Odjavite se iz nekog kluba kako biste se učlanili u novi.",
+            tone: "warning",
+          });
           setIsJoining(false);
           return;
         }
@@ -432,12 +469,20 @@ export default function Distillery() {
           setTotalMembers((prev) => (typeof prev === "number" ? prev + 1 : prev));
         }
         recordClubMembershipAchievement(clubs.length);
-        alert(`Dobrodošli u ${distillery?.name} klub! Od sada ćete dobijati ekskluzivne pogodnosti ovog proizvođača.`);
+        setClubNotice({
+          title: `Dobrodošli u ${distillery?.name} klub!`,
+          message: "Od sada ćete dobijati ekskluzivne pogodnosti ovog proizvođača.",
+          tone: "success",
+        });
       }
       localStorage.setItem(storageKey, JSON.stringify(clubs));
     } catch (e) {
       console.error("Error toggling membership", e);
-      alert("Došlo je do greške. Molimo pokušajte ponovo.");
+      setClubNotice({
+        title: "Došlo je do greške",
+        message: "Molimo pokušajte ponovo.",
+        tone: "error",
+      });
     } finally {
       setIsJoining(false);
     }
@@ -863,6 +908,45 @@ export default function Distillery() {
               className="max-h-[88vh] max-w-full object-contain rounded-2xl border border-white/15 shadow-2xl"
               referrerPolicy="no-referrer"
             />
+          </div>
+        </div>
+      )}
+      {clubNotice && (
+        <div className="fixed inset-0 z-[130] bg-black/70 backdrop-blur-sm p-4 flex items-center justify-center">
+          <div className="w-full max-w-md rounded-[24px] border border-white/15 bg-bg-card-elevated p-5 card-elevated">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div
+                  className={cn(
+                    "mt-0.5 flex h-8 w-8 items-center justify-center rounded-full",
+                    clubNotice.tone === "success" && "bg-emerald-500/15 text-emerald-300",
+                    clubNotice.tone === "warning" && "bg-gold-500/15 text-gold-300",
+                    clubNotice.tone === "error" && "bg-red-500/15 text-red-300",
+                  )}
+                >
+                  <CheckCircle className="h-4 w-4" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-black text-white">{clubNotice.title}</p>
+                  <p className="text-xs leading-relaxed text-text-secondary">{clubNotice.message}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setClubNotice(null)}
+                className="rounded-lg p-1.5 text-text-secondary hover:bg-white/5 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card-elevated"
+                aria-label="Zatvori poruku"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setClubNotice(null)}
+              className="mt-4 w-full rounded-xl border border-gold-500/45 bg-gold-500/10 py-2 text-[11px] font-black uppercase tracking-wider text-gold-300"
+            >
+              U redu
+            </button>
           </div>
         </div>
       )}
