@@ -75,19 +75,39 @@ console.log(`  ukupno procitano dokumenata u ovoj proveri: ${totalReads}`);
 
 console.log("\n=== 3) App Check na produkciji ===");
 try {
-  const html = await (await fetch(SITE + "/?cb=" + Math.random().toString(36).slice(2))).text();
-  const bundle = (html.match(/assets\/index-[A-Za-z0-9_-]+\.js/) || [])[0];
-  if (!bundle) {
-    err("ne mogu da nadjem glavni bundle u HTML-u");
+  /**
+   * Site key ne mora da bude u entry bundle-u: Vite ga smesti u onaj chunk u koji je
+   * zavrsio `src/lib/appCheck.ts` (kod nas `assets/firebase-*.js`), a taj chunk nije
+   * naveden u index.html. Zato se lista svih fajlova cita iz precache manifesta u sw.js.
+   */
+  const sw = await (await fetch(SITE + "/sw.js?cb=" + Math.random().toString(36).slice(2))).text();
+  const chunks = [...new Set((sw.match(/assets\/[A-Za-z0-9._-]+\.js/g) || []))];
+  if (!chunks.length) {
+    err("ne mogu da procitam listu bundle-ova iz sw.js");
   } else {
-    const js = await (await fetch(`${SITE}/${bundle}`)).text();
-    // site key zavrsi u bundlu tek kad je VITE_APPCHECK_RECAPTCHA_SITE_KEY postavljen
-    const hasKey = /VITE_APPCHECK|6L[A-Za-z0-9_-]{30,}/.test(js);
-    if (hasKey) ok(`App Check site key je u build-u (${bundle})`);
-    else console.log(`  info  App Check jos NIJE ukljucen (nema site key u ${bundle}) — docs/APP-CHECK-UPUTSTVO.md`);
+    // Trazi se tacno reCAPTCHA site key kao string literal (40 znakova, pocinje sa "6L"),
+    // a ne bilo koji "6L..." niz — inace minifikovani kod ume da da lazan pogodak.
+    const KEY_RE = /["'`]6L[A-Za-z0-9_-]{38}["'`]/;
+    // Najverovatniji chunk-ovi prvi, da se u dobrom slucaju ne skida ceo build.
+    chunks.sort((a, b) => rank(a) - rank(b));
+    let found = null;
+    for (const c of chunks) {
+      const js = await (await fetch(`${SITE}/${c}`)).text();
+      const m = js.match(KEY_RE);
+      if (m) { found = { chunk: c, key: m[0].slice(1, -1) }; break; }
+    }
+    if (found) ok(`App Check site key je u build-u (${found.chunk}, ${found.key.slice(0, 12)}...)`);
+    else console.log(`  info  App Check jos NIJE ukljucen (site key nije ni u jednom od ${chunks.length} chunk-ova) — docs/APP-CHECK-UPUTSTVO.md`);
   }
 } catch (e) {
   err("provera produkcije nije uspela: " + e.message);
+}
+
+function rank(p) {
+  if (/\/firebase/.test(p)) return 0;
+  if (/\/index-/.test(p)) return 1;
+  if (/\/App-/.test(p)) return 2;
+  return 3;
 }
 
 console.log(bad === 0 ? "\nSVE U REDU." : `\nPROBLEMA: ${bad}`);
