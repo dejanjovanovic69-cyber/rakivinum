@@ -44,6 +44,17 @@ export const PUBLIC_CATALOG_LIMIT = {
 
 export const REFRESH_INTERVAL = {
   USER_LIGHT_1H: (QS ? 4 : 1) * 60 * 60 * 1000,
-  ADMIN_PANEL_10M: (QS ? 30 : 10) * 60 * 1000,
+  /**
+   * Admin panel cita PRAVO iz Firestore-a — ne prolazi kroz Workera ni njegov keš.
+   * Na 10 minuta je znacilo da svako duze zadrzavanje u panelu ponovo povuce sve
+   * kartice: distilleries 120 + licenses 120 + events 80 + links 80 + blocked 80
+   * + proposals 80 + approvals 80 + flagged 60 + recent 40 + products 50, dakle
+   * ~700 dokumenata po ciklusu, iznova svakih deset minuta.
+   *
+   * Panel koristi jedan covek koji zna kada je nesto promenio, a upisi ionako
+   * odmah azuriraju prikaz lokalno. Za svesne podatke tu je dugme „Force Full
+   * Refresh“. Zato je osvezavanje sada na 12 sati.
+   */
+  ADMIN_PANEL_12H: (QS ? 24 : 12) * 60 * 60 * 1000,
 } as const;
 
