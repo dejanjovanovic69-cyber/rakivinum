@@ -3,9 +3,35 @@ import { Home, ScanLine, FlaskConical, Users, Settings, Bell, X, LibraryBig, Spa
 import { cn } from "../../lib/utils";
 import { useState } from "react";
 
+/** Podigni verziju kada se sadrzaj obavestenja stvarno promeni — tada se tacka vraca. */
+const NOTIF_VERSION = "1";
+const NOTIF_SEEN_KEY = "rakivinum_notif_seen_version";
+
 export default function MobileLayout() {
   const navigate = useNavigate();
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  /**
+   * Crvena tacka je ranije bila napisana pravo u JSX-u, pa se NIKAD nije gasila:
+   * korisnik otvori obavestenja, procita ih, tacka i dalje stoji. Sada se gasi
+   * kad se panel otvori i to se pamti (po verziji sadrzaja obavestenja).
+   */
+  const [hasUnseenNotif, setHasUnseenNotif] = useState(() => {
+    try {
+      return localStorage.getItem(NOTIF_SEEN_KEY) !== NOTIF_VERSION;
+    } catch {
+      return true;
+    }
+  });
+
+  const openNotifications = () => {
+    setIsNotifOpen(true);
+    setHasUnseenNotif(false);
+    try {
+      localStorage.setItem(NOTIF_SEEN_KEY, NOTIF_VERSION);
+    } catch {
+      // privatni rezim / pun storage — tacka se gasi bar u ovoj sesiji
+    }
+  };
   const navItems = [
     { icon: Home, label: "Home", path: "/" },
     { icon: Users, label: "Zajednica", path: "/community" },
@@ -35,11 +61,13 @@ export default function MobileLayout() {
         </div>
         <button
           type="button"
-          onClick={() => setIsNotifOpen(true)}
+          onClick={openNotifications}
           className="relative p-2 rounded-full text-text-secondary hover:text-gold-500 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/55 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-card"
         >
           <Bell className="w-5 h-5" />
-          <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full border border-bg-card" />
+          {hasUnseenNotif && (
+            <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full border border-bg-card" />
+          )}
         </button>
       </header>
 
