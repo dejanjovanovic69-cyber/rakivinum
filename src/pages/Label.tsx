@@ -243,13 +243,20 @@ export default function Label() {
   // Rating Modal State
   const [isRatingModalOpen, setIsRatingModalOpen] = useState(false);
   const [userRating, setUserRating] = useState(0);
+  /**
+   * Klizaci su ranije startovali na 4 od 5. Ko otvori modal i odmah snimi,
+   * upisao je ocenu 4.0 a da nista nije ocenio — zato su se ocene gomilale
+   * oko 4.x. Sada je start neutralna sredina skale, a snimanje je moguce
+   * tek kada korisnik stvarno pomeri bar jedan klizac.
+   */
   const [sensoryScores, setSensoryScores] = useState({
-    aroma: 4,
-    taste: 4,
-    color: 4,
-    finish: 4,
-    harmony: 4
+    aroma: 3,
+    taste: 3,
+    color: 3,
+    finish: 3,
+    harmony: 3
   });
+  const [hasScoredSensory, setHasScoredSensory] = useState(false);
   const [reviewText, setReviewText] = useState("");
   const [userLocation, setUserLocation] = useState("");
   const [isSubmittingRating, setIsSubmittingRating] = useState(false);
@@ -1113,7 +1120,8 @@ export default function Label() {
 
       setIsRatingModalOpen(false);
       setUserRating(0);
-      setSensoryScores({ aroma: 4, taste: 4, color: 4, finish: 4, harmony: 4 });
+      setSensoryScores({ aroma: 3, taste: 3, color: 3, finish: 3, harmony: 3 });
+      setHasScoredSensory(false);
       setReviewText("");
       const unlocked = recordRatingAchievement(productData?.type);
       setRatingSuccess({
@@ -1651,7 +1659,10 @@ export default function Label() {
                         max="5"
                         step="0.1"
                         value={sensoryScores[attr.key]}
-                        onChange={(e) => setSensoryScores({...sensoryScores, [attr.key]: parseFloat(e.target.value)})}
+                        onChange={(e) => {
+                          setHasScoredSensory(true);
+                          setSensoryScores({ ...sensoryScores, [attr.key]: parseFloat(e.target.value) });
+                        }}
                         className="absolute w-full h-3 appearance-none bg-black/40 rounded-full outline-none cursor-pointer border border-white/5 z-20"
                         style={{
                           background: `linear-gradient(to right, var(--color-gold-500) ${((sensoryScores[attr.key] - 1) / 4) * 100}%, rgba(0,0,0,0.4) ${((sensoryScores[attr.key] - 1) / 4) * 100}%)`
@@ -1701,14 +1712,14 @@ export default function Label() {
             <div className="flex flex-col gap-3 pt-4">
               <button
                 onClick={submitRating}
-                disabled={isSubmittingRating}
+                disabled={isSubmittingRating || !hasScoredSensory}
                 className={`w-full py-5 rounded-2xl font-black uppercase tracking-[0.2em] flex items-center justify-center transition-all text-xs border-2 ${
-                  !isSubmittingRating
-                    ? 'bg-gold-500 text-black border-gold-500 shadow-xl shadow-gold-500/20 active:scale-95' 
+                  !isSubmittingRating && hasScoredSensory
+                    ? 'bg-gold-500 text-black border-gold-500 shadow-xl shadow-gold-500/20 active:scale-95'
                     : 'bg-bg-base text-text-secondary border-border-subtle cursor-not-allowed'
                 }`}
               >
-                {isSubmittingRating ? <Loader2 className="w-5 h-5 animate-spin" /> : 'Snimi ocenu'}
+                {isSubmittingRating ? <Loader2 className="w-5 h-5 animate-spin" /> : hasScoredSensory ? 'Snimi ocenu' : 'Pomerite bar jedan klizač'}
               </button>
               <button
                 onClick={() => setIsRatingModalOpen(false)}
