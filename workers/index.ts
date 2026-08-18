@@ -47,9 +47,26 @@ type FirestoreDoc = {
   fields?: Record<string, FirestoreValue>;
 };
 
+/**
+ * Browser/edge cache; public catalog hits should mostly avoid Firestore repeat reads.
+ *
+ * Firestore se cita SAMO kada promase sva tri sloja (isolate memorija, KV, Cache API).
+ * Zato je KV TTL glavna poluga za potrosnju: na 6h je svaki kljuc isao u bazu ~4x
+ * dnevno (`products` = 41 dokumenata po promasaju, `distilleries` = 7), na 24h ide
+ * jednom. Katalog se ne menja svakih par sati, pa je to cist dobitak.
+ *
+ * Kada se katalog ipak promeni (nov proizvod, izmena u Adminu), podigni
+ * `PUBLIC_CATALOG_CACHE_BUSTER` i deploy-uj Workera — kljucevi se odmah menjaju
+ * i sledeci zahtev povlaci sveze podatke. Bez toga nova stavka ceka do 24h.
+ */
+const EDGE_CACHE_TTL_SECONDS = 3600;
+const KV_CACHE_TTL_SECONDS = 24 * 60 * 60;
+/** Workers Cache API (POP); many concurrent clients share one cached body per normalized URL. */
+const CF_CACHE_S_MAXAGE_SECONDS = 24 * 60 * 60;
+
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",
-  "cache-control": "public, max-age=3600, s-maxage=21600",
+  "cache-control": `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=${CF_CACHE_S_MAXAGE_SECONDS}`,
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-allow-headers": "content-type,authorization",
@@ -70,11 +87,6 @@ const GCP_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const FIRESTORE_SCOPE = "https://www.googleapis.com/auth/datastore";
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_REQUESTS = 360;
-/** Browser/edge cache; public catalog hits should mostly avoid Firestore repeat reads. */
-const EDGE_CACHE_TTL_SECONDS = 3600;
-const KV_CACHE_TTL_SECONDS = 6 * 60 * 60;
-/** Workers Cache API (POP); many concurrent clients share one cached body per normalized URL. */
-const CF_CACHE_S_MAXAGE_SECONDS = 3600;
 /**
  * Injected into `servePublicCached` keys for `/api/public/distilleries` + `/api/public/products` only.
  * Bump when list semantics change so KV / Cache API / isolate do not serve stale truncated JSON forever.
@@ -233,7 +245,7 @@ function isRateLimited(request: Request, url: URL): boolean {
 function withDefaultHeaders(response: Response): Response {
   const headers = new Headers(response.headers);
   if (!headers.has("content-type")) headers.set("content-type", "application/json; charset=utf-8");
-  if (!headers.has("cache-control")) headers.set("cache-control", "public, max-age=3600, s-maxage=21600");
+  if (!headers.has("cache-control")) headers.set("cache-control", `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=${CF_CACHE_S_MAXAGE_SECONDS}`);
   if (!headers.has("access-control-allow-origin")) headers.set("access-control-allow-origin", "*");
   if (!headers.has("access-control-allow-methods")) headers.set("access-control-allow-methods", "GET,POST,OPTIONS");
   if (!headers.has("access-control-allow-headers")) headers.set("access-control-allow-headers", "content-type,authorization");
@@ -334,7 +346,8 @@ async function servePublicCached(
     keysToDelete.forEach((k) => isolateCache.delete(k));
   }
 
-  const memTtlAfterMiss = opts?.memTtlMs ?? 600_000;
+  // Memorija izolata je najjeftiniji sloj (nema ni KV ni mreze) — drzi duze.
+  const memTtlAfterMiss = opts?.memTtlMs ?? 1_800_000;
 
   const memHit = isolateCache.get(normalizedUrl);
   if (memHit && now < memHit.expiresAt) {
@@ -359,7 +372,7 @@ async function servePublicCached(
         status: 200,
         headers: {
           ...jsonHeaders,
-          "cache-control": "public, max-age=3600, s-maxage=21600",
+          "cache-control": `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=${CF_CACHE_S_MAXAGE_SECONDS}`,
           "x-cache-status": "kv-hit",
           "x-firestore-reads": "0",
         },
