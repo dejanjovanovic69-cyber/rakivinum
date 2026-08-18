@@ -622,10 +622,57 @@ function sanitizeProductDocForPublicJson(row: Record<string, unknown>): Record<s
   };
 }
 
+/**
+ * Za `label-view`: etiketi treba samo zaglavlje proizvodjaca (ime, region, logo,
+ * sajt). Ranije se vracao CEO dokument destilerije, ukljucujuci `galleryImages`
+ * — a to su ugradjene data: URI slike, oko 175 KB po destileriji. Svaka etiketa
+ * je time vukla ~230 KB umesto ~55 KB, bez ijedne dodatne koristi.
+ *
+ * Spisak je namerno zatvoren (allowlist): sto se ne navede, ne izlazi napolje.
+ */
 function sanitizeDistilleryDocForPublicJson(row: Record<string, unknown>): Record<string, unknown> {
+  const location = (row.location && typeof row.location === "object" ? row.location : null) as
+    | Record<string, unknown>
+    | null;
   return {
-    ...row,
+    id: asText(row.id) || "",
+    name: asText(row.name) || "",
+    region: asText(row.region),
+    website: asText(row.website),
     logoUrl: sanitizeImageUrl(row.logoUrl),
+    isVerified: row.isVerified === true,
+    location: location ? { city: asText(location.city), address: asText(location.address) } : undefined,
+  };
+}
+
+/**
+ * Za `/api/public/distillery/{id}`: stranica destilerije prikazuje i galeriju,
+ * opis i kontakt, pa se ta polja zadrzavaju. Izbacuje se ono sto je interno —
+ * `trialEndsAt` je stanje pretplate i nema sta da trazi u javnom odgovoru.
+ */
+function sanitizeDistilleryProfileForPublicJson(row: Record<string, unknown>): Record<string, unknown> {
+  const location = (row.location && typeof row.location === "object" ? row.location : null) as
+    | Record<string, unknown>
+    | null;
+  const gallery = Array.isArray(row.galleryImages)
+    ? row.galleryImages.filter((x): x is string => typeof x === "string" && x.length > 0)
+    : undefined;
+  return {
+    id: asText(row.id) || "",
+    name: asText(row.name) || "",
+    region: asText(row.region),
+    description: asText(row.description),
+    website: asText(row.website),
+    email: asText(row.email),
+    phone: asText(row.phone),
+    pib: asText(row.pib),
+    mapsUrl: asText(row.mapsUrl),
+    story: asText(row.story),
+    specificNotes: asText(row.specificNotes),
+    logoUrl: sanitizeImageUrl(row.logoUrl),
+    isVerified: row.isVerified === true,
+    galleryImages: gallery,
+    location: location ? { city: asText(location.city), address: asText(location.address) } : undefined,
   };
 }
 
@@ -2105,7 +2152,10 @@ export default {
           const id = decodeURIComponent(url.pathname.replace("/api/public/distillery/", "").trim());
           if (!id) return new Response(JSON.stringify({ item: null }), { headers: jsonHeaders });
           const row = await fetchDocumentById(env, "distilleries", id);
-          const item = row && row.isArchived !== true && row.isVerified === true ? row : null;
+          const item =
+            row && row.isArchived !== true && row.isVerified === true
+              ? sanitizeDistilleryProfileForPublicJson(row)
+              : null;
           return new Response(JSON.stringify({ item }), { headers: jsonHeaders });
         });
       }
