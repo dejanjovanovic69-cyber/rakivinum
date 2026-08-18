@@ -1029,7 +1029,9 @@ export default function Label() {
         productName: productData?.name || "Rakija",
         productImage: productData ? pickProductPrimaryImageUrl(productData) : RAKIVINUM_MARK_FALLBACK,
         rating: avgRating,
-        reviewText: reviewText.trim() || null,
+        // slice(0, 2000): isti limit kao u firestore.rules — štiti i tokove
+        // koji ne prolaze kroz textarea maxLength (paste, vraćeni nacrt).
+        reviewText: reviewText.trim().slice(0, 2000) || null,
         userLocation: sanitizePublicLocation(userLocation),
         visitorId: visitorId || null,
         userAgent: navigator.userAgent,
@@ -1668,10 +1670,13 @@ export default function Label() {
               </div>
             </div>
 
+            {/* maxLength mora da ostane <= 2000: firestore.rules (isValidRatingCreate)
+                odbija reviewText duži od 2000 znakova sa permission-denied. */}
             <textarea
               className="w-full bg-bg-base border border-border-subtle rounded-2xl p-4 text-white text-sm focus:outline-none focus:border-gold-500 transition-colors resize-none placeholder:text-white/20"
               placeholder="Nije teško biti fin :) - Podelite utiske..."
               rows={3}
+              maxLength={2000}
               value={reviewText}
               onChange={(e) => setReviewText(e.target.value)}
             />

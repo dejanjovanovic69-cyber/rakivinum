@@ -16,3 +16,6 @@ gen-lang-client-*.json
 
 # Cloudflare API token (lokalno, nikad u git)
 .cftoken
+
+# repomix dump celog repoa (generiše se iz koda, 1.5 MB)
+repomix-output.txt

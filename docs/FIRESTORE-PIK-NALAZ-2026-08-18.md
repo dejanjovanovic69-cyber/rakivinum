@@ -247,22 +247,72 @@ node scripts/firestore-rules-check.mjs
      svi odbijeni
    - regresija na `rakivinum.com`: početna, etiketa, zajednica, destilerije — rade,
      bez ijedne `permission-denied` greške
-2. ⚠️ **Nije provereno automatski** (zahteva pisanje u produkciju, uradi ručno jednom):
-   - **ocenjivanje kao gost** na `/label/:id` — najrizičnije pravilo (`isValidRatingCreate`
-     + `isRatingAggregateBump`)
-   - **aktivacija licence** `/activate?token=lic_…` (`isLicenseActivation`)
-   - **Admin panel** i **Distillery dashboard** (traže prijavu)
+2. ✅ **Upisni tokovi — PROVERENO 2026-08-18** (bilo je „uradi ručno jednom“):
+   - **ocenjivanje kao gost** na `/label/:id` — **radi na produkciji.** Novi test
+     `e2e/diag-guest-rating.spec.ts` prolazi ceo pravi tok (age gate → „Oceni proizvod“ →
+     „Snimi ocenu“) i dobija modal „Ocena je uspešno sačuvana“, bez ijednog
+     `permission-denied`. Time su potvrđena oba najrizičnija pravila:
+     `isValidRatingCreate` **i** `isRatingAggregateBump` (transakcija u `Label.tsx`
+     menja tačno `averageRating` + `ratingCount`).
 
-   Ako neko od njih vrati `permission-denied`, prvi osumnjičeni su tri provere
+     > Test **stvarno upisuje** u produkciju, pa je pod prekidačem `DIAG_GUEST_RATING=1`
+     > i ne ide u redovni run. Prvim pokretanjem je na proizvodu
+     > `xMpj0JXh945cy0hZMh3I` ostala jedna ocena **4.0** („Gost“, bez recenzije).
+     > Obriši je iz Admin panela ako ti smeta u agregatu.
+
+   - **upis u `scans`** — potvrđen usput, `diag-prod-regress` test etikete
+     (`source: "label_open"`, `timestamp == request.time`).
+   - **aktivacija licence** `/activate?token=lic_…` — **nije izvršena** (nema tokena za
+     jednokratnu upotrebu, a prava licenca bi potrošila slot uređaja). Provereno statički,
+     polje po polje: `Activate.tsx` `writeViaClient()` šalje tačno
+     `token, clientName, [type], maxDevices, isUsed, activatedDevices, lastActivatedBy, usedAt`
+     — sve je u `hasOnly` listi, `maxDevices` se prepisuje istom vrednošću, `isUsed` je
+     uvek `true` (uređaj se dodaje pre upisa), `usedAt` je `serverTimestamp()`.
+     Klijent već sam odbija aktivaciju kad se dostigne `maxDevices`, pa `size() <=`
+     provera ne može da padne pre njega. Primarni put je ionako callable
+     `activateLicense` (admin SDK, ne prolazi kroz pravila) — klijentski upis je fallback.
+   - **Admin panel** i **Distillery dashboard** — traže prijavu, nisu proveravani.
+
+   Ako neko od njih ipak vrati `permission-denied`, prvi osumnjičeni su tri provere
    `== request.time`; izbaci baš njih, pa tek onda gledaj dalje.
-3. **App Check** — `docs/APP-CHECK-UPUTSTVO.md`. Bez njega svako i dalje može da gađa
-   bazu direktno, samo sada u manjim porcijama.
-4. **Deploy Workera i frontenda** (traži `wrangler login`):
-   ```
-   npm run cf:worker:deploy
-   npm run build && npm run cf:pages:deploy
-   ```
-   Worker donosi `x-firestore-reads` zaglavlje — bez njega nema atribucije pika.
+
+   **Popravljeno usput:** `reviewText` u pravilima ima cap od 2000 znakova, a `textarea`
+   u `Label.tsx` nije imao `maxLength` — gost sa dužom recenzijom bi dobio
+   `permission-denied` bez ikakvog objašnjenja. Dodat `maxLength={2000}` i `slice(0, 2000)`
+   pre upisa. Ostala ograničenja dužine/oblika iz pravila su proverena protiv klijenta:
+   `PUBLIC_CATALOG_LIMIT` je 200 (cap 400), riznica ide isključivo preko Workera
+   (service account, bez pravila), `scans` fallback sa `limit(300)` je iza
+   `DISABLE_DIRECT_FIRESTORE_READS` i traži admina/vlasnika. Nema drugih neusklađenosti.
+3. ⏳ **App Check — OSTAJE, traži tvoje ruke.** `docs/APP-CHECK-UPUTSTVO.md`, koraci 1–2
+   (reCAPTCHA v3 ključ + registracija u Firebase konzoli) idu kroz pregledač sa tvojim
+   nalogom i ne mogu se automatizovati. Kod je spreman i neaktivan dok
+   `VITE_APPCHECK_RECAPTCHA_SITE_KEY` ne uđe u `.env.production`. Bez njega svako i dalje
+   može da gađa bazu direktno, samo sada u manjim porcijama.
+   `scripts/health-check.mjs` svakog dana proverava da li je postao aktivan.
+4. ✅ **Deploy Workera i frontenda — URAĐENO 2026-08-18.**
+
+   Worker: verzija `ce3b152a-4517-47b2-9f78-915b420814ef` na
+   `rakivinum-api.dejanjovanovic69.workers.dev`.
+   Pages: `https://8300d2be.rakivinum-6gk.pages.dev`, bandl `index-Cw8Vd_UW.js`
+   je identičan lokalnom `dist/` i onome što servira `rakivinum.com`.
+
+   `x-firestore-reads` sada radi i atribucija je tačna:
+
+   | Endpoint | `x-cache-status` | `x-firestore-reads` |
+   |---|---|---|
+   | `/api/public/home-bundle` | `kv-hit` | **0** |
+   | `/api/public/products` | `miss-store` | **41** |
+   | `/api/public/distilleries` | `miss-store` | **7** |
+
+   Hladan miss celog kataloga je **48 read-ova**, keš pogodak **0** — što merenjem
+   zatvara priču: pik od 2000 read-ova ne dolazi iz aplikacije.
+
+   > **Zamka pri Pages deploy-u:** `npm run cf:pages:deploy` je pao sa
+   > `Rename-Item : Access to the path 'C:\rakivinum\functions' is denied` — neki proces
+   > je držao hendl na folderu. Rešenje bez čekanja: prekopiraj `dist/` van repoa i
+   > pokreni `npx wrangler pages deploy dist --project-name rakivinum --branch master
+   > --commit-dirty=true` iz tog foldera. Wrangler tada ni ne vidi Firebase `functions/`,
+   > pa preimenovanje uopšte nije potrebno.
 5. ✅ **Stari Worker obrisan — URAĐENO 2026-08-18.**
 
    Pre brisanja izmereno: bio je **živ i čitao Firestore** (`x-cache-status: miss-store`),
