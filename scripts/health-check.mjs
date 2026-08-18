@@ -39,10 +39,22 @@ try {
 } catch {
   ok("licenses: lista samo za admina");
 }
-for (const [c, n] of [["products", 200], ["distilleries", 200]]) {
+/**
+ * PROBE_LIMIT je namerno mali. Ranije je ovde stajalo limit(200), pa je SVAKO
+ * pokretanje ove skripte citalo ceo katalog (41 + 7 = 48 dokumenata) — i to se
+ * nije videlo u zbiru ispod, jer taj zbir broji samo Workera. Provera odgovara
+ * na pitanje „da li aplikacijski upit uopste prolazi kroz pravila“, a za to je
+ * dovoljno par redova; tacan broj stavki ionako daje Worker.
+ */
+const PROBE_LIMIT = 3;
+for (const c of ["products", "distilleries"]) {
   try {
-    const s = await getDocs(query(collection(db, c), limit(n)));
-    ok(`${c}: aplikacijski upit radi (${s.size})`);
+    const s = await getDocs(query(collection(db, c), limit(PROBE_LIMIT)));
+    if (s.size === 0) {
+      err(`${c}: aplikacijski upit prolazi ali ne vraca nista — katalog je prazan?`);
+    } else {
+      ok(`${c}: aplikacijski upit radi (uzorak ${s.size}/${PROBE_LIMIT})`);
+    }
   } catch (e) {
     err(`${c}: aplikacijski upit PUKAO (${e.code || e.message}) — sajt je polomljen`);
   }
@@ -71,7 +83,7 @@ for (const p of endpoints) {
     err(`${p}: nedostupan (${e.message})`);
   }
 }
-console.log(`  ukupno procitano dokumenata u ovoj proveri: ${totalReads}`);
+console.log(`  ukupno procitano dokumenata u ovoj proveri: ${totalReads} (Worker) + do ${2 * PROBE_LIMIT} (direktne probe iznad)`);
 
 console.log("\n=== 3) App Check na produkciji ===");
 try {

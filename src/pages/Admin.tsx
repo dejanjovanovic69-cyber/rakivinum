@@ -371,12 +371,20 @@ export default function Admin() {
       alert("Kopiranje nije uspelo na ovom uređaju/browseru.");
     }
   };
+  /**
+   * Ranije je ovo, kada je „quota saver“ UKLJUCEN (a u produkciji jeste), svaki
+   * pojedinacni refresh preusmeravalo na `forceFullRefreshAll()`. Efekat je bio
+   * suprotan imenu: cuvanje jednog proizvoda ili linka povlacilo je CEO panel —
+   * distilleries 120 + approvals 80 + proposals 80 + links 80 + events 80 +
+   * flagged 60 + recent 40 + blocked 80 + licenses 120 + products 50/100,
+   * dakle blizu 800 dokumenata po jednom kliku. Na mestima gde se pozivalo
+   * dvaput zaredom (npr. distilleries + products posle cuvanja) to je bilo
+   * dvostruko.
+   *
+   * Sada se osvezava tacno ono sto je pozivalac trazio. Pun refresh je ostao,
+   * ali samo na svom dugmetu „Force Full Refresh“, gde je namera izricita.
+   */
   const requestForcedNetwork = async (factory: () => Promise<void>) => {
-    if (quotaSaverEnabled) {
-      console.info(`${QUOTA_SAVER_LOG_PREFIX} saver ON: redirecting manual refresh to Force Full Refresh`);
-      await forceFullRefreshAll();
-      return;
-    }
     await factory();
   };
 
