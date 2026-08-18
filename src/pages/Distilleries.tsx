@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { isImgFallbackUrl, RAKIVINUM_MARK_FALLBACK } from "../lib/imageFallback";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, MapPin, Loader2, ChevronRight, Award, Search, X } from "lucide-react";
 import { isQuotaError } from "../lib/resilience";
@@ -162,7 +163,19 @@ export default function Distilleries() {
               <div className="flex items-center gap-4 min-w-0">
                 <div className="w-14 h-14 rounded-2xl bg-black border-2 border-white/10 group-hover:border-gold-500/50 flex items-center justify-center overflow-hidden shrink-0 shadow-[0_0_0_1px_rgba(212,175,55,0.06)] transition-all duration-300">
                   {d.logoUrl ? (
-                    <img src={d.logoUrl} alt={d.name} className="w-full h-full object-contain object-center p-1.5 media-crisp" />
+                    <img
+                      src={d.logoUrl}
+                      alt={d.name}
+                      className="w-full h-full object-contain object-center p-1.5 media-crisp"
+                      loading="lazy"
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        // Logo sa nedostupnog hosta je inace ostajao kao ikonica pokvarene slike.
+                        const el = e.currentTarget;
+                        if (!isImgFallbackUrl(el.src)) el.src = RAKIVINUM_MARK_FALLBACK;
+                      }}
+                    />
                   ) : (
                     <Award className="w-6 h-6 text-gold-500" aria-hidden />
                   )}

@@ -2,6 +2,8 @@ import { ArrowRight, Trophy, ArrowUpRight, Sparkles, Star, Clock, Download, Shie
 import { Link, useLocation } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
 import { auth } from "../lib/firebase";
+import { pluralSr } from "../lib/utils";
+import { isSuperuserEmail } from "../lib/authz";
 import { onAuthStateChanged } from "firebase/auth";
 import { cn } from "../lib/utils";
 import { isQuotaError, readCache } from "../lib/resilience";
@@ -121,6 +123,7 @@ export default function Home() {
   const [recommendedVino, setRecommendedVino] = useState<ProductLite | null>(null);
   const [isLoadingRec, setIsLoadingRec] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [recentScans, setRecentScans] = useState<RecentScanItem[]>([]);
   const [licenseWarning, setLicenseWarning] = useState<string | null>(null);
   const [joinedClubs, setJoinedClubs] = useState<string[]>([]);
@@ -299,6 +302,7 @@ export default function Home() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUserId(user ? user.uid : null);
+      setIsAdmin(isSuperuserEmail(user?.email));
     });
     return () => unsubscribe();
   }, []);
@@ -453,7 +457,9 @@ export default function Home() {
               </Link>
             )}
           </div>
-        ) : (
+        ) : isAdmin ? (
+          /* „Dodajte proizvode“ je poziv AUTORU kataloga i vodi u /admin.
+             Gostu je besmislen (ne moze da doda nista) i vodio ga je u admin panel. */
           <Link
             to="/admin"
             className="block empty-state card-elevated rounded-[24px] p-8 text-center text-text-secondary text-[11px] uppercase tracking-widest font-black hover:text-white hover:border-white/15 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
@@ -461,6 +467,16 @@ export default function Home() {
             <Sparkles className="w-6 h-6 text-gold-500/35 mx-auto mb-3" aria-hidden />
             Dodajte proizvode za preporuku
           </Link>
+        ) : (
+          <div className="empty-state card-elevated rounded-[24px] p-8 text-center">
+            <Sparkles className="w-6 h-6 text-gold-500/35 mx-auto mb-3" aria-hidden />
+            <p className="text-[11px] uppercase tracking-widest font-black text-text-secondary">
+              Preporuka se priprema
+            </p>
+            <p className="mt-2 text-[11px] text-text-secondary/80 normal-case tracking-normal font-normal">
+              Skenirajte bocu ili istražite destilerije dok se katalog puni.
+            </p>
+          </div>
         )}
       </section>
       <Link
@@ -470,7 +486,8 @@ export default function Home() {
         <section className="card-soft card-elevated card-interactive border-gold-500/25 rounded-[24px] p-4">
           <div className="flex items-center gap-3">
             <div className="min-w-0">
-              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-gold-400">Večernji izbor</p>
+              {/* Nadnaslov i naslov su bili isti tekst — nadnaslov sada nosi kategoriju. */}
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-gold-400">Za večeras</p>
               <h2 className="mt-1 text-base font-black italic text-white">Večernji izbor</h2>
               <p className="mt-1 text-[11px] text-text-secondary">Personalizovana preporuka po raspoloženju, hrani i tvojoj riznici.</p>
             </div>
@@ -579,7 +596,17 @@ export default function Home() {
               <div>
                  <p className="text-[11px] text-gold-500 font-black uppercase tracking-widest">Moja riznica</p>
                  <h4 className="text-white font-bold text-sm">
-                   {savedCount} Boca <span className="text-text-secondary font-normal mx-1">|</span> {topRating ? `${topRating.toFixed(1)} ★` : 'Bez ocena'}
+                   {/* savedCount je "-" dok se ne zna (gost, ili kes jos nije napunjen).
+                       Ranije se to ispisivalo doslovno: „- Boca | Bez ocena“. */}
+                   {savedCount === "-" ? (
+                     "Započnite svoju kolekciju"
+                   ) : (
+                     <>
+                       {savedCount} {pluralSr(savedCount, "boca", "boce", "boca")}
+                       <span className="text-text-secondary font-normal mx-1">|</span>
+                       {topRating ? `${topRating.toFixed(1)} ★` : "Bez ocena"}
+                     </>
+                   )}
                  </h4>
               </div>
            </div>

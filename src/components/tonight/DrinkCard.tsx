@@ -1,7 +1,7 @@
 import { Radar, RadarChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, ResponsiveContainer } from "recharts";
 import { Star, Wine } from "lucide-react";
 import { Link } from "react-router-dom";
-import { pickBestProductImageUrl } from "../../lib/imageFallback";
+import { pickBestProductImageUrl, isImgFallbackUrl, RAKIVINUM_MARK_FALLBACK } from "../../lib/imageFallback";
 
 type Sensory = { aroma: number; taste: number; color: number; finish: number; harmony: number };
 
@@ -38,30 +38,36 @@ export default function DrinkCard({ item, onDrinkNow, onAddToMenu, labelHref }: 
       ]
     : null;
 
+  /**
+   * Bez `onError` slomljena slika ostaje kao ikonica pokvarene slike: deo kataloga
+   * pokazuje na hostove sa nevazecim sertifikatom (npr. sacera.rs), pa zahtev padne
+   * jos pre nego sto stigne bilo kakav sadrzaj.
+   */
+  const thumb = (
+    <img
+      src={pickBestProductImageUrl(item)}
+      alt={item.name}
+      className="h-full w-full object-contain object-center p-1"
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      onError={(e) => {
+        const el = e.currentTarget;
+        if (!isImgFallbackUrl(el.src)) el.src = RAKIVINUM_MARK_FALLBACK;
+      }}
+    />
+  );
+
   return (
     <article className="rounded-2xl border border-white/10 bg-bg-card p-4 space-y-3">
       <div className="flex gap-3">
         {labelHref ? (
           <Link to={labelHref} className="block h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black">
-            <img
-              src={pickBestProductImageUrl(item)}
-              alt={item.name}
-              className="h-full w-full object-contain object-center p-1"
-              loading="lazy"
-              decoding="async"
-              referrerPolicy="no-referrer"
-            />
+            {thumb}
           </Link>
         ) : (
           <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black">
-            <img
-              src={pickBestProductImageUrl(item)}
-              alt={item.name}
-              className="h-full w-full object-contain object-center p-1"
-              loading="lazy"
-              decoding="async"
-              referrerPolicy="no-referrer"
-            />
+            {thumb}
           </div>
         )}
         {labelHref ? (

@@ -158,6 +158,15 @@ function LicenseGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function readQuotaBadgeOptIn(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem("rakivinum_show_quota_badge") === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function App() {
   const [ageOk, setAgeOk] = useState(hasAgeGateConsent);
   const [quotaSaverOn, setQuotaSaverOn] = useState(() => isQuotaSaverActive());
@@ -174,7 +183,13 @@ export default function App() {
     }, 5000);
     return () => window.clearInterval(id);
   }, []);
-  const showQuotaBadge = quotaSaverOn || import.meta.env.DEV;
+  /**
+   * Bedz je INTERNI pokazatelj potrosnje, ne informacija za korisnika: „Saved: 0 today“
+   * krajnjem korisniku ne znaci nista, a stoji preko donje navigacije (prekriva
+   * „Radionica“ i „Meni“). Zato se u produkciji vidi samo uz izricit prekidac:
+   *   localStorage.setItem("rakivinum_show_quota_badge", "1")
+   */
+  const showQuotaBadge = import.meta.env.DEV || (quotaSaverOn && readQuotaBadgeOptIn());
   const savedPretty = savedReadsToday >= 1000 ? `${(savedReadsToday / 1000).toFixed(1)}k` : String(savedReadsToday);
 
   if (!ageOk) {
@@ -250,7 +265,7 @@ export default function App() {
         </Routes>
       </Suspense>
       {showQuotaBadge && (
-        <div className="pointer-events-none fixed bottom-3 right-3 z-[120] rounded-full border border-gold-500/30 bg-black/70 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-gold-300">
+        <div className="pointer-events-none fixed bottom-24 right-3 z-[120] rounded-full border border-gold-500/30 bg-black/70 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-gold-300">
           Saved: {savedPretty} today
         </div>
       )}

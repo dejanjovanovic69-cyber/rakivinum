@@ -77,6 +77,7 @@ export default function MyClubs() {
     navigate("/", { replace: true });
   };
   const [clubs, setClubs] = useState<ClubRow[]>([]);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [visitorId, setVisitorId] = useState<string | null>(() => {
     try {
@@ -125,43 +126,54 @@ export default function MyClubs() {
           Object.entries(cachedProgress.scans).forEach(([k, v]) => scansByDistillery.set(k, v));
           Object.entries(cachedProgress.ratings).forEach(([k, v]) => ratingsByDistillery.set(k, v));
         } else if (!EMERGENCY_READ_FREEZE) {
-          const [scansSnap, ratingsSnap] = await Promise.all([
-            getDocs(
-              query(
-                collection(db, "scans"),
-                where("visitorId", "==", visitorId),
-                limit(QUOTA_SAVER ? 15 : 25),
+          /**
+           * Napredak (skenovi/ocene) je DODATAK, ne uslov za prikaz klubova.
+           * `firestore.rules` dozvoljava `list` nad `scans` samo adminu i vlasniku
+           * destilerije, pa ovaj upit gostu vraca permission-denied. Ranije je ta
+           * greska rusila ceo `fetchClubs`, pa je clan kluba video „Jos niste clan
+           * nijednog kluba“. Zato se kvari samo napredak, a klubovi se prikazuju.
+           */
+          try {
+            const [scansSnap, ratingsSnap] = await Promise.all([
+              getDocs(
+                query(
+                  collection(db, "scans"),
+                  where("visitorId", "==", visitorId),
+                  limit(QUOTA_SAVER ? 15 : 25),
+                ),
               ),
-            ),
-            getDocs(
-              query(
-                collection(db, "ratings"),
-                where("visitorId", "==", visitorId),
-                where("rating", ">=", 4.5),
-                limit(QUOTA_SAVER ? 15 : 25),
+              getDocs(
+                query(
+                  collection(db, "ratings"),
+                  where("visitorId", "==", visitorId),
+                  where("rating", ">=", 4.5),
+                  limit(QUOTA_SAVER ? 15 : 25),
+                ),
               ),
-            ),
-          ]);
-          const scansObj: Record<string, number> = {};
-          const ratingsObj: Record<string, number> = {};
-          scansSnap.forEach((d) => {
-            const row = d.data() as { distilleryId?: unknown };
-            const distilleryId = String(row?.distilleryId || "").trim();
-            if (!distilleryId) return;
-            const count = (scansByDistillery.get(distilleryId) || 0) + 1;
-            scansByDistillery.set(distilleryId, count);
-            scansObj[distilleryId] = count;
-          });
-          ratingsSnap.forEach((d) => {
-            const row = d.data() as { distilleryId?: unknown };
-            const distilleryId = String(row?.distilleryId || "").trim();
-            if (!distilleryId) return;
-            const count = (ratingsByDistillery.get(distilleryId) || 0) + 1;
-            ratingsByDistillery.set(distilleryId, count);
-            ratingsObj[distilleryId] = count;
-          });
+            ]);
+            const scansObj: Record<string, number> = {};
+            const ratingsObj: Record<string, number> = {};
+            scansSnap.forEach((d) => {
+              const row = d.data() as { distilleryId?: unknown };
+              const distilleryId = String(row?.distilleryId || "").trim();
+              if (!distilleryId) return;
+              const count = (scansByDistillery.get(distilleryId) || 0) + 1;
+              scansByDistillery.set(distilleryId, count);
+              scansObj[distilleryId] = count;
+            });
+            ratingsSnap.forEach((d) => {
+              const row = d.data() as { distilleryId?: unknown };
+              const distilleryId = String(row?.distilleryId || "").trim();
+              if (!distilleryId) return;
+              const count = (ratingsByDistillery.get(distilleryId) || 0) + 1;
+              ratingsByDistillery.set(distilleryId, count);
+              ratingsObj[distilleryId] = count;
+            });
 
-          writeCache(progressCacheKey, { scans: scansObj, ratings: ratingsObj }, REFRESH_INTERVAL.USER_LIGHT_1H);
+            writeCache(progressCacheKey, { scans: scansObj, ratings: ratingsObj }, REFRESH_INTERVAL.USER_LIGHT_1H);
+          } catch (progressErr) {
+            console.warn("[MyClubs] napredak nije ucitan; klubovi se i dalje prikazuju:", progressErr);
+          }
         }
 
         const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);
@@ -180,6 +192,7 @@ export default function MyClubs() {
           return;
         }
 
+        setLoadFailed(false);
         const clubsData: ClubRow[] = [];
 
         const distilleryRows = await fetchPublicDistilleriesByIds(allIds);
@@ -262,6 +275,7 @@ export default function MyClubs() {
         setClubs(clubsData);
       } catch (err) {
         console.error("Error fetching clubs", err);
+        setLoadFailed(true);
       } finally {
         setIsLoading(false);
       }
@@ -357,7 +371,24 @@ export default function MyClubs() {
       </div>
 
       <div className="px-6 space-y-8">
-        {clubs.length === 0 ? (
+        {clubs.length === 0 && loadFailed ? (
+          /* Neuspeh ucitavanja NIJE isto sto i „nema klubova“ — ranije se greska
+             prikazivala kao prazno stanje, pa je clan kluba mislio da je ispisan. */
+          <div className="empty-state card-elevated max-w-md mx-auto py-12 px-8 text-center space-y-6 rounded-[32px]">
+            <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto border border-red-500/20">
+              <Gift className="w-10 h-10 text-red-500/50" aria-hidden />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-white">Klubovi trenutno nisu dostupni</h3>
+              <p className="text-sm text-text-secondary leading-relaxed">
+                Podaci se nisu učitali. Vaše članstvo nije izgubljeno — pokušajte ponovo za koji trenutak.
+              </p>
+            </div>
+            <button type="button" onClick={() => window.location.reload()} className="w-full py-3.5 btn-primary text-xs">
+              Pokušaj ponovo
+            </button>
+          </div>
+        ) : clubs.length === 0 ? (
           <div className="empty-state card-elevated max-w-md mx-auto py-12 px-8 text-center space-y-6 rounded-[32px]">
             <div className="w-20 h-20 bg-gold-500/10 rounded-full flex items-center justify-center mx-auto border border-gold-500/20">
               <Gift className="w-10 h-10 text-gold-500/50" aria-hidden />

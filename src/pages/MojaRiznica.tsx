@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
+import { useNavigate } from "react-router-dom";
 import {
   Search,
   PackageOpen,
@@ -63,6 +64,7 @@ function useCountUp(target: number, durationMs = 500): number {
 }
 
 export default function MojaRiznica() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<RiznicaViewItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(() => auth.currentUser);
@@ -491,6 +493,22 @@ export default function MojaRiznica() {
           <p className="text-sm text-text-secondary">
             Za pristup Riznici potrebno je da budete prijavljeni Google nalogom.
           </p>
+          {/* Bez ovoga je ekran bio ćorsokak: pisalo je „prijavite se“, a nigde
+              nije bilo načina da se to uradi. Prijava živi u Meniju. */}
+          <button
+            type="button"
+            onClick={() => navigate("/menu")}
+            className="btn-primary w-full mt-6 py-3.5 text-xs"
+          >
+            Prijavi se
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate("/")}
+            className="w-full mt-3 py-2 text-xs text-text-secondary hover:text-white transition-colors"
+          >
+            Nazad na početnu
+          </button>
         </div>
       </div>
     );
