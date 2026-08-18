@@ -27,6 +27,7 @@ import {
 } from "firebase/firestore";
 import DistilleryAnalyticsModal from "../components/admin/DistilleryAnalyticsModal";
 import { isSuperuserEmail } from "../lib/authz";
+import { resolveEdgeApiBase } from "../lib/edgeApiBase";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
@@ -332,6 +333,54 @@ export default function Admin() {
     if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
     return String(value);
   };
+  /**
+   * Prazni javni keš Workera bez deploy-a.
+   *
+   * Posto je KV TTL podignut na 24h, nov ili izmenjen proizvod bi inace cekao do
+   * jedan dan da se pojavi javno. Ovo podize verziju keša u KV-u, cime svi stari
+   * kljucevi postaju neupotrebljivi odjednom.
+   *
+   * Cena: sledeci posetilac po svakoj ruti ide u Firestore jednom (hladan start),
+   * pa se ne pritiska bez potrebe.
+   */
+  const [isPurgingCache, setIsPurgingCache] = useState(false);
+  const purgePublicCache = async () => {
+    if (!auth.currentUser) {
+      alert("Morate biti prijavljeni.");
+      return;
+    }
+    const poruka = [
+      "Isprazniti javni keš?",
+      "",
+      "Sajt će odmah pokazati sveže podatke, ali će prvi posetilac po stranici ponovo čitati iz baze.",
+    ].join(String.fromCharCode(10));
+    if (!confirm(poruka)) {
+      return;
+    }
+    setIsPurgingCache(true);
+    try {
+      const base = resolveEdgeApiBase().replace(/\/$/, "");
+      if (!base) throw new Error("Edge API nije podesen");
+      const token = await auth.currentUser.getIdToken();
+      const res = await fetch(`${base}/api/admin/purge-cache`, {
+        method: "POST",
+        headers: { accept: "application/json", authorization: `Bearer ${token}` },
+      });
+      const payload = (await res.json().catch(() => null)) as { ok?: boolean; version?: string; error?: string } | null;
+      if (res.status === 403) {
+        alert("Nemate ovlascenje za praznjenje keša.");
+      } else if (!res.ok || !payload?.ok) {
+        alert(`Praznjenje nije uspelo (${res.status}${payload?.error ? ": " + payload.error : ""}).`);
+      } else {
+        alert(`Javni keš je ispraznjen. Nova verzija: ${payload.version}.`);
+      }
+    } catch (e) {
+      alert("Praznjenje nije uspelo: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setIsPurgingCache(false);
+    }
+  };
+
   const forceFullRefreshAll = async () => {
     await Promise.all([
       fetchDistilleries({ force: true }),
@@ -2146,6 +2195,15 @@ export default function Admin() {
                 Force Full Refresh
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => void purgePublicCache()}
+              disabled={isPurgingCache}
+              className="rounded-full border border-gold-500/40 bg-gold-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-gold-300 hover:bg-gold-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Javni keš drzi do 24h — pritisni posle dodavanja ili izmene proizvoda"
+            >
+              {isPurgingCache ? "Praznim…" : "Isprazni javni keš"}
+            </button>
           </div>
           <p className="mt-1 text-[11px] text-text-secondary/90">
             Mode: {getCurrentMode()} • Uštedeo: {formatSavedReads(savedReadsToday)} reads danas • Procena po ciklusu: ~{getReadSavingEstimate("admin")} reads

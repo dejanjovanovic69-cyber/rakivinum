@@ -28,6 +28,8 @@ type Env = {
   GCP_CLIENT_EMAIL?: string;
   GCP_PRIVATE_KEY?: string;
   FIRESTORE_CACHE?: KVNamespace;
+  /** Dodatni admin mejlovi za /api/admin/*, zarezom razdvojeni. */
+  ADMIN_EMAILS?: string;
 };
 const FALLBACK_FIRESTORE_DATABASE_ID = "ai-studio-e4c0de88-b3b9-42ae-b6be-4bdfddca62ef";
 const PRIVATE_RIZNICA_KV_TTL_SECONDS = 15 * 60;
@@ -92,6 +94,49 @@ const RATE_LIMIT_MAX_REQUESTS = 360;
  * Bump when list semantics change so KV / Cache API / isolate do not serve stale truncated JSON forever.
  */
 const PUBLIC_CATALOG_CACHE_BUSTER = "7";
+
+/**
+ * Rucno praznjenje javnog keša, bez deploy-a.
+ *
+ * `PUBLIC_CATALOG_CACHE_BUSTER` iznad se menja samo uz izmenu koda. Posto je KV TTL
+ * podignut na 24h, trebalo je i nesto sto admin moze da pokrene sam kada doda ili
+ * izmeni proizvod. Verzija stoji u KV-u i ulazi u SVAKI javni kljuc keša, pa jedno
+ * podizanje broja obesmisli sve stare kljuceve odjednom — bez nabrajanja kljuceva
+ * (KV binding ionako nema `list`).
+ *
+ * Vrednost se cita iz KV-a najvise jednom u minutu po izolatu; to je KV citanje,
+ * ne Firestore, i ne ulazi u potrosnju baze.
+ */
+const CACHE_VERSION_KV_KEY = "meta:public-cache-version";
+const CACHE_VERSION_MEM_TTL_MS = 60_000;
+let cacheVersionMem: { value: string; expiresAt: number } | null = null;
+
+async function readPublicCacheVersion(env: Env): Promise<string> {
+  const now = Date.now();
+  if (cacheVersionMem && now < cacheVersionMem.expiresAt) return cacheVersionMem.value;
+  let value = "1";
+  if (env.FIRESTORE_CACHE) {
+    try {
+      const raw = await env.FIRESTORE_CACHE.get(CACHE_VERSION_KV_KEY);
+      if (raw && /^\d{1,12}$/.test(raw)) value = raw;
+    } catch {
+      // KV nedostupan — radi se sa podrazumevanom verzijom, keš i dalje funkcionise
+    }
+  }
+  cacheVersionMem = { value, expiresAt: now + CACHE_VERSION_MEM_TTL_MS };
+  return value;
+}
+
+async function bumpPublicCacheVersion(env: Env): Promise<string> {
+  const current = Number(await readPublicCacheVersion(env)) || 1;
+  const next = String(current + 1);
+  if (env.FIRESTORE_CACHE) {
+    // Bez expirationTtl — verzija mora da prezivi, inace bi se keš vratio na staru.
+    await env.FIRESTORE_CACHE.put(CACHE_VERSION_KV_KEY, next);
+  }
+  cacheVersionMem = { value: next, expiresAt: Date.now() + CACHE_VERSION_MEM_TTL_MS };
+  return next;
+}
 const EMERGENCY_CACHE_ONLY_MODE = false;
 /** Temporary compatibility mode while legacy products still store images as base64 data URLs. */
 const ALLOW_DATA_IMAGE_FALLBACK = true;
@@ -171,7 +216,7 @@ function meterFirestoreReads(n: number): void {
 }
 
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
-const verifiedUserTokenCache = new Map<string, { uid: string; expiresAtMs: number }>();
+const verifiedUserTokenCache = new Map<string, { uid: string; email: string; expiresAtMs: number }>();
 let rateLimitState = new Map<string, { count: number; resetAt: number }>();
 let isolateCache = new Map<string, { data: string; expiresAt: number }>();
 /** One Firestore round-trip per normalized URL per isolate while the promise is in flight. */
@@ -337,6 +382,9 @@ async function servePublicCached(
   if (cacheUrl.pathname === "/api/public/distilleries" || cacheUrl.pathname === "/api/public/products") {
     allowedParams.set("cv", PUBLIC_CATALOG_CACHE_BUSTER);
   }
+  // Rucna verzija ide na SVE javne kljuceve, da praznjenje iz Admina obuhvati i
+  // label-view, products-by-distillery, home-bundle i ostalo — a ne samo liste.
+  allowedParams.set("pv", await readPublicCacheVersion(env));
   cacheUrl.search = allowedParams.toString();
 
   const normalizedUrl = cacheUrl.toString();
@@ -1024,14 +1072,14 @@ function parseFirebaseJwtPayload(token: string): {
   }
 }
 
-async function verifyFirebaseUserFromRequest(request: Request, env: Env): Promise<{ uid: string } | null> {
+async function verifyFirebaseUserFromRequest(request: Request, env: Env): Promise<{ uid: string; email: string } | null> {
   const authz = String(request.headers.get("authorization") || "").trim();
   if (!authz.toLowerCase().startsWith("bearer ")) return null;
   const token = authz.slice(7).trim();
   if (!token) return null;
   const now = Date.now();
   const cached = verifiedUserTokenCache.get(token);
-  if (cached && cached.expiresAtMs > now + 10_000) return { uid: cached.uid };
+  if (cached && cached.expiresAtMs > now + 10_000) return { uid: cached.uid, email: cached.email || "" };
 
   const projectId = String(env.FIREBASE_PROJECT_ID || "").trim();
   if (!projectId) return null;
@@ -1040,23 +1088,25 @@ async function verifyFirebaseUserFromRequest(request: Request, env: Env): Promis
       method: "GET",
     });
     if (res.ok) {
-      const payload = (await res.json()) as { aud?: string; iss?: string; sub?: string; user_id?: string };
+      const payload = (await res.json()) as { aud?: string; iss?: string; sub?: string; user_id?: string; email?: string };
       const aud = String(payload.aud || "").trim();
       const iss = String(payload.iss || "").trim();
       const uid = String(payload.user_id || payload.sub || "").trim();
       if (uid && aud === projectId && (!iss || iss === `https://securetoken.google.com/${projectId}`)) {
         const expMs = parseJwtExpMs(token);
-        verifiedUserTokenCache.set(token, { uid, expiresAtMs: expMs });
+        const email = String(payload.email || "").trim().toLowerCase();
+        verifiedUserTokenCache.set(token, { uid, email, expiresAtMs: expMs });
         if (verifiedUserTokenCache.size > 1000) {
           const stale = [...verifiedUserTokenCache.entries()].filter(([, v]) => v.expiresAtMs < now);
           stale.slice(0, 200).forEach(([k]) => verifiedUserTokenCache.delete(k));
         }
-        return { uid };
+        return { uid, email };
       }
     }
 
     // Fallback path for environments where tokeninfo may reject Firebase ID tokens.
     const decoded = parseFirebaseJwtPayload(token);
+    const decodedEmail = String((decoded as { email?: unknown } | null)?.email || "").trim().toLowerCase();
     const aud = String(decoded?.aud || "").trim();
     const iss = String(decoded?.iss || "").trim();
     const uid = String(decoded?.user_id || decoded?.sub || "").trim();
@@ -1065,11 +1115,24 @@ async function verifyFirebaseUserFromRequest(request: Request, env: Env): Promis
     if (!uid || aud !== projectId || iss !== `https://securetoken.google.com/${projectId}` || expMs <= now) {
       return null;
     }
-    verifiedUserTokenCache.set(token, { uid, expiresAtMs: expMs });
-    return { uid };
+    verifiedUserTokenCache.set(token, { uid, email: decodedEmail, expiresAtMs: expMs });
+    return { uid, email: decodedEmail };
   } catch {
     return null;
   }
+}
+
+/**
+ * Ko sme da isprazni javni keš. Isti spisak kao `src/lib/authz.ts` na klijentu;
+ * `ADMIN_EMAILS` u okruzenju Workera ga prosiruje bez izmene koda.
+ */
+function isWorkerSuperuser(email: string, env: Env): boolean {
+  const configured = String(env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  const allowed = new Set(["ldjs1969@gmail.com", ...configured]);
+  return !!email && allowed.has(email.toLowerCase());
 }
 
 /** Max documents returned from one `runQuery` / paged product query (keeps fan-out bounded). */
@@ -1391,7 +1454,11 @@ export default {
         url.pathname === "/api/private/riznica/add" ||
         url.pathname === "/api/private/riznica/update" ||
         url.pathname === "/api/private/riznica/remove";
-      const privateAllowed = isPrivateRiznicaPath && (request.method === "GET" || request.method === "POST");
+      // Bez ovoga bi globalna provera metode odbila POST na /api/admin/purge-cache
+      // sa 405, jos pre nego sto ruta dobije priliku da proveri ko zove.
+      const isAdminPostPath = url.pathname === "/api/admin/purge-cache";
+      const privateAllowed =
+        (isPrivateRiznicaPath || isAdminPostPath) && (request.method === "GET" || request.method === "POST");
       if (request.method !== "GET" && !privateAllowed) {
         return new Response(JSON.stringify({ error: "method_not_allowed" }), {
           status: 405,
@@ -1430,6 +1497,28 @@ export default {
             },
           );
         }
+      }
+
+      if (url.pathname === "/api/admin/purge-cache") {
+        if (request.method !== "POST") {
+          return new Response(JSON.stringify({ ok: false, error: "method_not_allowed" }), { status: 405, headers: privateJsonHeaders });
+        }
+        const verified = await verifyFirebaseUserFromRequest(request, env);
+        if (!verified) {
+          return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), { status: 401, headers: privateJsonHeaders });
+        }
+        if (!isWorkerSuperuser(verified.email, env)) {
+          return new Response(JSON.stringify({ ok: false, error: "forbidden" }), { status: 403, headers: privateJsonHeaders });
+        }
+        const version = await bumpPublicCacheVersion(env);
+        // Memorija izolata drzi stare odgovore pod starim kljucem; posto verzija
+        // ulazi u kljuc, oni vise nikad nece biti pogodjeni — ali cistimo i nju.
+        isolateCache = new Map();
+        console.info(`[cache] javni keš ispraznjen, nova verzija ${version} (${verified.email})`);
+        return new Response(JSON.stringify({ ok: true, version }), {
+          status: 200,
+          headers: privateJsonHeaders,
+        });
       }
 
       if (url.pathname === "/api/private/riznica") {
