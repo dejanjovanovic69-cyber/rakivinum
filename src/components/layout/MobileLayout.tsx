@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Home, ScanLine, FlaskConical, Users, Settings, Bell, X, Sparkles } from "lucide-react";
+import { Home, ScanLine, FlaskConical, Users, Settings, Bell, X, LibraryBig, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useState } from "react";
 
@@ -9,6 +9,7 @@ export default function MobileLayout() {
   const navItems = [
     { icon: Home, label: "Home", path: "/" },
     { icon: Users, label: "Zajednica", path: "/community" },
+    { icon: LibraryBig, label: "Riznica", path: "/moja-riznica" },
     { icon: ScanLine, label: "Skeniraj", path: "/scan", isPrimary: true },
     { icon: FlaskConical, label: "Radionica", path: "/radionica" },
     { icon: Settings, label: "Meni", path: "/menu" },

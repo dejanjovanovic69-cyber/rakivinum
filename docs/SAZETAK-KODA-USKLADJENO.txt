@@ -1,0 +1,130 @@
+================================================================================
+RAKIVINUM — USKLAĐENI SAŽETAK KODA (jedan kanonski TXT)
+Datum: 2026-05-13
+================================================================================
+Ovaj fajl zamenjuje razdvojeno čitanje: docs/SAZETAK-KODA.txt + Firestore/keš
+detalje (ranije docs/SAZETAK-FIRESTORE-KES-KOD.txt). Repomix „ceo repo“ ostaje
+u repomix-output.txt (root) — vidi sekciju 5.
+
+--------------------------------------------------------------------------------
+SADRŽAJ
+--------------------------------------------------------------------------------
+  1. Arhitektura i stabilni principi
+  2. Operativa, deploy, dokumentacija
+  3. Radno stablo (šta uvek proveriti)
+  4. FIRESTORE / EDGE / KEŠ (detaljno)
+  5. Repomix — pun paket za AI
+--------------------------------------------------------------------------------
+
+
+================================================================================
+1) ARHITEKTURA I STABILNI PRINCIP
+================================================================================
+- Frontend: React + Vite (src/), hosting preko Cloudflare Pages (vidi
+  docs/STATUS-ZADATAKA.md i AGENTS.md).
+- Javni read tok: Worker-first — src/lib/dataService.ts zove edge
+  (VITE_EDGE_API_BASE; kanonski host u src/lib/edgeApiBase.ts), zatim po pravilu
+  Firebase getDoc/getDocs samo kao fallback ako edge nije dostupan ili greška.
+- AGENTS.md — obavezno: home-bundle ostaje globalan (bez ?visitor u kešu);
+  članstva posebno po visitorId.
+- Klijent: cache-first (readCache/writeCache u src/lib/resilience.ts) i
+  shouldRunRefresh u src/lib/refreshGate.ts da se izbegnu dupli burst-evi
+  (mount + focus + visibility za isti ključ).
+- src/lib/quotaSaver.ts — QUOTA_SAVER_MODE, FORCE_EDGE_ONLY, pragovi za hard
+  lock; produženi TTL u src/lib/cachePolicy.ts kada je saver aktivan.
+
+
+================================================================================
+2) OPERATIVA, DEPLOY, DOKUMENTACIJA
+================================================================================
+- Glavni operativni dnevnik: docs/STATUS-ZADATAKA.md
+- Audit read poziva po stranicama: docs/FIRESTORE-READ-AUDIT.md
+- Edge Worker: workers/index.ts; smoke: scripts/smoke-edge.ps1 (npm run
+  cf:smoke:edge kada diraš worker).
+- Redosled posle izmene javnog toka: AGENTS.md (lint, build, smoke, deploy).
+
+
+================================================================================
+3) RADNO STABLO
+================================================================================
+- Jedina pouzdana lista trenutnih izmena: git status (grana, M/??/D fajlovi).
+- U poslednjem periodu često dirani slojevi: App/layout, dataService, Worker,
+  stranice Home/Menu/Community/Distillery/Label/Scanner/MyClubs/Admin, noviji
+  moduli (npr. tonight/*, riznica/*) — sve potvrditi git-om pre zaključaka.
+
+
+================================================================================
+4) FIRESTORE / EDGE / KEŠ (DETALJNO)
+================================================================================
+
+4.1 Šta Firebase Usage graf NE znači intuitivno
+--------------------------------------------------------------------------------
+- Broji SVE naplative dokument-readove u projektu u intervalu: klijentski SDK,
+  Worker (Firestore REST runQuery/get), druge usluge, testovi, drugi tabovi.
+- „Drugi put samo keš“ na tvom uređaju ne garantuje nizak broj u konzoli: drugi
+  korisnici, istek edge keša, više upita sa velikim N (N dokumenata = N readova).
+- Jedan uspešan HTTP poziv ka Workeru koji vrati N redova iz Firestore-a može
+  predstavljati N readova — „jedan poziv“ nije „jedan read“.
+
+4.2 Edge — redosled keša (workers/index.ts, servePublicCached)
+--------------------------------------------------------------------------------
+- (a) in-memory isolateCache po normalizovanom URL-u
+- (b) KV env.FIRESTORE_CACHE ako je povezan
+- (c) Cloudflare caches.default
+- (d) handler → Firestore REST
+- Tipične konstante: EDGE_CACHE_TTL_SECONDS=3600, KV_CACHE_TTL_SECONDS=6h,
+  mem TTL nakon miss podrazumevano ~10 min (600000 ms) — proveri u fajlu ako
+  se menja.
+
+4.3 Klijentski keš
+--------------------------------------------------------------------------------
+- resilience.ts: localStorage + expiresAt
+- cachePolicy.ts: CACHE_TTL, REFRESH_INTERVAL; sa Quota Saver-om duži interval
+  (npr. USER_LIGHT_1H 4h umesto 1h u QS režimu).
+- refreshGate: isti ključ za mount i focus za isti „paket“ osvežavanja.
+
+4.4 Primer puta: etiketa + destilerija
+--------------------------------------------------------------------------------
+- Label.tsx: fetchPublicLabelView → GET /api/public/label-view/:id
+  (Worker: product + distillery + do ~8 ratings po miss-u keša); gost saved:
+  getDoc guest_saved_items kada nema lokalnog keša.
+- Distillery.tsx: fetchPublicDistilleryById; fetchPublicProductsByDistilleryId
+  (paginacija; manji page u quota saver); fetchPublicClubMembershipsByVisitorId
+  (limit 30); fetchPublicClubMembershipCount; lokalni writeCache + refresh gate.
+
+4.5 Zašto broj u konzoli i dalje može biti veliki
+--------------------------------------------------------------------------------
+- loadMore: svaka stranica = novi URL (?after=) = novi upit.
+- Članstva: do 30 dokumenata po promazu keša na tom endpointu.
+- Više Worker izolata: mem-hit nije deljen; KV/CF smanjuju miss.
+- Nepodudaranje deploy-a: stari bundle ili pogrešan edge base → više
+  fallbacka (ređe uz FORCE_EDGE_ONLY).
+
+4.6 Ključni fajlovi za read/keš
+--------------------------------------------------------------------------------
+src/lib/dataService.ts
+src/lib/cachePolicy.ts
+src/lib/refreshGate.ts
+src/lib/quotaSaver.ts
+src/lib/resilience.ts
+src/lib/requestMeter.ts   (meterDbRead — lokalna dijagnostika, nije Firebase bill)
+src/lib/edgeApiBase.ts
+workers/index.ts
+src/pages/Label.tsx
+src/pages/Distillery.tsx
+src/pages/Home.tsx
+
+
+================================================================================
+5) REPOMIX — PUN PAKET ZA AI (CEO REPO)
+================================================================================
+- Kanonska lokacija u ovom repou: repomix-output.txt (koren projekta, ~30k+
+  linija, read-only za mašine).
+- docs/SAZETAK-KODA-CELI-PROJEKAT.txt je skraćen na upućivanje (bez duplog
+  megafajla u docs/) — vidi taj fajl.
+- Regeneracija: pokrenuti Repomix iz roota po potrebi; ne editovati ručno pun dump.
+
+
+================================================================================
+KRAJ USKLAĐENOG SAŽETKA
+================================================================================

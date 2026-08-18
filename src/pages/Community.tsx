@@ -9,14 +9,15 @@ import {
   fetchCommunityEvents,
   fetchCommunityRatings,
   fetchPublicDistilleries,
-  fetchPublicLabelView,
   fetchPublicProducts,
-  fetchPublicProductsByIds,
   stripHttpProductImgUrl,
 } from "../lib/dataService";
 import { RAKIVINUM_MARK_FALLBACK, isImgFallbackUrl, pickBestProductImageUrl } from "../lib/imageFallback";
 import { shouldRunRefresh } from "../lib/refreshGate";
-import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { CACHE_TTL, PUBLIC_CATALOG_LIMIT, REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { trackAnalyticsEvent } from "../lib/analytics";
+import { isHardLockActive, isQuotaSaverActive } from "../lib/quotaSaver";
+import { meterSavedReads } from "../lib/requestMeter";
 
 type RatingItem = {
   id: string;
@@ -119,15 +120,15 @@ function readCommunityRatingsCache(): RatingItem[] | null {
 }
 
 export default function Community() {
-  const PRODUCTS_FETCH_LIMIT = 120;
-  const DISTILLERIES_FETCH_LIMIT = 100;
-  const EVENTS_FETCH_LIMIT = 60;
+  const QUOTA_SAVER = isQuotaSaverActive();
+  const HARD_LOCK = isHardLockActive();
+  const EVENTS_FETCH_LIMIT = QUOTA_SAVER ? 30 : 60;
   const [ratings, setRatings] = useState<RatingItem[]>(() => readCommunityRatingsCache() ?? []);
   const [loading, setLoading] = useState(() => readCommunityRatingsCache() === null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSection, setActiveSection] = useState<"reviews" | "tops" | "compare" | "producers" | "search" | "events">("reviews");
   const [products, setProducts] = useState<ProductItem[]>([]);
-  const [ratingThumbOverrides, setRatingThumbOverrides] = useState<Record<string, string>>({});
+  const [ratingThumbOverrides] = useState<Record<string, string>>({});
   const [distilleries, setDistilleries] = useState<DistilleryItem[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [activeProductFilter, setActiveProductFilter] = useState("all");
@@ -136,7 +137,6 @@ export default function Community() {
   const [communityEvents, setCommunityEvents] = useState<CommunityEventItem[]>([]);
   const [eventsView, setEventsView] = useState<"active" | "archive">("active");
   const [isCatalogLoaded, setIsCatalogLoaded] = useState(false);
-  const catalogFetchLock = useRef(false);
   const [producerSearch, setProducerSearch] = useState("");
   const [compareFilter, setCompareFilter] = useState("all");
   const [compareLeftQuery, setCompareLeftQuery] = useState("");
@@ -146,6 +146,15 @@ export default function Community() {
   const [quotaExceeded, setQuotaExceeded] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const communityOpenTrackedRef = useRef(false);
+  useEffect(() => {
+    if (!QUOTA_SAVER) return;
+    console.info("[QuotaSaver] Community mount: reduced limits + cache-first refresh.");
+    if (HARD_LOCK) {
+      console.warn("[QuotaSaver] HARD LOCK active on Community: network refresh disabled.");
+      meterSavedReads(140, "Community hard lock cache-only");
+    }
+  }, [QUOTA_SAVER, HARD_LOCK]);
 
   const filterOptions = [
     { id: "all", label: "Sve" },
@@ -172,18 +181,33 @@ export default function Community() {
   ];
 
   useEffect(() => {
+    if (communityOpenTrackedRef.current) return;
+    communityOpenTrackedRef.current = true;
+    void trackAnalyticsEvent("community_open", {
+      tab: activeSection,
+    });
+  }, [activeSection]);
+
+  useEffect(() => {
     let cancelled = false;
 
     const refreshRatings = async () => {
-      if (!shouldRunRefresh("community:ratings", REFRESH_INTERVAL.USER_LIGHT_1H)) {
-        const fromCache = readCommunityRatingsCache();
-        if (fromCache !== null && !cancelled) setRatings(fromCache);
+      const fromCache = readCommunityRatingsCache();
+      if (fromCache !== null && !cancelled) {
+        setRatings(fromCache);
+      }
+
+      const shouldFetchNetwork =
+        !HARD_LOCK &&
+        (fromCache === null ||
+          shouldRunRefresh("community:ratings", REFRESH_INTERVAL.USER_LIGHT_1H));
+      if (!shouldFetchNetwork) {
         if (!cancelled) setLoading(false);
         return;
       }
       try {
         const rows = await fetchCommunityRatings({
-          limitCount: 20,
+          limitCount: QUOTA_SAVER ? 12 : 20,
           cacheKey: COMMUNITY_RATINGS_CACHE_KEY,
           ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
         });
@@ -200,6 +224,7 @@ export default function Community() {
 
     void refreshRatings();
     const onFocusRefresh = () => {
+      if (HARD_LOCK) return;
       if (document.visibilityState !== "visible") return;
       void refreshRatings();
     };
@@ -214,65 +239,7 @@ export default function Community() {
       window.removeEventListener("focus", onFocusRefresh);
       document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
-  }, []);
-
-  /** Heavy product/distillery lists — only tabs that need them (not default „Utisci“). Saves ~400+ Firestore reads per visit. */
-  useEffect(() => {
-    const needsCatalog = ["tops", "compare", "producers", "search"].includes(activeSection);
-    if (!needsCatalog || isCatalogLoaded) return;
-
-    let cancelled = false;
-
-    const run = async () => {
-      if (catalogFetchLock.current) return;
-      catalogFetchLock.current = true;
-      try {
-        const [prodResult, distResult] = await Promise.allSettled([
-          fetchPublicProducts({
-            limitCount: PRODUCTS_FETCH_LIMIT,
-            cacheKey: "rakivinum_MASTER_products_cache_v4",
-            ttlMs: CACHE_TTL.HOME_RECOMMENDATIONS_6H,
-          }),
-          fetchPublicDistilleries({
-            limitCount: DISTILLERIES_FETCH_LIMIT,
-            cacheKey: "rakivinum_MASTER_distilleries_cache_v2",
-            ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
-          }),
-        ]);
-
-        if (cancelled) return;
-
-        if (prodResult.status === "fulfilled") {
-          setProducts(prodResult.value);
-        } else {
-          console.error("Error fetching products:", prodResult.reason);
-          if (isQuotaError(prodResult.reason)) setQuotaExceeded(true);
-          const cachedProducts = readCache<ProductItem[]>("rakivinum_MASTER_products_cache_v4");
-          if (cachedProducts && cachedProducts.length > 0) setProducts(cachedProducts);
-        }
-
-        if (distResult.status === "fulfilled") {
-          setDistilleries(distResult.value);
-        } else {
-          console.error("Error fetching distilleries:", distResult.reason);
-          if (isQuotaError(distResult.reason)) setQuotaExceeded(true);
-          const cachedDistilleries = readCache<DistilleryItem[]>("rakivinum_MASTER_distilleries_cache_v2");
-          setDistilleries(cachedDistilleries || []);
-        }
-      } catch (error) {
-        console.error("Error fetching community catalog:", error);
-        if (isQuotaError(error)) setQuotaExceeded(true);
-      } finally {
-        if (!cancelled) setIsCatalogLoaded(true);
-        catalogFetchLock.current = false;
-      }
-    };
-
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSection, isCatalogLoaded]);
+  }, [HARD_LOCK]);
 
   useEffect(() => {
     if (activeSection !== "events") return;
@@ -299,91 +266,45 @@ export default function Community() {
     };
   }, [activeSection]);
 
-  // Ratings feed can include products outside current catalog cap.
-  // Backfill missing product rows by IDs so thumbnails in "Utisci" are not stuck on placeholder.
   useEffect(() => {
-    const ratingProductIds = Array.from(
-      new Set(
-        ratings
-          .map((r) => String(r.productId || "").trim())
-          .filter((id) => id.length > 0),
-      ),
-    );
-    if (ratingProductIds.length === 0) return;
-
-    const known = new Set(products.map((p) => String(p.id || "").trim()).filter((id) => id.length > 0));
-    const missing = ratingProductIds.filter((id) => !known.has(id)).slice(0, 32);
-    if (missing.length === 0) return;
-
+    const needsCatalog = ["tops", "compare", "producers", "search"].includes(activeSection);
+    if (!needsCatalog || isCatalogLoaded) return;
     let cancelled = false;
-    void (async () => {
+
+    const loadCatalog = async () => {
       try {
-        const backfilled = await fetchPublicProductsByIds(missing);
-        if (cancelled || backfilled.length === 0) return;
-        setProducts((prev) => {
-          const byId = new Map(prev.map((p) => [String(p.id || ""), p]));
-          backfilled.forEach((p) => {
-            const id = String((p as { id?: unknown }).id || "").trim();
-            if (!id) return;
-            byId.set(id, p as ProductItem);
-          });
-          return Array.from(byId.values());
-        });
-      } catch {
-        // best-effort only; UI already has placeholder fallback
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [ratings, products]);
-
-  useEffect(() => {
-    const missingIds = Array.from(
-      new Set(
-        ratings
-          .map((r) => String(r.productId || "").trim())
-          .filter((id) => id.length > 0)
-          .filter((id) => {
-            if (ratingThumbOverrides[id]) return false;
-            const row = ratings.find((r) => String(r.productId || "").trim() === id);
-            if (!row) return false;
-            return pickRatingListThumb(row, products) === RAKIVINUM_MARK_FALLBACK;
+        const [rowsProducts, rowsDistilleries] = await Promise.all([
+          // Limit MORA biti isti kao na svim ostalim stranicama — vidi PUBLIC_CATALOG_LIMIT.
+          fetchPublicProducts({
+            limitCount: PUBLIC_CATALOG_LIMIT.PRODUCTS,
+            cacheKey: "rakivinum_cache_community_products_v6",
+            ttlMs: CACHE_TTL.PRODUCTS_6H,
           }),
-      ),
-    ).slice(0, 20);
-    if (missingIds.length === 0) return;
-
-    let cancelled = false;
-    void (async () => {
-      const next: Record<string, string> = {};
-      for (const id of missingIds) {
-        try {
-          const view = await fetchPublicLabelView(id);
-          const p = view?.product as ProductItem | null;
-          const d = (view?.distillery as { logoUrl?: unknown } | null) || null;
-          const galleryFirst = Array.isArray((p as { galleryImages?: unknown[] } | null)?.galleryImages)
-            ? (p as { galleryImages?: unknown[] }).galleryImages?.find((x) => typeof x === "string")
-            : "";
-          const thumb =
-            stripHttpProductImgUrl(p?.image) ||
-            stripHttpProductImgUrl(p?.bottleImageUrl) ||
-            stripHttpProductImgUrl(galleryFirst) ||
-            stripHttpProductImgUrl(d?.logoUrl);
-          if (thumb) next[id] = thumb;
-        } catch {
-          // keep placeholder when label lookup is not available
+          fetchPublicDistilleries({
+            limitCount: PUBLIC_CATALOG_LIMIT.DISTILLERIES,
+            cacheKey: "rakivinum_cache_community_distilleries_v6",
+            ttlMs: CACHE_TTL.DISTILLERY_LIST_6H,
+          }),
+        ]);
+        if (cancelled) return;
+        setProducts(rowsProducts as ProductItem[]);
+        setDistilleries(rowsDistilleries as DistilleryItem[]);
+      } catch (err) {
+        if (isQuotaError(err)) setQuotaExceeded(true);
+        if (!cancelled) {
+          setProducts([]);
+          setDistilleries([]);
         }
+      } finally {
+        if (!cancelled) setIsCatalogLoaded(true);
       }
-      if (cancelled || Object.keys(next).length === 0) return;
-      setRatingThumbOverrides((prev) => ({ ...prev, ...next }));
-    })();
+    };
 
+    void loadCatalog();
     return () => {
       cancelled = true;
     };
-  }, [ratings, products, ratingThumbOverrides]);
+  }, [activeSection, isCatalogLoaded, QUOTA_SAVER]);
 
   useEffect(() => {
     try {
@@ -504,14 +425,57 @@ export default function Community() {
     return Array.from(grouped.values());
   }, [ratings]);
 
-  const catalogProducts = products.length > 0 ? products : ratedProductsFallback;
+  /** Merge edge katalog + proizvodi izvedeni iz utisaka (Uporedi / Top ne ostaju prazni kad katalog nije savršen). */
+  const catalogProducts = React.useMemo(() => {
+    const byId = new Map<string, ProductItem>();
+    for (const p of products) {
+      if (p?.id) byId.set(p.id, p);
+    }
+    for (const r of ratedProductsFallback) {
+      if (!r?.id) continue;
+      if (!byId.has(r.id)) {
+        byId.set(r.id, r);
+        continue;
+      }
+      const cur = byId.get(r.id)!;
+      byId.set(r.id, {
+        ...cur,
+        ...r,
+        name: cur.name || r.name,
+        type: cur.type || r.type,
+        category: cur.category || r.category,
+        distillery: cur.distillery || r.distillery,
+        distilleryId: cur.distilleryId || r.distilleryId,
+        image: cur.image || r.image,
+        bottleImageUrl: cur.bottleImageUrl || r.bottleImageUrl,
+        averageRating: (cur.averageRating ?? 0) > 0 ? cur.averageRating : r.averageRating,
+      });
+    }
+    return Array.from(byId.values());
+  }, [products, ratedProductsFallback]);
+
+  /** Destilerije sa mreže + minimalni redovi za distilleryId iz kataloga (rešava „rakija u Uporedi, destilerija nije u listi“). */
+  const distilleriesForUi = React.useMemo(() => {
+    const byId = new Map<string, DistilleryItem>();
+    for (const d of distilleries) {
+      if (d?.id) byId.set(d.id, d);
+    }
+    for (const p of products) {
+      const did = String(p.distilleryId || "").trim();
+      if (!did || byId.has(did)) continue;
+      const name = String(p.distillery || "").trim();
+      if (!name) continue;
+      byId.set(did, { id: did, name, region: "", isVerified: false });
+    }
+    return Array.from(byId.values());
+  }, [distilleries, products]);
 
   const nq = normalizeText(searchQuery);
   const filteredProducts = catalogProducts.filter((p) => {
     const matchesSearch = normalizeText(p.name).includes(nq) || normalizeText(p.type).includes(nq) || normalizeText(p.category).includes(nq);
     return matchesSearch && matchesProductFilter(p);
   });
-  const filteredDistilleries = distilleries.filter((d) =>
+  const filteredDistilleries = distilleriesForUi.filter((d) =>
     {
       const loc = typeof d.location === "object" && d.location !== null ? d.location : null;
       return (
@@ -522,7 +486,7 @@ export default function Community() {
       );
     }
   );
-  const filteredMapDistilleries = distilleries
+  const filteredMapDistilleries = distilleriesForUi
     .filter((d) => {
       if (!selectedRegion) return true;
       const dr = normalizeText(d.region);
@@ -789,7 +753,7 @@ export default function Community() {
                     navigate(`/community?tab=${tab.id}`, { replace: true });
                   }}
                   className={cn(
-                    "min-h-[42px] min-w-[116px] px-3 py-2 text-[10px] font-black uppercase tracking-wide whitespace-nowrap leading-none rounded-xl transition-all duration-200 active:scale-[0.98] inline-flex items-center justify-center gap-1 snap-start",
+                    "min-h-[42px] min-w-[116px] px-3 py-2 text-xs font-black uppercase tracking-wide whitespace-nowrap leading-none rounded-xl transition-all duration-200 active:scale-[0.98] inline-flex items-center justify-center gap-1 snap-start",
                     activeSection === tab.id
                       ? "bg-gold-500 text-black shadow-[0_4px_12px_rgba(212,175,55,0.22)]"
                       : "text-text-secondary hover:text-white"
@@ -1163,7 +1127,15 @@ export default function Community() {
                   </div>
                   <div>
                     <h3 className="text-base font-black text-white italic leading-tight">Rakijski i vinski putevi</h3>
-                    <p className="text-[11px] text-text-secondary mt-0.5">{distilleries.length} sertifikovanih proizvođača</p>
+                    <p className="text-[11px] text-text-secondary mt-0.5">
+                      {distilleriesForUi.length} proizvođača u listi
+                      {distilleriesForUi.some((d) => d.isVerified) ? (
+                        <span className="text-text-secondary/80">
+                          {" "}
+                          ({distilleriesForUi.filter((d) => d.isVerified).length} sertifikovano)
+                        </span>
+                      ) : null}
+                    </p>
                   </div>
                 </div>
               </div>

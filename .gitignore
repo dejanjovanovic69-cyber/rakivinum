@@ -13,3 +13,6 @@ test-results/
 .wrangler/
 gen-lang-client-*.json
 *-firebase-adminsdk-*.json
+
+# Cloudflare API token (lokalno, nikad u git)
+.cftoken

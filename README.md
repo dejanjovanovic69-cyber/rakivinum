@@ -18,3 +18,10 @@ View your app in AI Studio: https://ai.studio/apps/e4c0de88-b3b9-42ae-b6be-4bdfd
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Moja Riznica (feature)
+
+- `Moja Riznica` is the upgraded personal collection flow available at `/moja-riznica`.
+- Includes shelf-based visual layout, category chips, search/sort, stats cards, and PDF export.
+- Uses private Worker-first API (`/api/private/riznica*`) with cache-first client behavior to reduce direct Firestore reads.
+- Supports optimistic UI updates for add/update/remove and shelf repositioning.

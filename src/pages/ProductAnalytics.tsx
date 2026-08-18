@@ -33,6 +33,8 @@ import {
   fetchPublicProductRatings,
   fetchPublicScanClustersByProductId,
 } from "../lib/dataService";
+import { getReadSavingEstimate, isQuotaSaverActive } from "../lib/quotaSaver";
+import { meterSavedReads } from "../lib/requestMeter";
 
 type RatingDoc = {
   rating: number;
@@ -67,6 +69,7 @@ function formatRelativeSr(date: Date): string {
 }
 
 export default function ProductAnalytics() {
+  const QUOTA_SAVER = isQuotaSaverActive();
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -135,7 +138,7 @@ export default function ProductAnalytics() {
         });
 
         if (cancelled) return;
-        const list = await fetchPublicProductRatings(id, 200);
+        const list = await fetchPublicProductRatings(id, QUOTA_SAVER ? 120 : 200);
         if (cancelled) return;
         setRatings(
           list.map((r) => ({
@@ -146,9 +149,12 @@ export default function ProductAnalytics() {
           })),
         );
 
-        const top = await fetchPublicScanClustersByProductId(id, 5);
+        const top = await fetchPublicScanClustersByProductId(id, QUOTA_SAVER ? 3 : 5);
         if (cancelled) return;
         setScanClusters(top);
+        if (QUOTA_SAVER) {
+          meterSavedReads(getReadSavingEstimate("distillery"), "ProductAnalytics:reduced ratings/cluster limits");
+        }
       } catch (e) {
         console.error(e);
         if (!cancelled) setError("Greška pri učitavanju podataka.");
@@ -160,7 +166,7 @@ export default function ProductAnalytics() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [id, QUOTA_SAVER]);
 
   const radarData = useMemo(() => {
     const withS = ratings.filter(

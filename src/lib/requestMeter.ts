@@ -2,12 +2,42 @@ const counters = new Map<string, number>();
 let lastFlushAt = Date.now();
 const edgeCounters = new Map<string, number>();
 let lastEdgeFlushAt = Date.now();
+const SAVED_READS_DAY_KEY = "rakivinum_saved_reads_day";
+const SAVED_READS_COUNT_KEY = "rakivinum_saved_reads_count";
+const SAVED_READS_REASON_PREFIX = "rakivinum_saved_reads_reason_";
+let savedReadsTodayMem = 0;
+let hardLockAnnounced = false;
 
 /** Opt-in prod metering: set to "1" then reload (or use `__rakivinumDbReadsEnable()`). */
 export const RAKIVINUM_DEBUG_DB_READS_LS_KEY = "rakivinum_debug_db_reads";
 export const RAKIVINUM_DEBUG_EDGE_METER_LS_KEY = "rakivinum_debug_edge_meter";
 
 const LOG_PREFIX = "[rakivinum-db-reads]";
+const SAVED_LOG_PREFIX = "[rakivinum-saved-reads]";
+
+function dayKeyNow(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+function ensureSavedReadsDayLoaded(): void {
+  if (typeof localStorage === "undefined") return;
+  try {
+    const today = dayKeyNow();
+    const day = localStorage.getItem(SAVED_READS_DAY_KEY);
+    const raw = localStorage.getItem(SAVED_READS_COUNT_KEY);
+    if (day !== today) {
+      savedReadsTodayMem = 0;
+      localStorage.setItem(SAVED_READS_DAY_KEY, today);
+      localStorage.setItem(SAVED_READS_COUNT_KEY, "0");
+      return;
+    }
+    const parsed = Number(raw || "0");
+    savedReadsTodayMem = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  } catch {
+    // ignore storage failures
+  }
+}
 
 function isDevEnv(): boolean {
   try {
@@ -104,6 +134,74 @@ export function meterDbRead(label: string, amount = 1): void {
     .map(([k, v]) => `${k}:${v}`)
     .join(" | ");
   if (rows) console.info(`${LOG_PREFIX} ${rows}`);
+}
+
+/** Records estimated reads avoided due to quota-saver cache-only skip. */
+export function meterSavedReads(amount = 1, reason = "unknown"): void {
+  const inc = Math.max(1, Math.floor(Number(amount) || 1));
+  if (typeof localStorage !== "undefined") ensureSavedReadsDayLoaded();
+  savedReadsTodayMem += inc;
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.setItem(SAVED_READS_DAY_KEY, dayKeyNow());
+      localStorage.setItem(SAVED_READS_COUNT_KEY, String(savedReadsTodayMem));
+      const reasonKey = `${SAVED_READS_REASON_PREFIX}${reason}`;
+      const prevReason = Number(localStorage.getItem(reasonKey) || "0");
+      localStorage.setItem(reasonKey, String((Number.isFinite(prevReason) ? prevReason : 0) + inc));
+    } catch {
+      // ignore storage errors
+    }
+  }
+  if (!hardLockAnnounced && savedReadsTodayMem >= 10_000) {
+    hardLockAnnounced = true;
+    console.warn("[QuotaSaver] HARD LOCK threshold reached. App is now strongly cache-only.");
+  }
+  if (savedReadsTodayMem % 250 === 0) {
+    console.info(`${SAVED_LOG_PREFIX} today=${savedReadsTodayMem} (last reason: ${reason})`);
+  }
+}
+
+export function getSavedReadsToday(): number {
+  if (typeof localStorage !== "undefined") ensureSavedReadsDayLoaded();
+  return Math.max(0, Math.floor(savedReadsTodayMem));
+}
+
+export function resetSavedReadsToday(): void {
+  savedReadsTodayMem = 0;
+  hardLockAnnounced = false;
+  if (typeof localStorage === "undefined") return;
+  try {
+    const today = dayKeyNow();
+    localStorage.setItem(SAVED_READS_DAY_KEY, today);
+    localStorage.setItem(SAVED_READS_COUNT_KEY, "0");
+    const keysToDelete: string[] = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(SAVED_READS_REASON_PREFIX)) keysToDelete.push(k);
+    }
+    keysToDelete.forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // ignore
+  }
+}
+
+export function getSavedReadsByReason(): Array<{ section: string; savedReads: number }> {
+  if (typeof localStorage === "undefined") return [];
+  ensureSavedReadsDayLoaded();
+  const rows: Array<{ section: string; savedReads: number }> = [];
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(SAVED_READS_REASON_PREFIX)) continue;
+      const section = key.slice(SAVED_READS_REASON_PREFIX.length);
+      const value = Number(localStorage.getItem(key) || "0");
+      if (section && Number.isFinite(value) && value > 0) rows.push({ section, savedReads: Math.floor(value) });
+    }
+  } catch {
+    return [];
+  }
+  rows.sort((a, b) => b.savedReads - a.savedReads);
+  return rows;
 }
 
 if (typeof window !== "undefined") {

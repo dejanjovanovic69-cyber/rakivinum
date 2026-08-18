@@ -6,6 +6,8 @@ import { extractActivateTokenFromInput } from '../lib/extractActivateToken';
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { BarcodeFormat, DecodeHintType, NotFoundException } from "@zxing/library";
 import { logProductScan } from "../lib/logProductScan";
+import { getReadSavingEstimate, isQuotaSaverActive } from "../lib/quotaSaver";
+import { meterSavedReads } from "../lib/requestMeter";
 
 type PendingRatingEntry = {
   id: string;
@@ -33,19 +35,26 @@ type BarcodeDetectorStatic = {
 };
 
 export default function Scanner() {
+  const QUOTA_SAVER = isQuotaSaverActive();
   const SCAN_UNLOCK_DELAY_MS = 1500;
-  const NOT_FOUND_COOLDOWN_MS = 20_000;
+  const NOT_FOUND_COOLDOWN_MS = QUOTA_SAVER ? 45_000 : 20_000;
   const MAX_NOT_FOUND_KEYS = 120;
   const navigate = useNavigate();
   const location = useLocation();
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scannerHint, setScannerHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (!QUOTA_SAVER) return;
+    console.info("[QuotaSaver] Scanner mount: extended not-found cooldown to reduce repeated lookups.");
+    meterSavedReads(getReadSavingEstimate("distillery"), "Scanner:extended not-found cooldown");
+  }, [QUOTA_SAVER]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const detectorRef = useRef<BarcodeDetectorInstance | null>(null);
   const detectLoopRef = useRef<number | null>(null);
+  const isDetectingRef = useRef(false);
   const lastDetectAtRef = useRef(0);
   const scanLockRef = useRef(false);
   const scanInFlightRef = useRef(false);
@@ -141,15 +150,19 @@ export default function Scanner() {
           });
 
           const detectLoop = async () => {
-            if (!videoRef.current || !detectorRef.current) return;
-            detectLoopRef.current = requestAnimationFrame(detectLoop);
-            if (scanLockRef.current) return;
+            if (!videoRef.current || !detectorRef.current || !isMountedRef.current) return;
 
-            const now = performance.now();
-            if (now - lastDetectAtRef.current < 20) return;
-            lastDetectAtRef.current = now;
+            // Prevent overlapping async detect() calls that can saturate mobile CPU/RAM.
+            if (scanLockRef.current || isDetectingRef.current) {
+              detectLoopRef.current = requestAnimationFrame(detectLoop);
+              return;
+            }
+            isDetectingRef.current = true;
 
             try {
+              const now = performance.now();
+              if (now - lastDetectAtRef.current < 20) return;
+              lastDetectAtRef.current = now;
               const results = await detectorRef.current.detect(videoRef.current);
               const first = results?.[0];
               const value = String(first?.rawValue || "").trim();
@@ -161,10 +174,15 @@ export default function Scanner() {
               }
             } catch (err) {
               // ignore per-frame detector errors
+            } finally {
+              isDetectingRef.current = false;
+              if (isMountedRef.current) {
+                detectLoopRef.current = requestAnimationFrame(detectLoop);
+              }
             }
           };
 
-          detectLoopRef.current = requestAnimationFrame(detectLoop);
+          void detectLoop();
           return;
         }
 

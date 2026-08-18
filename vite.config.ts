@@ -50,6 +50,16 @@ export default defineConfig(({mode}) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        /**
+         * Dijagnostika potrošnje: sa VITE_COUNT_FIRESTORE_READS=1 svaki `firebase/firestore`
+         * import ide kroz omotač koji broji STVARNO pročitane dokumente (`snapshot.size`).
+         * Bez toga se u DevTools-u vidi samo šačica WebChannel zahteva, bez obzira na to
+         * da li je iza njih 1 ili 1000 dokumenata.
+         * Rezultat: `window.__rvReads`. Nikad se ne uključuje u običan build.
+         */
+        ...(env.VITE_COUNT_FIRESTORE_READS === '1'
+          ? { 'firebase/firestore': path.resolve(__dirname, 'src/lib/firestoreCounted.ts') }
+          : {}),
       },
     },
     server: {

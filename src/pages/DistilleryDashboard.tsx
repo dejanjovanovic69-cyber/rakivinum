@@ -57,8 +57,10 @@ import { isPostTrialFrozen, parseTrialEndDate } from "../lib/distilleryTrial";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { readCache, writeCache } from "../lib/resilience";
-import { meterDbRead } from "../lib/requestMeter";
+import { meterDbRead, meterSavedReads } from "../lib/requestMeter";
 import { fetchPublicClubActionsForDistillery, fetchPublicClubMembershipCount } from "../lib/dataService";
+import { trackAnalyticsEvent } from "../lib/analytics";
+import { getReadSavingEstimate, isQuotaSaverActive } from "../lib/quotaSaver";
 
 const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality = 0.6): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -99,6 +101,7 @@ const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, 
 };
 
 export default function DistilleryDashboard() {
+  const QUOTA_SAVER = isQuotaSaverActive();
   const EMERGENCY_READ_FREEZE = false;
   type DashboardDistillery = {
     id: string;
@@ -191,6 +194,7 @@ export default function DistilleryDashboard() {
   const [activeDashboardTab, setActiveDashboardTab] = useState('analitika');
   const [clubActions, setClubActions] = useState<Array<{ id: string; [key: string]: unknown }>>([]);
   const [clubMembersCount, setClubMembersCount] = useState<number | "-">("-");
+  const dashboardOpenTrackedRef = useRef<string>("");
   const toDateSafe = (value: unknown): Date => {
     if (value && typeof (value as { toDate?: () => Date }).toDate === "function") {
       const d = (value as { toDate?: () => Date }).toDate?.();
@@ -217,6 +221,18 @@ export default function DistilleryDashboard() {
   const distilleryUrl = distillery ? `${window.location.origin}/distillery/${distillery.id}` : '';
 
   useEffect(() => {
+    const distId = String(distillery?.id || "");
+    if (!distId || dashboardOpenTrackedRef.current === distId) return;
+    dashboardOpenTrackedRef.current = distId;
+    void trackAnalyticsEvent("dist_dashboard_open", {
+      distillery_id: distId,
+    });
+  }, [distillery?.id]);
+
+  useEffect(() => {
+    if (QUOTA_SAVER) {
+      console.info("[QuotaSaver] DistilleryDashboard mount: using smaller feed limits and refresh cooldown.");
+    }
     let cancelled = false;
     if (!distillery?.id) return;
     const actionsCacheKey = `rakivinum_cache_dist_dashboard_actions_${distillery.id}_v1`;
@@ -225,7 +241,7 @@ export default function DistilleryDashboard() {
     const clubPanelGateKey = `dist-dashboard:${distillery.id}:club-panel`;
     const refreshClubPanel = async () => {
       try {
-        const rowActions = await fetchPublicClubActionsForDistillery(distillery.id, 40);
+        const rowActions = await fetchPublicClubActionsForDistillery(distillery.id, QUOTA_SAVER ? 24 : 40);
         const nextActions = rowActions.map((d) => ({ id: d.id, ...d }));
         if (!cancelled) {
           setClubActions(nextActions);
@@ -258,6 +274,9 @@ export default function DistilleryDashboard() {
     if (cachedActions) setClubActions(cachedActions);
     if (typeof cachedCount === "number") setClubMembersCount(cachedCount);
     const warmClubPanelGate = shouldRunRefresh(clubPanelGateKey, REFRESH_INTERVAL.USER_LIGHT_1H);
+    if (QUOTA_SAVER && cachedActions && typeof cachedCount === "number" && !warmClubPanelGate) {
+      meterSavedReads(getReadSavingEstimate("distillery"), "DistilleryDashboard:club panel cache-only");
+    }
     const needsClubPanelData = !cachedActions || typeof cachedCount !== "number" || warmClubPanelGate;
     if (needsClubPanelData) {
       void refreshClubPanel();
@@ -279,7 +298,7 @@ export default function DistilleryDashboard() {
       window.removeEventListener("focus", onFocusRefresh);
       document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
-  }, [distillery?.id]);
+  }, [distillery?.id, QUOTA_SAVER]);
 
   const trialEndKey = parseTrialEndDate(distillery?.trialEndsAt)?.getTime() ?? 0;
   useEffect(() => {
@@ -370,7 +389,7 @@ export default function DistilleryDashboard() {
            }
 
            // Fetch Products
-           const pq = query(collection(db, "products"), where("distilleryId", "==", distData.id), limit(80));
+           const pq = query(collection(db, "products"), where("distilleryId", "==", distData.id), limit(QUOTA_SAVER ? 40 : 80));
            const pSnap = await getDocs(pq);
            const pData = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
            meterDbRead("distDashboard:products", pSnap.size);
@@ -382,7 +401,7 @@ export default function DistilleryDashboard() {
                collection(db, "ratings"),
                where("distilleryId", "==", distData.id),
                orderBy("createdAt", "desc"),
-               limit(15),
+               limit(QUOTA_SAVER ? 8 : 15),
              );
              const rSnap = await getDocs(rQ);
              meterDbRead("distDashboard:ratings_feed", rSnap.size);
@@ -394,7 +413,7 @@ export default function DistilleryDashboard() {
                const rFb = query(
                  collection(db, "ratings"),
                  where("distilleryId", "==", distData.id),
-                 limit(15),
+                 limit(QUOTA_SAVER ? 8 : 15),
                );
                const rSnap2 = await getDocs(rFb);
                meterDbRead("distDashboard:ratings_feed_fallback", rSnap2.size);
@@ -410,7 +429,7 @@ export default function DistilleryDashboard() {
                collection(db, "scans"),
                where("distilleryId", "==", distData.id),
                orderBy("timestamp", "desc"),
-               limit(15),
+               limit(QUOTA_SAVER ? 8 : 15),
              );
              const sSnap = await getDocs(sQ);
              meterDbRead("distDashboard:scans_feed", sSnap.size);
@@ -422,7 +441,7 @@ export default function DistilleryDashboard() {
                const sFb = query(
                  collection(db, "scans"),
                  where("distilleryId", "==", distData.id),
-                 limit(15),
+                 limit(QUOTA_SAVER ? 8 : 15),
                );
                const sSnap2 = await getDocs(sFb);
                meterDbRead("distDashboard:scans_feed_fallback", sSnap2.size);
@@ -455,7 +474,7 @@ export default function DistilleryDashboard() {
       latestInit++;
       unsub();
     };
-  }, [EMERGENCY_READ_FREEZE]);
+  }, [EMERGENCY_READ_FREEZE, QUOTA_SAVER]);
 
   useEffect(() => {
      // Apply Time Filter

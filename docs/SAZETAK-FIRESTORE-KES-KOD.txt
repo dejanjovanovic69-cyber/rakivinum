@@ -1,0 +1,7 @@
+Sadržaj je uklopljen u jedan kanonski fajl:
+
+  docs/SAZETAK-KODA-USKLADJENO.txt   (sekcija 4 — FIRESTORE / EDGE / KEŠ)
+
+Ne održavati dupli tekst ovde.
+
+KRAJ

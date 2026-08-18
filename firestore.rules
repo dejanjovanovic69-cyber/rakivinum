@@ -5,25 +5,27 @@ service cloud.firestore {
     // ===============================================================
     // SHARED HELPERS
     // ===============================================================
-    /** Marker za proveru deploya (komentari u konzoli često nisu vidljivi — traži ime funkcije u Security editoru). */
-    function rakivinumLicenseActivationAllowed() {
-      return true;
-    }
+    // VERZIJA: rakivinum-rules-v2-hardened
+    // (traži ovaj string u Firebase konzoli → Firestore → Rules da potvrdiš da je deploy prošao)
 
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == "ldjs1969@gmail.com" ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'platformAdmin')
-      );
-    }
-
     function isSuperAdmin() {
       return isSignedIn() && request.auth.token.email == "ldjs1969@gmail.com";
+    }
+
+    /**
+     * `get()` na users/{uid} je NAPLATIV read pri svakoj evaluaciji, zato je provera
+     * e-maila prva — za superadmina se `get()` nikad ne izvrši (|| kratko spaja).
+     */
+    function isAdmin() {
+      return isSuperAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'platformAdmin'
+      );
     }
 
     function isDistilleryOwner(distilleryId) {
@@ -34,94 +36,249 @@ service cloud.firestore {
                get(/databases/$(database)/documents/distilleries/$(distilleryId)).data.email == request.auth.token.email));
     }
 
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128;
-    }
-
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
+    function changedKeys() { return incoming().diff(existing()).affectedKeys(); }
+
+    /**
+     * Gornja granica za `list` upite. Bez ovoga jedan `getDocs(collection(...))` bez
+     * `limit()` pročita CELU kolekciju — glavni vektor za nekontrolisan trošak read-ova.
+     * Worker koristi service account i NE prolazi kroz pravila, pa ga ovo ne dotiče.
+     */
+    function listCappedAt(maxRows) {
+      return request.query.limit <= maxRows;
+    }
+
+    function isShortString(value, maxLen) {
+      return value is string && value.size() > 0 && value.size() <= maxLen;
+    }
+
+    /** Vlasnik `userId` polja je ili niko (gost) ili baš ulogovani korisnik — bez podmetanja tuđeg uid-a. */
+    function ownsUserIdField(value) {
+      return value == null || (isSignedIn() && value == request.auth.uid);
+    }
 
     // ===============================================================
     // COLLECTION RULES (specifična pravila PRE wildcard „deny“)
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin() && listCappedAt(100);
       allow create: if isSignedIn() && request.auth.uid == userId;
-      allow update: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      // `role` sme da menja samo admin — inače bi korisnik sam sebe unapredio u platformAdmin.
+      allow update: if isAdmin() ||
+                    (isSignedIn() && request.auth.uid == userId &&
+                     !changedKeys().hasAny(['role']));
 
       match /savedItems/{itemId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
+
+      match /riznica/{itemId} {
         allow read, write: if isSignedIn() && request.auth.uid == userId;
       }
     }
 
     match /distilleries/{distilleryId} {
-      allow read: if true;
+      allow get: if true;
+      allow list: if listCappedAt(400);
       allow create: if isAdmin() || (isSignedIn() && incoming().ownerId == request.auth.uid);
-      allow update: if isAdmin() || (isSignedIn() && (existing().ownerId == request.auth.uid || (existing().email != null && existing().email == request.auth.token.email)));
+      allow update: if isAdmin() ||
+                    (isSignedIn() && (existing().ownerId == request.auth.uid ||
+                     (existing().email != null && existing().email == request.auth.token.email)));
       allow delete: if isAdmin();
     }
 
     match /products/{productId} {
-      allow read: if true;
-      allow create, delete: if isAdmin() || isDistilleryOwner(incoming().get('distilleryId', existing().get('distilleryId', '')));
+      allow get: if true;
+      allow list: if listCappedAt(400);
+      // Razdvojeno create/delete: na `create` `resource` ne postoji, pa `existing()` puca.
+      allow create: if isAdmin() || isDistilleryOwner(incoming().get('distilleryId', ''));
+      allow delete: if isAdmin() || isDistilleryOwner(existing().get('distilleryId', ''));
+      /**
+       * Treća grana pokriva anonimno ocenjivanje (Label.tsx runTransaction). Ranije je bila
+       * `request.writeFields.hasOnly([...])` BEZ ikakve provere vrednosti — svako je mogao da
+       * upiše averageRating=5 / ratingCount=999999 bilo kom proizvodu. Sada mora da bude
+       * tačno +1 po oceni i prosek u opsegu 0–5.
+       */
       allow update: if isAdmin() ||
-                    isDistilleryOwner(incoming().get('distilleryId', existing().get('distilleryId', ''))) ||
-                    request.writeFields.hasOnly(['averageRating', 'ratingCount', 'scanCount']);
+                    isDistilleryOwner(existing().get('distilleryId', '')) ||
+                    isRatingAggregateBump() ||
+                    isScanCountBump();
+    }
+
+    function isRatingAggregateBump() {
+      return changedKeys().hasOnly(['averageRating', 'ratingCount']) &&
+             incoming().ratingCount is number &&
+             incoming().ratingCount == existing().get('ratingCount', 0) + 1 &&
+             incoming().averageRating is number &&
+             incoming().averageRating >= 0 &&
+             incoming().averageRating <= 5;
+    }
+
+    function isScanCountBump() {
+      return changedKeys().hasOnly(['scanCount']) &&
+             incoming().scanCount is number &&
+             incoming().scanCount == existing().get('scanCount', 0) + 1;
     }
 
     match /ratings/{ratingId} {
-      allow read, list: if true;
-      allow create: if true;
+      allow get: if true;
+      // Ranije `list: if true` bez limita → dump cele kolekcije jednim pozivom.
+      allow list: if listCappedAt(200) || isAdmin();
+      allow create: if isValidRatingCreate();
       allow update: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid);
       allow delete: if isAdmin();
     }
 
-    match /scans/{scanId} {
-      allow create: if true;
-      allow read: if isAdmin() || isDistilleryOwner(resource.data.distilleryId);
+    /**
+     * Ranije: `allow create: if true` — nula validacije, neograničen upis bilo čega.
+     * `createdAt == request.time` znači da klijent MORA da koristi serverTimestamp()
+     * (Label.tsx već koristi) i sprečava podmetanje datuma.
+     */
+    function isValidRatingCreate() {
+      return isShortString(incoming().productId, 128) &&
+             incoming().rating is number &&
+             incoming().rating >= 1 && incoming().rating <= 5 &&
+             (incoming().reviewText == null ||
+              (incoming().reviewText is string && incoming().reviewText.size() <= 2000)) &&
+             incoming().isFlagged == false &&
+             incoming().createdAt == request.time &&
+             ownsUserIdField(incoming().userId);
     }
 
+    match /scans/{scanId} {
+      allow create: if isValidScanCreate();
+      // Čitanje ostaje kao ranije: admin ili vlasnik destilerije. Za `list` se pravilo
+      // proverava nad SVAKIM vraćenim dokumentom — jedan promašaj obara ceo upit.
+      allow get, list: if isAdmin() || isDistilleryOwner(existing().get('distilleryId', ''));
+      allow update, delete: if isAdmin();
+    }
+
+    function isValidScanCreate() {
+      return isShortString(incoming().productId, 128) &&
+             incoming().timestamp == request.time &&
+             incoming().source in ['barcode_scan', 'label_open'] &&
+             ownsUserIdField(incoming().userId);
+    }
+
+    /**
+     * OGRANIČENJE ARHITEKTURE: `visitorId` je nasumičan string iz localStorage-a, bez ikakve
+     * autentifikacije. Pravila NE MOGU da provere da pozivalac zaista „poseduje“ taj visitorId.
+     * Zato se ovde može samo ograničiti šteta (cap na list, validacija upisa), ne i zatvoriti.
+     * Prava popravka: prebaciti članstva na Worker (service account) ili na Firebase Anonymous Auth.
+     */
     match /club_memberships/{membershipId} {
-      allow read, list: if true;
-      allow create: if incoming().visitorId is string && incoming().distilleryId is string;
+      allow get: if true;
+      allow list: if listCappedAt(100) || isAdmin();
+      allow create: if isShortString(incoming().visitorId, 128) &&
+                    isShortString(incoming().distilleryId, 128);
+      allow update: if isAdmin();
+      // Ostaje otvoreno: bez auth-a nema načina da se proveri vlasništvo nad visitorId-em.
       allow delete: if true;
     }
 
     match /club_actions/{actionId} {
-      allow read, list: if true;
-      allow create, update, delete: if isAdmin() || isDistilleryOwner(incoming().get('distilleryId', existing().get('distilleryId', '')));
+      allow get: if true;
+      allow list: if listCappedAt(120);
+      allow create: if isAdmin() || isDistilleryOwner(incoming().get('distilleryId', ''));
+      allow update: if isAdmin() || isDistilleryOwner(existing().get('distilleryId', ''));
+      allow delete: if isAdmin() || isDistilleryOwner(existing().get('distilleryId', ''));
     }
 
+    /**
+     * `token` JESTE ID dokumenta (lic_…) i nije pogodljiv — zato `get` ostaje otvoren
+     * da bi aktivacija radila bez prijave. Ali `list` je sada SAMO admin: ranije je
+     * `allow read: if true` značilo da svako može da izlista SVE licence i tokene.
+     */
     match /licenses/{licenseId} {
-      allow read: if true;
+      allow get: if true;
+      allow list: if isAdmin();
       allow create, delete: if isAdmin();
-      // Aktivacija: tajnost je nepogodljiv ID dokumenta (lic_…). Pokušaji sa granularnim
-      // pravilima (lista, int, +1) konzistentno su davali permission-denied u produkciji.
-      // Limit uređaja i dalje u aplikaciji (Activate.tsx). Kasnije: Cloud Function za aktivaciju.
-      allow update: if rakivinumLicenseActivationAllowed();
+      allow update: if isAdmin() || isLicenseActivation();
     }
 
+    /**
+     * Ranije: `allow update: if rakivinumLicenseActivationAllowed()` gde je ta funkcija
+     * doslovno `return true` — svako je mogao da prepiše bilo koju licencu (plan, rok, status).
+     * Sada aktivacija sme da dira samo svoja polja i ne sme da podigne `maxDevices`,
+     * niti da dira `expiresAt` / `status` / `plan` (nisu u hasOnly listi).
+     * Polja odgovaraju tačno onome što Activate.tsx `writeViaClient()` šalje.
+     */
+    function isLicenseActivation() {
+      return changedKeys().hasOnly([
+               'token', 'clientName', 'type', 'maxDevices',
+               'isUsed', 'activatedDevices', 'lastActivatedBy', 'usedAt'
+             ]) &&
+             incoming().maxDevices == existing().get('maxDevices', 3) &&
+             incoming().activatedDevices is list &&
+             incoming().activatedDevices.size() <= existing().get('maxDevices', 3) &&
+             incoming().activatedDevices.size() >= existing().get('activatedDevices', []).size() &&
+             incoming().isUsed == true &&
+             isShortString(incoming().lastActivatedBy, 128) &&
+             incoming().usedAt == request.time;
+    }
+
+    /**
+     * Ranije `allow create: if true`, ali nijedan klijentski tok ne upisuje ovde
+     * (jedini pristup je AdminAudit čitanje). Zatvoreno na admina — Cloud Functions
+     * koriste admin SDK i ionako zaobilaze pravila.
+     */
     match /rating_logs/{logId} {
-      allow create: if true;
-      allow read, update, delete: if isAdmin();
+      allow get: if isAdmin();
+      allow list: if isAdmin() && listCappedAt(120);
+      allow create, update, delete: if isAdmin();
     }
 
+    /** Isto ograničenje kao club_memberships — visitorId nije proverljiv. ID je `{visitorId}_{productId}`. */
     match /guest_saved_items/{itemId} {
-      allow read, list: if true;
-      allow create, update: if incoming().visitorId is string && incoming().productId is string;
+      allow get: if true;
+      allow list: if listCappedAt(100) || isAdmin();
+      allow create, update: if isShortString(incoming().visitorId, 128) &&
+                            isShortString(incoming().productId, 128) &&
+                            itemId == incoming().visitorId + '_' + incoming().productId;
+      // Ostaje otvoreno iz istog razloga kao club_memberships (vidi komentar iznad).
       allow delete: if true;
     }
 
-    match /blocked_users/{userId} {
-      allow read, write: if isAdmin();
+    /**
+     * Ove tri kolekcije NISU postojale u starim pravilima — padale su na wildcard „deny“,
+     * pa Admin panel nije mogao da ih učita. Javnosti nisu potrebne (Worker ih servira
+     * preko service account-a), zato: samo admin. Ovo popravlja Admin, bez nove javne površine.
+     */
+    match /community_events/{eventId} {
+      allow get: if isAdmin();
+      allow list: if isAdmin() && listCappedAt(120);
+      allow write: if isAdmin();
     }
 
+    match /community_links/{linkId} {
+      allow get: if isAdmin();
+      allow list: if isAdmin() && listCappedAt(120);
+      allow write: if isAdmin();
+    }
+
+    match /eventProposals/{proposalId} {
+      allow get: if isAdmin();
+      allow list: if isAdmin() && listCappedAt(120);
+      allow write: if isAdmin();
+    }
+
+    match /blocked_users/{userId} {
+      allow get: if isAdmin();
+      allow list: if isAdmin() && listCappedAt(120);
+      allow write: if isAdmin();
+    }
+
+    /**
+     * Praćenje prisustva je ugašeno u klijentu (`presence.ts` → DISABLE_ONLINE_PRESENCE_TRACKING).
+     * Dok je tako, upis je zatvoren — ranije je svako mogao da generiše neograničeno
+     * heartbeat dokumenata. Kad se funkcija vrati, otvori `create, update` uz istu validaciju.
+     */
     match /online_presence/{presenceId} {
-      allow read, list: if isSuperAdmin();
-      allow create, update: if incoming().presenceId is string &&
-                            incoming().isOnline is bool &&
-                            incoming().lastSeenMs is int;
+      allow get, list: if isSuperAdmin();
+      allow create, update: if false;
       allow delete: if isSuperAdmin();
     }
 

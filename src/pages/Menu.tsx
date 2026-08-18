@@ -1,4 +1,4 @@
-import { Settings, Moon, Bell, Shield, Wallet, Book, LogOut, Database, BarChart3, ShieldAlert, X, Bookmark, QrCode, Award, Lock, Users, Globe } from "lucide-react";
+import { Settings, Moon, Bell, Shield, Wallet, Book, LogOut, Database, BarChart3, ShieldAlert, X, Bookmark, QrCode, Award, Lock, Users, Globe, Sparkles, Share2 } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { app, auth, db } from "../lib/firebase";
 import { getFirebaseRedirectResultOnce } from "../lib/firebaseRedirectResult";
@@ -18,8 +18,9 @@ import { useNavigate } from "react-router-dom";
 import { isSuperuserEmail } from "../lib/authz";
 import { normalizeLicenseToken } from "../lib/extractActivateToken";
 import { shouldRunRefresh } from "../lib/refreshGate";
-import { CACHE_TTL, REFRESH_INTERVAL } from "../lib/cachePolicy";
+import { CACHE_TTL } from "../lib/cachePolicy";
 import { fetchCommunityLinks, fetchPublicClubMembershipsByVisitorId, fetchPublicDistilleriesByIds } from "../lib/dataService";
+import { isQuotaSaverActive } from "../lib/quotaSaver";
 import {
   ACHIEVEMENT_EVENT_NAME,
   BADGE_DEFS,
@@ -310,36 +311,6 @@ export default function Menu() {
   }, [EMERGENCY_READ_FREEZE]);
 
   useEffect(() => {
-    let mounted = true;
-    const loadHelpLinks = async () => {
-      try {
-        const rows = await fetchCommunityLinks({
-          limitCount: 80,
-          cacheKey: "rakivinum_cache_menu_help_links_v1",
-          ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
-        });
-        if (mounted) {
-          setHelpLinks(
-            rows.map((x) => ({
-              id: String(x.id),
-              label: String(x.label || "Link"),
-              url: String(x.url),
-            })),
-          );
-        }
-      } catch {
-        if (mounted) setHelpLinks([]);
-      } finally {
-        if (mounted) setHelpLinksReady(true);
-      }
-    };
-    void loadHelpLinks();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
     const syncAchievements = () => setAchievementSummary(getAchievementSummary());
     syncAchievements();
     window.addEventListener("focus", syncAchievements);
@@ -407,19 +378,27 @@ export default function Menu() {
       }
     };
 
-    const menuJoinedClubsGateKey = "menu:public-joined-clubs";
-    const warmJoined = shouldRunRefresh(menuJoinedClubsGateKey, REFRESH_INTERVAL.USER_LIGHT_1H);
-    if (warmJoined) {
-      void refreshJoinedClubs();
-    } else {
-      void (async () => {
-        const merged = mergeIdsFromFirestore([]);
-        await resolveClubRows(merged);
-      })();
+    const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+    const menuClubsNetGateKey = `menu:clubs:refresh:${visitorId}`;
+    const allowNetRefresh = shouldRunRefresh(menuClubsNetGateKey, ONE_DAY_MS);
+
+    const mergedLocal = mergeIdsFromFirestore([]);
+    if (mergedLocal.length > 0) {
+      void resolveClubRows(mergedLocal);
+    } else if (!allowNetRefresh) {
+      setJoinedClubsMenu([]);
+      setJoinedClubsMenuReady(true);
     }
+
+    if (allowNetRefresh) {
+      void refreshJoinedClubs();
+    }
+
     const onFocusRefresh = () => {
       if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh(menuJoinedClubsGateKey, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      if (!shouldRunRefresh(menuClubsNetGateKey, ONE_DAY_MS)) {
+        return;
+      }
       void refreshJoinedClubs();
     };
     const onVisibilityRefresh = () => {
@@ -793,34 +772,61 @@ export default function Menu() {
     });
   };
 
-  const openUsefulLinks = () => {
+  const openUsefulLinks = async () => {
     setModalContent({
       title: "Korisni linkovi",
-      content: (
-        <div className="space-y-3">
-          {!helpLinksReady ? (
-            <p className="text-sm text-text-secondary italic text-center py-4">Učitavanje linkova…</p>
-          ) : helpLinks.length === 0 ? (
-            <p className="text-sm text-text-secondary italic text-center py-4">Trenutno nema dostupnih linkova.</p>
-          ) : (
-            <div className="space-y-2">
-              {helpLinks.map((link) => (
-                <a
-                  key={link.id}
-                  href={link.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-bg-card/40 px-3 py-3 text-sm text-white hover:border-gold-500/35 hover:text-gold-500 transition-colors"
-                >
-                  <span className="truncate">{link.label}</span>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-text-secondary">Otvori</span>
-                </a>
-              ))}
-            </div>
-          )}
-        </div>
-      ),
+      content: <p className="text-sm text-text-secondary italic text-center py-4">Učitavanje linkova…</p>,
     });
+    
+    try {
+      const rows = await fetchCommunityLinks({
+        // Fiksno 80 (default helpera): promenljiv limit bi napravio drugi ključ keša na Workeru
+        // za iste podatke, pa bi štednja izazvala DODATNI hladan miss umesto da ga uštedi.
+        limitCount: 80,
+        cacheKey: "rakivinum_cache_menu_help_links_v1",
+        ttlMs: CACHE_TTL.COMMUNITY_EVENTS_6H,
+      });
+      const mapped = rows.map((x) => ({
+        id: String(x.id),
+        label: String(x.label || "Link"),
+        url: String(x.url),
+      }));
+      setHelpLinks(mapped);
+      setHelpLinksReady(true);
+      
+      setModalContent({
+        title: "Korisni linkovi",
+        content: (
+          <div className="space-y-3">
+            {mapped.length === 0 ? (
+              <p className="text-sm text-text-secondary italic text-center py-4">Trenutno nema dostupnih linkova.</p>
+            ) : (
+              <div className="space-y-2">
+                {mapped.map((link) => (
+                  <a
+                    key={link.id}
+                    href={link.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-bg-card/40 px-3 py-3 text-sm text-white hover:border-gold-500/35 hover:text-gold-500 transition-colors"
+                  >
+                    <span className="truncate">{link.label}</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-text-secondary">Otvori</span>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        ),
+      });
+    } catch {
+      setHelpLinks([]);
+      setHelpLinksReady(true);
+      setModalContent({
+        title: "Korisni linkovi",
+        content: <p className="text-sm text-red-400 italic text-center py-4">Greška pri učitavanju.</p>,
+      });
+    }
   };
 
   const renderGuideContent = () => (
@@ -883,9 +889,9 @@ export default function Menu() {
         },
         ...(user
           ? [
-              { icon: Bookmark, label: "Moja Kolekcija", variant: "default", value: "Sačuvano", action: () => navigate("/collection") },
+              { icon: Bookmark, label: "Moja Riznica", variant: "default", value: "Sačuvano", action: () => navigate("/moja-riznica") },
               ...(pendingRatingsCount > 0
-                ? [{ icon: Bell, label: "Za ocenu sutra", variant: "gold", value: String(pendingRatingsCount), action: () => navigate("/collection") }]
+                ? [{ icon: Bell, label: "Za ocenu sutra", variant: "gold", value: String(pendingRatingsCount), action: () => navigate("/moja-riznica") }]
                 : []),
               ...(distilleryId
                 ? [
@@ -903,6 +909,13 @@ export default function Menu() {
               ...(isAdmin ? [{ icon: ShieldAlert, label: "Sigurnosni Audit", variant: "danger", value: "ADMIN", action: () => navigate("/admin-audit") }] : []),
             ]
           : []),
+        {
+          icon: Sparkles,
+          label: "Večernji izbor",
+          variant: "gold",
+          value: "IZBOR",
+          action: () => navigate("/tonight"),
+        },
         { icon: Award, label: "Bedževi i titule", variant: "gold", value: String(achievementSummary.badges.length), action: openAchievements },
       ]
     },
@@ -910,6 +923,7 @@ export default function Menu() {
       title: "PODEŠAVANJA",
       items: [
         { icon: Bell, label: "Obaveštenja", variant: "default", type: "toggle", on: isNotifEnabled, action: () => setIsNotifEnabled(!isNotifEnabled) },
+        ...(user ? [{ icon: Share2, label: "Privatnost Riznice", variant: "default" as const, action: () => navigate("/moja-riznica") }] : []),
         { icon: QrCode, label: "Instaliraj Aplikaciju", variant: "gold", action: handleInstallApp },
         // Hidden option for seeding data for platform admins or testing (show if logged in)
         ...(isAdmin ? [{ icon: Database, label: "Sistemski Admin", variant: "default", action: () => navigate('/admin') }] : []),

@@ -1,0 +1,14 @@
+RAKIVINUM — napomena o „celom projektu“ (Repomix)
+
+Ovaj fajl je namerno SKRAĆEN da ne dupluje megafajl od desetina hiljada linija.
+
+Pun spakovani kod repozitorijuma za AI / analizu:
+  repomix-output.txt   (koren repozitorijuma C:\rakivinum\repomix-output.txt)
+
+Ljudski sažetak arhitekture, keša i Firestore toka:
+  docs\SAZETAK-KODA-USKLADJENO.txt
+
+Regeneracija: pokrenuti Repomix iz root foldera projekta; izlaz po želji u
+repomix-output.txt ili drugo ime — ažurirati ovu putanju ako se promeni.
+
+KRAJ

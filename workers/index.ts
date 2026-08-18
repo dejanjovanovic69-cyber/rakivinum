@@ -1,6 +1,21 @@
-﻿type KVNamespace = {
+﻿import {
+  addToRiznica,
+  getRiznicaPrivacySettings,
+  getPublicRiznica,
+  getUserRiznica,
+  getUserRiznicaWithDebug,
+  getUserRiznicaEnriched,
+  removeFromRiznica,
+  updateRiznicaPrivacySettings,
+  updateRiznicaItem,
+  type RiznicaPrivacySettingsPayload,
+  type RiznicaWritePayload,
+} from "./helpers/riznicaHelpers";
+
+type KVNamespace = {
   get: (key: string) => Promise<string | null>;
   put: (key: string, value: string, options?: { expirationTtl?: number }) => Promise<void>;
+  delete?: (key: string) => Promise<void>;
 };
 
 type WorkerExecutionContext = {
@@ -14,6 +29,8 @@ type Env = {
   GCP_PRIVATE_KEY?: string;
   FIRESTORE_CACHE?: KVNamespace;
 };
+const FALLBACK_FIRESTORE_DATABASE_ID = "ai-studio-e4c0de88-b3b9-42ae-b6be-4bdfddca62ef";
+const PRIVATE_RIZNICA_KV_TTL_SECONDS = 15 * 60;
 
 type FirestoreValue =
   | { stringValue: string }
@@ -37,7 +54,16 @@ const jsonHeaders = {
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-allow-headers": "content-type,authorization",
   /** Da `fetch()` na glavnom domenu vidi header (CORS); koristi `requestMeter` / DevTools. */
-  "access-control-expose-headers": "x-cache-status",
+  "access-control-expose-headers": "x-cache-status,x-firestore-reads",
+};
+
+const privateJsonHeaders = {
+  "content-type": "application/json; charset=utf-8",
+  "cache-control": "no-store",
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET,POST,OPTIONS",
+  "access-control-allow-headers": "content-type,authorization",
+  "access-control-expose-headers": "x-cache-status,x-firestore-reads",
 };
 
 const GCP_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -49,6 +75,11 @@ const EDGE_CACHE_TTL_SECONDS = 3600;
 const KV_CACHE_TTL_SECONDS = 6 * 60 * 60;
 /** Workers Cache API (POP); many concurrent clients share one cached body per normalized URL. */
 const CF_CACHE_S_MAXAGE_SECONDS = 3600;
+/**
+ * Injected into `servePublicCached` keys for `/api/public/distilleries` + `/api/public/products` only.
+ * Bump when list semantics change so KV / Cache API / isolate do not serve stale truncated JSON forever.
+ */
+const PUBLIC_CATALOG_CACHE_BUSTER = "7";
 const EMERGENCY_CACHE_ONLY_MODE = false;
 /** Temporary compatibility mode while legacy products still store images as base64 data URLs. */
 const ALLOW_DATA_IMAGE_FALLBACK = true;
@@ -58,8 +89,8 @@ const DATA_IMAGE_MAX_CHARS = 2_500_000;
  * `GET /api/public/home-bundle` (i usklađeni `daily-recommendations`) — Firestore read fan-out.
  * Svaka vrednost je max dokumenata po listi / get-u na hladnom miss-u (grubo: zbir cap-ova + do 2 destilerije za dnevni thumb).
  */
-const HOME_BUNDLE_CLUB_ACTIONS_FETCH = 10;
-const HOME_BUNDLE_PRODUCTS_SAMPLE = 6;
+const HOME_BUNDLE_CLUB_ACTIONS_FETCH = 3;
+const HOME_BUNDLE_PRODUCTS_SAMPLE = 2;
 const HOME_BUNDLE_DISTILLERY_NAME_CAP = 4;
 
 /**
@@ -70,25 +101,100 @@ const RATINGS_FEED_URL_LIMIT_DEFAULT = 12;
 const RATINGS_FEED_URL_LIMIT_MAX = 24;
 const RATINGS_FEED_LIST_FETCH_MAX = 24;
 const RATINGS_FEED_LIST_FETCH_MIN = 10;
-const RATINGS_FEED_PRODUCT_ENRICH_CAP = 32;
-const RATINGS_FEED_DISTILLERY_LOGO_CAP = 24;
+const RATINGS_FEED_PRODUCT_ENRICH_CAP = 5;
+const RATINGS_FEED_DISTILLERY_LOGO_CAP = 3;
 
 /**
  * Javni katalozi — `GET /api/public/distilleries` i `GET /api/public/products` (lista dokumenata po `pageSize`).
  * Klijent ne može preći `*_MAX` (parseLimit); niži default smanjuje read-ove kad nema `limit` u URL-u.
  */
-const PUBLIC_DISTILLERIES_LIST_DEFAULT = 60;
-const PUBLIC_DISTILLERIES_LIST_MAX = 100;
-const PUBLIC_PRODUCTS_LIST_DEFAULT = 80;
-const PUBLIC_PRODUCTS_LIST_MAX = 120;
+const PUBLIC_DISTILLERIES_LIST_DEFAULT = 120;
+const PUBLIC_DISTILLERIES_LIST_MAX = 400;
+const PUBLIC_PRODUCTS_LIST_DEFAULT = 120;
+const PUBLIC_PRODUCTS_LIST_MAX = 400;
 const PUBLIC_DISTILLERIES_BY_IDS_MAX = 32;
 const PUBLIC_PRODUCTS_BY_IDS_MAX = 32;
 
+/**
+ * Polja koja `toProductListItemWithDailyThumb` / `toDistilleryListItem` stvarno koriste,
+ * PLUS polja iz predikata javne vidljivosti. `id` se izvodi iz `doc.name`, ne iz polja.
+ * Ako dodaš polje u projekciju, dodaj ga i ovde — inače tiho nestane iz liste.
+ */
+const PRODUCT_LIST_FIELD_MASK = [
+  "name",
+  "type",
+  "distilleryId",
+  "alcoholPercentage",
+  "averageRating",
+  "bottleImageUrl",
+  "image",
+  "galleryImages",
+  "isApproved",
+  "isArchivedByDistillery",
+  "publicLabelDisabled",
+] as const;
+
+const DISTILLERY_LIST_FIELD_MASK = [
+  "name",
+  "region",
+  "isVerified",
+  "logoUrl",
+  "location",
+  "isArchived",
+] as const;
+
+/**
+ * Dijagnostika potrošnje: broji SVAKI dokument koji Worker stvarno pročita iz Firestore-a.
+ *
+ * Svrha je da se pik u Firebase konzoli može pripisati — ako konzola pokaže 2000 read-ova,
+ * a zbir `x-firestore-reads` iz odgovora je 40, onda read-ovi NE dolaze iz aplikacije
+ * (nego iz Firebase konzole, Admin panela, ili nekog ko gađa bazu direktno).
+ *
+ * Brojač je globalan po izolatu, pa paralelni zahtevi mogu malo da se preklope — dovoljno
+ * tačno za atribuciju reda veličine, nije za naplatu.
+ */
+let firestoreDocsRead = 0;
+function meterFirestoreReads(n: number): void {
+  firestoreDocsRead += Math.max(0, n);
+}
+
 let cachedAccessToken: { token: string; expiresAtMs: number } | null = null;
+const verifiedUserTokenCache = new Map<string, { uid: string; expiresAtMs: number }>();
 let rateLimitState = new Map<string, { count: number; resetAt: number }>();
 let isolateCache = new Map<string, { data: string; expiresAt: number }>();
 /** One Firestore round-trip per normalized URL per isolate while the promise is in flight. */
 const publicInFlight = new Map<string, Promise<PublicFetchCoalesceResult>>();
+const privateRiznicaInFlight = new Map<string, Promise<string>>();
+const isolateRiznicaCache = new Map<string, { data: string; ts: number }>();
+const PRIVATE_RIZNICA_MEM_TTL_MS = 3 * 60_000;
+
+function resolveFirestoreDatabaseId(env: Env): string {
+  return String(env.FIRESTORE_DATABASE_ID || FALLBACK_FIRESTORE_DATABASE_ID);
+}
+
+function privateRiznicaCacheKey(uid: string): string {
+  return `private_riznica_${uid}`;
+}
+
+function privateHeadersWithCacheStatus(status: string): Record<string, string> {
+  return {
+    ...privateJsonHeaders,
+    "x-cache-status": status,
+  };
+}
+
+function invalidatePrivateRiznicaCache(env: Env, uid: string, ctx: WorkerExecutionContext): void {
+  isolateRiznicaCache.delete(uid);
+  privateRiznicaInFlight.delete(uid);
+  if (!env.FIRESTORE_CACHE) return;
+  const key = privateRiznicaCacheKey(uid);
+  if (typeof env.FIRESTORE_CACHE.delete === "function") {
+    ctx.waitUntil(env.FIRESTORE_CACHE.delete(key).catch(() => undefined));
+    return;
+  }
+  // Fallback for bindings without delete(): quickly expire stale entry.
+  ctx.waitUntil(env.FIRESTORE_CACHE.put(key, "", { expirationTtl: 1 }).catch(() => undefined));
+}
 
 type PublicFetchCoalesceResult =
   | { ok: true; status: number; bodyText: string }
@@ -131,7 +237,7 @@ function withDefaultHeaders(response: Response): Response {
   if (!headers.has("access-control-allow-origin")) headers.set("access-control-allow-origin", "*");
   if (!headers.has("access-control-allow-methods")) headers.set("access-control-allow-methods", "GET,POST,OPTIONS");
   if (!headers.has("access-control-allow-headers")) headers.set("access-control-allow-headers", "content-type,authorization");
-  if (!headers.has("access-control-expose-headers")) headers.set("access-control-expose-headers", "x-cache-status");
+  if (!headers.has("access-control-expose-headers")) headers.set("access-control-expose-headers", "x-cache-status,x-firestore-reads");
   return new Response(response.body, { status: response.status, headers });
 }
 
@@ -216,6 +322,9 @@ async function servePublicCached(
       allowedParams.set("imgv", String(cacheUrl.searchParams.get("imgv") || ""));
     }
   }
+  if (cacheUrl.pathname === "/api/public/distilleries" || cacheUrl.pathname === "/api/public/products") {
+    allowedParams.set("cv", PUBLIC_CATALOG_CACHE_BUSTER);
+  }
   cacheUrl.search = allowedParams.toString();
 
   const normalizedUrl = cacheUrl.toString();
@@ -225,16 +334,18 @@ async function servePublicCached(
     keysToDelete.forEach((k) => isolateCache.delete(k));
   }
 
-  const memTtlAfterMiss = opts?.memTtlMs ?? 180_000;
+  const memTtlAfterMiss = opts?.memTtlMs ?? 600_000;
 
   const memHit = isolateCache.get(normalizedUrl);
   if (memHit && now < memHit.expiresAt) {
+    console.log("!!! MEMORY HIT - 0 FIRESTORE READS !!!", normalizedUrl);
     return new Response(memHit.data, {
       status: 200,
       headers: {
         ...jsonHeaders,
         "cache-control": "public, max-age=60, s-maxage=60",
         "x-cache-status": "mem-hit",
+          "x-firestore-reads": "0",
       },
     });
   }
@@ -243,13 +354,14 @@ async function servePublicCached(
   if (env.FIRESTORE_CACHE) {
     const kvHit = await env.FIRESTORE_CACHE.get(kvKey);
     if (kvHit) {
-      isolateCache.set(normalizedUrl, { data: kvHit, expiresAt: now + 60_000 });
+      isolateCache.set(normalizedUrl, { data: kvHit, expiresAt: now + 600_000 });
       return new Response(kvHit, {
         status: 200,
         headers: {
           ...jsonHeaders,
           "cache-control": "public, max-age=3600, s-maxage=21600",
           "x-cache-status": "kv-hit",
+          "x-firestore-reads": "0",
         },
       });
     }
@@ -260,13 +372,14 @@ async function servePublicCached(
     const cfHit = await caches.default.match(cfCacheReq);
     if (cfHit) {
       const bodyText = await cfHit.text();
-      isolateCache.set(normalizedUrl, { data: bodyText, expiresAt: now + Math.min(memTtlAfterMiss, 120_000) });
+      isolateCache.set(normalizedUrl, { data: bodyText, expiresAt: now + Math.min(memTtlAfterMiss, 600_000) });
       return new Response(bodyText, {
         status: cfHit.status,
         headers: {
           ...jsonHeaders,
           "cache-control": `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=${CF_CACHE_S_MAXAGE_SECONDS}`,
           "x-cache-status": "cf-hit",
+          "x-firestore-reads": "0",
         },
       });
     }
@@ -296,6 +409,8 @@ async function servePublicCached(
     });
   }
 
+  /** Koliko je dokumenata ovaj miss stvarno pročitao — ide u `x-firestore-reads`. */
+  let coalescedReads = 0;
   let inFlight = publicInFlight.get(normalizedUrl);
   if (!inFlight) {
     let resolveCoalesce!: (value: PublicFetchCoalesceResult) => void;
@@ -304,6 +419,7 @@ async function servePublicCached(
     });
     publicInFlight.set(normalizedUrl, inFlight);
     void (async () => {
+      const readsBefore = firestoreDocsRead;
       try {
         const fresh = await handler();
         if (!fresh.ok) {
@@ -312,6 +428,8 @@ async function servePublicCached(
           return;
         }
         const bodyText = await fresh.text();
+        coalescedReads = firestoreDocsRead - readsBefore;
+        console.info(`[fsread] ${cacheUrl.pathname} docs=${coalescedReads} bytes=${bodyText.length}`);
         const t = Date.now();
         isolateCache.set(normalizedUrl, { data: bodyText, expiresAt: t + memTtlAfterMiss });
         if (env.FIRESTORE_CACHE) {
@@ -327,7 +445,7 @@ async function servePublicCached(
           "access-control-allow-origin": "*",
           "access-control-allow-methods": "GET,POST,OPTIONS",
           "access-control-allow-headers": "content-type,authorization",
-          "access-control-expose-headers": "x-cache-status",
+          "access-control-expose-headers": "x-cache-status,x-firestore-reads",
         });
         ctx.waitUntil(
           caches.default
@@ -363,6 +481,7 @@ async function servePublicCached(
       ...jsonHeaders,
       "cache-control": `public, max-age=${EDGE_CACHE_TTL_SECONDS}, s-maxage=3600`,
       "x-cache-status": "miss-store",
+      "x-firestore-reads": String(coalescedReads),
     },
   });
 }
@@ -852,25 +971,209 @@ async function getAccessToken(env: Env): Promise<string> {
   return token;
 }
 
+function parseJwtExpMs(token: string): number {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return Date.now() + 5 * 60 * 1000;
+    const payloadB64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payloadB64 + "=".repeat((4 - (payloadB64.length % 4 || 4)) % 4);
+    const payloadJson = atob(padded);
+    const payload = JSON.parse(payloadJson) as { exp?: number };
+    const exp = Number(payload?.exp || 0);
+    if (!Number.isFinite(exp) || exp <= 0) return Date.now() + 5 * 60 * 1000;
+    return exp * 1000;
+  } catch {
+    return Date.now() + 5 * 60 * 1000;
+  }
+}
+
+function parseFirebaseJwtPayload(token: string): {
+  aud?: string;
+  iss?: string;
+  sub?: string;
+  user_id?: string;
+  exp?: number;
+} | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const payloadB64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payloadB64 + "=".repeat((4 - (payloadB64.length % 4 || 4)) % 4);
+    return JSON.parse(atob(padded)) as {
+      aud?: string;
+      iss?: string;
+      sub?: string;
+      user_id?: string;
+      exp?: number;
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function verifyFirebaseUserFromRequest(request: Request, env: Env): Promise<{ uid: string } | null> {
+  const authz = String(request.headers.get("authorization") || "").trim();
+  if (!authz.toLowerCase().startsWith("bearer ")) return null;
+  const token = authz.slice(7).trim();
+  if (!token) return null;
+  const now = Date.now();
+  const cached = verifiedUserTokenCache.get(token);
+  if (cached && cached.expiresAtMs > now + 10_000) return { uid: cached.uid };
+
+  const projectId = String(env.FIREBASE_PROJECT_ID || "").trim();
+  if (!projectId) return null;
+  try {
+    const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`, {
+      method: "GET",
+    });
+    if (res.ok) {
+      const payload = (await res.json()) as { aud?: string; iss?: string; sub?: string; user_id?: string };
+      const aud = String(payload.aud || "").trim();
+      const iss = String(payload.iss || "").trim();
+      const uid = String(payload.user_id || payload.sub || "").trim();
+      if (uid && aud === projectId && (!iss || iss === `https://securetoken.google.com/${projectId}`)) {
+        const expMs = parseJwtExpMs(token);
+        verifiedUserTokenCache.set(token, { uid, expiresAtMs: expMs });
+        if (verifiedUserTokenCache.size > 1000) {
+          const stale = [...verifiedUserTokenCache.entries()].filter(([, v]) => v.expiresAtMs < now);
+          stale.slice(0, 200).forEach(([k]) => verifiedUserTokenCache.delete(k));
+        }
+        return { uid };
+      }
+    }
+
+    // Fallback path for environments where tokeninfo may reject Firebase ID tokens.
+    const decoded = parseFirebaseJwtPayload(token);
+    const aud = String(decoded?.aud || "").trim();
+    const iss = String(decoded?.iss || "").trim();
+    const uid = String(decoded?.user_id || decoded?.sub || "").trim();
+    const exp = Number(decoded?.exp || 0);
+    const expMs = Number.isFinite(exp) ? exp * 1000 : 0;
+    if (!uid || aud !== projectId || iss !== `https://securetoken.google.com/${projectId}` || expMs <= now) {
+      return null;
+    }
+    verifiedUserTokenCache.set(token, { uid, expiresAtMs: expMs });
+    return { uid };
+  } catch {
+    return null;
+  }
+}
+
+/** Max documents returned from one `runQuery` / paged product query (keeps fan-out bounded). */
+const WORKER_STRUCTURED_QUERY_MAX = 120;
+/** Per-request page size for Firestore `listDocuments`; loop with `nextPageToken` until `pageSize` is satisfied. */
+const WORKER_LIST_DOCUMENTS_PAGE = 100;
+/** Hard ceiling for a single `fetchCollection` call (non-catalog paths). */
+const WORKER_LIST_DOCUMENTS_TOTAL_MAX = 300;
+/**
+ * Max raw documents to scan when filling a filtered public catalog (products / distilleries).
+ *
+ * Svaki skenirani dokument je NAPLATIV read, i kad ga predikat odbaci. Ranije 4000, uz
+ * množioce 20×/30× — jedan hladan miss je u najgorem slučaju mogao da naplati 4000 read-ova
+ * da bi vratio nekoliko desetina redova. Skeniranje ionako staje na kraju kolekcije, pa je
+ * ovo isključivo zaštita od odbeglog troška, ne ograničenje kataloga.
+ */
+const WORKER_CATALOG_MAX_SCAN = 600;
+/** Koliko sirovih dokumenata sme da se skenira po jednom traženom redu (filter propušta većinu). */
+const WORKER_CATALOG_SCAN_MULTIPLIER = 3;
+
+/**
+ * Paginate `listDocuments` until `predicate` accepts `targetCount` rows or collection ends / scan cap.
+ * Firestore returns docs in `__name__` order; filtering shrinks the list — must scan forward to fill quota.
+ */
+async function listDocumentsMatching(
+  env: Env,
+  collectionName: string,
+  targetCount: number,
+  maxScan: number,
+  predicate: (row: Record<string, unknown>) => boolean,
+  fieldMask?: readonly string[],
+): Promise<Record<string, unknown>[]> {
+  const projectId = env.FIREBASE_PROJECT_ID || "";
+  const databaseId = resolveFirestoreDatabaseId(env);
+  if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
+  const accessToken = await getAccessToken(env);
+  const want = Math.max(1, targetCount);
+  const basePath = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collectionName)}`;
+  /**
+   * `mask.fieldPaths` NE smanjuje broj naplaćenih read-ova (naplaćuje se po dokumentu),
+   * ali smanjuje koliko bajtova Firestore stvarno pošalje. Kod proizvoda sa base64
+   * slikama u dokumentu to je razlika između par KB i par MB po strani, što direktno
+   * troši CPU/memoriju Workera. Maska MORA da sadrži i polja koja koristi `predicate`.
+   */
+  const maskQuery = (fieldMask || [])
+    .map((f) => `&mask.fieldPaths=${encodeURIComponent(f)}`)
+    .join("");
+
+  const matched: Record<string, unknown>[] = [];
+  let scanned = 0;
+  let pageToken: string | undefined;
+  while (matched.length < want && scanned < maxScan) {
+    const batch = Math.min(WORKER_LIST_DOCUMENTS_PAGE, maxScan - scanned);
+    let url = `${basePath}?pageSize=${batch}${maskQuery}`;
+    if (pageToken) url += `&pageToken=${encodeURIComponent(pageToken)}`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Firestore REST error ${res.status}: ${body.slice(0, 240)}`);
+    }
+    const data = (await res.json()) as { documents?: FirestoreDoc[]; nextPageToken?: string };
+    const docs = data.documents || [];
+    if (docs.length === 0) break;
+    for (const d of docs) {
+      scanned += 1;
+      const row = decodeDocument(d);
+      meterFirestoreReads(1);
+      if (predicate(row)) {
+        matched.push(row);
+        if (matched.length >= want) break;
+      }
+      if (scanned >= maxScan) break;
+    }
+    pageToken = data.nextPageToken;
+    if (!pageToken) break;
+  }
+  return matched;
+}
+
 async function fetchCollection(env: Env, collectionName: string, pageSize: number): Promise<Record<string, unknown>[]> {
   const projectId = env.FIREBASE_PROJECT_ID || "";
-  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  const databaseId = resolveFirestoreDatabaseId(env);
   if (!projectId) {
     throw new Error("Missing FIREBASE_PROJECT_ID");
   }
   const accessToken = await getAccessToken(env);
+  const maxWanted = Math.min(Math.max(1, pageSize), WORKER_LIST_DOCUMENTS_TOTAL_MAX);
+  const basePath = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collectionName)}`;
 
-  const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collectionName)}?pageSize=${pageSize}`;
-  const res = await fetch(endpoint, {
-    method: "GET",
-    headers: { authorization: `Bearer ${accessToken}` },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Firestore REST error ${res.status}: ${body.slice(0, 240)}`);
+  const out: Record<string, unknown>[] = [];
+  let pageToken: string | undefined;
+  while (out.length < maxWanted) {
+    const batch = Math.min(WORKER_LIST_DOCUMENTS_PAGE, maxWanted - out.length);
+    let url = `${basePath}?pageSize=${batch}`;
+    if (pageToken) url += `&pageToken=${encodeURIComponent(pageToken)}`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Firestore REST error ${res.status}: ${body.slice(0, 240)}`);
+    }
+    const data = (await res.json()) as { documents?: FirestoreDoc[]; nextPageToken?: string };
+    const docs = data.documents || [];
+    meterFirestoreReads(docs.length);
+    for (const d of docs) {
+      out.push(decodeDocument(d));
+      if (out.length >= maxWanted) break;
+    }
+    pageToken = data.nextPageToken;
+    if (!pageToken || docs.length === 0) break;
   }
-  const data = (await res.json()) as { documents?: FirestoreDoc[] };
-  return (data.documents || []).map(decodeDocument);
+  return out;
 }
 
 async function fetchDocumentById(
@@ -879,7 +1182,7 @@ async function fetchDocumentById(
   docId: string,
 ): Promise<Record<string, unknown> | null> {
   const projectId = env.FIREBASE_PROJECT_ID || "";
-  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  const databaseId = resolveFirestoreDatabaseId(env);
   if (!projectId) {
     throw new Error("Missing FIREBASE_PROJECT_ID");
   }
@@ -895,6 +1198,7 @@ async function fetchDocumentById(
     throw new Error(`Firestore REST error ${res.status}: ${body.slice(0, 240)}`);
   }
   const doc = (await res.json()) as FirestoreDoc;
+  meterFirestoreReads(1);
   return decodeDocument(doc);
 }
 
@@ -906,7 +1210,7 @@ async function fetchCollectionWhereEquals(
   pageSize: number,
 ): Promise<Record<string, unknown>[]> {
   const projectId = env.FIREBASE_PROJECT_ID || "";
-  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  const databaseId = resolveFirestoreDatabaseId(env);
   if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
   const accessToken = await getAccessToken(env);
   const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:runQuery`;
@@ -920,7 +1224,7 @@ async function fetchCollectionWhereEquals(
           value: { stringValue: fieldValue },
         },
       },
-      limit: pageSize,
+      limit: Math.min(Math.max(1, pageSize), WORKER_STRUCTURED_QUERY_MAX),
     },
   };
   const res = await fetch(endpoint, {
@@ -936,9 +1240,27 @@ async function fetchCollectionWhereEquals(
     throw new Error(`Firestore REST runQuery error ${res.status}: ${txt.slice(0, 240)}`);
   }
   const rows = (await res.json()) as Array<{ document?: FirestoreDoc }>;
-  return rows
-    .filter((r) => r.document)
-    .map((r) => decodeDocument(r.document as FirestoreDoc));
+  const docs = rows.filter((r) => r.document);
+  meterFirestoreReads(docs.length);
+  return docs.map((r) => decodeDocument(r.document as FirestoreDoc));
+}
+
+async function fetchPublicDistilleriesList(
+  env: Env,
+  pageSize: number,
+): Promise<Record<string, unknown>[]> {
+  // Read a moderate page and filter only archived rows.
+  // We intentionally do not hard-filter by `isVerified` because legacy docs may miss this field.
+  const fetchSize = Math.min(Math.max(1, pageSize), PUBLIC_DISTILLERIES_LIST_MAX);
+  const maxScan = Math.min(WORKER_CATALOG_MAX_SCAN, fetchSize * WORKER_CATALOG_SCAN_MULTIPLIER);
+  return listDocumentsMatching(
+    env,
+    "distilleries",
+    fetchSize,
+    maxScan,
+    (d) => d.isArchived !== true,
+    DISTILLERY_LIST_FIELD_MASK,
+  );
 }
 
 /** `where` + `orderBy(__name__)` + optional `startAfter` — za katalog po destileriji bez duplog čitanja istih dokumenata. */
@@ -949,7 +1271,7 @@ async function fetchProductsByDistilleryPaged(
   afterDocumentId?: string,
 ): Promise<Record<string, unknown>[]> {
   const projectId = env.FIREBASE_PROJECT_ID || "";
-  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  const databaseId = resolveFirestoreDatabaseId(env);
   if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
   const accessToken = await getAccessToken(env);
   const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:runQuery`;
@@ -963,7 +1285,7 @@ async function fetchProductsByDistilleryPaged(
       },
     },
     orderBy: [{ field: { fieldPath: "__name__" }, direction: "ASCENDING" }],
-    limit: pageSize,
+    limit: Math.min(Math.max(1, pageSize), WORKER_STRUCTURED_QUERY_MAX),
   };
   const after = String(afterDocumentId || "").trim();
   if (after) {
@@ -987,9 +1309,9 @@ async function fetchProductsByDistilleryPaged(
     throw new Error(`Firestore REST runQuery error ${res.status}: ${txt.slice(0, 240)}`);
   }
   const rows = (await res.json()) as Array<{ document?: FirestoreDoc }>;
-  return rows
-    .filter((r) => r.document)
-    .map((r) => decodeDocument(r.document as FirestoreDoc));
+  const docs = rows.filter((r) => r.document);
+  meterFirestoreReads(docs.length);
+  return docs.map((r) => decodeDocument(r.document as FirestoreDoc));
 }
 
 async function fetchCountWhereEquals(
@@ -999,7 +1321,7 @@ async function fetchCountWhereEquals(
   fieldValue: string,
 ): Promise<number> {
   const projectId = env.FIREBASE_PROJECT_ID || "";
-  const databaseId = env.FIRESTORE_DATABASE_ID || "(default)";
+  const databaseId = resolveFirestoreDatabaseId(env);
   if (!projectId) throw new Error("Missing FIREBASE_PROJECT_ID");
   const accessToken = await getAccessToken(env);
   const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:runAggregationQuery`;
@@ -1033,6 +1355,7 @@ async function fetchCountWhereEquals(
   const rows = (await res.json()) as Array<{ result?: { aggregateFields?: Record<string, FirestoreValue> } }>;
   const aggregate = rows.find((r) => r.result?.aggregateFields)?.result?.aggregateFields;
   const total = aggregate?.total;
+  meterFirestoreReads(1);
   if (!total) return 0;
   if ("integerValue" in total) return Math.max(0, Number(total.integerValue || 0));
   if ("doubleValue" in total) return Math.max(0, Math.floor(Number(total.doubleValue || 0)));
@@ -1049,7 +1372,14 @@ export default {
           headers: jsonHeaders,
         });
       }
-      if (request.method !== "GET") {
+      const isPrivateRiznicaPath =
+        url.pathname === "/api/private/riznica" ||
+        url.pathname === "/api/private/riznica/settings" ||
+        url.pathname === "/api/private/riznica/add" ||
+        url.pathname === "/api/private/riznica/update" ||
+        url.pathname === "/api/private/riznica/remove";
+      const privateAllowed = isPrivateRiznicaPath && (request.method === "GET" || request.method === "POST");
+      if (request.method !== "GET" && !privateAllowed) {
         return new Response(JSON.stringify({ error: "method_not_allowed" }), {
           status: 405,
           headers: jsonHeaders,
@@ -1089,12 +1419,373 @@ export default {
         }
       }
 
+      if (url.pathname === "/api/private/riznica") {
+        const verified = await verifyFirebaseUserFromRequest(request, env);
+        if (!verified) {
+          return new Response(JSON.stringify({ success: false, error: "unauthorized" }), {
+            status: 401,
+            headers: privateJsonHeaders,
+          });
+        }
+        if (request.method !== "GET") {
+          return new Response(JSON.stringify({ success: false, error: "method_not_allowed" }), {
+            status: 405,
+            headers: privateJsonHeaders,
+          });
+        }
+        const databaseId = resolveFirestoreDatabaseId(env);
+        const cacheKey = privateRiznicaCacheKey(verified.uid);
+        const now = Date.now();
+        const memHit = isolateRiznicaCache.get(verified.uid);
+        if (memHit && now - memHit.ts < PRIVATE_RIZNICA_MEM_TTL_MS) {
+          return new Response(memHit.data, {
+            headers: privateHeadersWithCacheStatus("mem-hit-private"),
+          });
+        }
+        if (env.FIRESTORE_CACHE) {
+          const cached = await env.FIRESTORE_CACHE.get(cacheKey);
+          if (cached) {
+            isolateRiznicaCache.set(verified.uid, { data: cached, ts: now });
+            return new Response(cached, {
+              headers: privateHeadersWithCacheStatus("kv-hit-private"),
+            });
+          }
+        }
+        const inFlightKey = verified.uid;
+        const existingInFlight = privateRiznicaInFlight.get(inFlightKey);
+        if (existingInFlight) {
+          const responseBody = await existingInFlight;
+          return new Response(responseBody, {
+            headers: privateHeadersWithCacheStatus("inflight-hit-private"),
+          });
+        }
+        const privateReadsBefore = firestoreDocsRead;
+        const accessToken = await getAccessToken(env);
+        const client = {
+          projectId: String(env.FIREBASE_PROJECT_ID || ""),
+          databaseId,
+          accessToken,
+        };
+        const useEnriched =
+          (url.searchParams.get("enriched") || "").trim() === "1" ||
+          (url.searchParams.get("useEnrichedRiznica") || "").trim() === "1";
+        const limitParam = Number(url.searchParams.get("limit")) || 20;
+        const safeLimit = Math.min(20, Math.max(5, limitParam));
+        const fetchPromise = (async () => {
+          let items: Record<string, unknown>[];
+          let debugMeta: Record<string, unknown>;
+          if (useEnriched) {
+            const enriched = await getUserRiznicaEnriched(client, verified.uid, safeLimit);
+            items = enriched.items;
+            debugMeta = { useEnriched: true, ...enriched.debug };
+            console.info(
+              `[fsread] /api/private/riznica(enriched) uid=${verified.uid} docs=${enriched.debug.firestoreOpsTotal}`,
+            );
+            meterFirestoreReads(enriched.debug.firestoreOpsTotal);
+          } else {
+            const listResult = await getUserRiznicaWithDebug(client, verified.uid, safeLimit);
+            items = listResult.items;
+            debugMeta = {
+              useEnriched: false,
+              riznicaDocsRead: items.length,
+              productBatchQueries: 0,
+              productDocsResolved: 0,
+              firestoreOpsTotal: listResult.firestoreOpsTotal,
+              endpoint: "getUserRiznica",
+            };
+            console.info(
+              `[fsread] /api/private/riznica uid=${verified.uid} docs=${listResult.firestoreOpsTotal}`,
+            );
+            meterFirestoreReads(listResult.firestoreOpsTotal);
+          }
+          return JSON.stringify({
+            success: true,
+            data: items,
+            meta: { source: "worker", uid: verified.uid, databaseId, ...debugMeta },
+          });
+        })();
+        privateRiznicaInFlight.set(inFlightKey, fetchPromise);
+        const responseBody = await fetchPromise.finally(() => privateRiznicaInFlight.delete(inFlightKey));
+        isolateRiznicaCache.set(verified.uid, { data: responseBody, ts: now });
+        if (env.FIRESTORE_CACHE) {
+          ctx.waitUntil(
+            env.FIRESTORE_CACHE.put(cacheKey, responseBody, {
+              expirationTtl: PRIVATE_RIZNICA_KV_TTL_SECONDS,
+            }).catch(() => undefined),
+          );
+        }
+        return new Response(responseBody, {
+          headers: {
+            ...privateHeadersWithCacheStatus("kv-miss-private"),
+            "x-firestore-reads": String(firestoreDocsRead - privateReadsBefore),
+          },
+        });
+      }
+
+      if (url.pathname === "/api/private/riznica/add") {
+        const verified = await verifyFirebaseUserFromRequest(request, env);
+        if (!verified) {
+          return new Response(JSON.stringify({ success: false, error: "unauthorized" }), {
+            status: 401,
+            headers: privateJsonHeaders,
+          });
+        }
+        if (request.method !== "POST") {
+          return new Response(JSON.stringify({ success: false, error: "method_not_allowed" }), {
+            status: 405,
+            headers: privateJsonHeaders,
+          });
+        }
+        const body = (await request.json().catch(() => null)) as Partial<RiznicaWritePayload> | null;
+        const drinkId = String(body?.drinkId || "").trim();
+        if (!drinkId) {
+          return new Response(JSON.stringify({ success: false, error: "invalid_payload" }), {
+            status: 400,
+            headers: privateJsonHeaders,
+          });
+        }
+        const databaseId = resolveFirestoreDatabaseId(env);
+        const accessToken = await getAccessToken(env);
+        const addDebug = await addToRiznica(
+          {
+            projectId: String(env.FIREBASE_PROJECT_ID || ""),
+            databaseId,
+            accessToken,
+          },
+          verified.uid,
+          {
+            drinkId,
+            category: body?.category ?? null,
+            userRating: typeof body?.userRating === "number" ? body.userRating : null,
+            notes: typeof body?.notes === "string" ? body.notes : "",
+            purchasePrice: typeof body?.purchasePrice === "number" ? body.purchasePrice : null,
+            purchaseDate: typeof body?.purchaseDate === "string" ? body.purchaseDate : null,
+            shelf: typeof body?.shelf === "string" ? body.shelf : "polica-1",
+            position: typeof body?.position === "number" ? body.position : 0,
+            product: body?.product && typeof body.product === "object" ? (body.product as Record<string, unknown>) : null,
+          },
+        );
+        invalidatePrivateRiznicaCache(env, verified.uid, ctx);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: { drinkId },
+            meta: {
+              source: "worker",
+              endpoint: "addToRiznica",
+              databaseId,
+              totalFirestoreOps: addDebug.firestoreOpsTotal,
+            },
+          }),
+          {
+          headers: privateJsonHeaders,
+          },
+        );
+      }
+ 
+      if (url.pathname === "/api/private/riznica/settings") {
+        const verified = await verifyFirebaseUserFromRequest(request, env);
+        if (!verified) {
+          return new Response(JSON.stringify({ success: false, error: "unauthorized" }), {
+            status: 401,
+            headers: privateJsonHeaders,
+          });
+        }
+        const accessToken = await getAccessToken(env);
+        const client = {
+          projectId: String(env.FIREBASE_PROJECT_ID || ""),
+          databaseId: resolveFirestoreDatabaseId(env),
+          accessToken,
+        };
+        if (request.method === "GET") {
+          const settings = await getRiznicaPrivacySettings(client, verified.uid);
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: {
+                riznicaPublic: settings.riznicaPublic,
+                riznicaPublicNotes: settings.riznicaPublicNotes,
+                riznicaLastSharedAt: settings.riznicaLastSharedAt,
+              },
+              meta: { source: "worker", endpoint: "getRiznicaPrivacySettings", totalFirestoreOps: settings.firestoreOpsTotal },
+            }),
+            {
+              headers: privateJsonHeaders,
+            },
+          );
+        }
+        if (request.method !== "POST") {
+          return new Response(JSON.stringify({ success: false, error: "method_not_allowed" }), {
+            status: 405,
+            headers: privateJsonHeaders,
+          });
+        }
+        const body = (await request.json().catch(() => null)) as Partial<RiznicaPrivacySettingsPayload> | null;
+        if (!body || typeof body !== "object") {
+          return new Response(JSON.stringify({ success: false, error: "invalid_payload" }), {
+            status: 400,
+            headers: privateJsonHeaders,
+          });
+        }
+        const normalized: RiznicaPrivacySettingsPayload = {
+          riznicaPublic: body.riznicaPublic === true,
+          riznicaPublicNotes: body.riznicaPublic === true && body.riznicaPublicNotes === true,
+        };
+        const settingsUpdateDebug = await updateRiznicaPrivacySettings(client, verified.uid, normalized);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              ...normalized,
+              riznicaLastSharedAt: normalized.riznicaPublic ? new Date().toISOString() : null,
+            },
+            meta: { source: "worker", endpoint: "updateRiznicaPrivacySettings", totalFirestoreOps: settingsUpdateDebug.firestoreOpsTotal },
+          }),
+          {
+            headers: privateJsonHeaders,
+          },
+        );
+      }
+
+      if (url.pathname === "/api/private/riznica/update") {
+        const verified = await verifyFirebaseUserFromRequest(request, env);
+        if (!verified) {
+          return new Response(JSON.stringify({ success: false, error: "unauthorized" }), {
+            status: 401,
+            headers: privateJsonHeaders,
+          });
+        }
+        if (request.method !== "POST") {
+          return new Response(JSON.stringify({ success: false, error: "method_not_allowed" }), {
+            status: 405,
+            headers: privateJsonHeaders,
+          });
+        }
+        const body = (await request.json().catch(() => null)) as
+          | { drinkId?: string; updates?: Partial<RiznicaWritePayload> }
+          | null;
+        const drinkId = String(body?.drinkId || "").trim();
+        if (!drinkId || !body?.updates || typeof body.updates !== "object") {
+          return new Response(JSON.stringify({ success: false, error: "invalid_payload" }), {
+            status: 400,
+            headers: privateJsonHeaders,
+          });
+        }
+        const accessToken = await getAccessToken(env);
+        await updateRiznicaItem(
+          {
+            projectId: String(env.FIREBASE_PROJECT_ID || ""),
+            databaseId: resolveFirestoreDatabaseId(env),
+            accessToken,
+          },
+          verified.uid,
+          drinkId,
+          body.updates,
+        );
+        invalidatePrivateRiznicaCache(env, verified.uid, ctx);
+        return new Response(
+          JSON.stringify({ success: true, data: { drinkId }, meta: { source: "worker", endpoint: "updateRiznicaItem", totalFirestoreOps: 1 } }),
+          {
+            headers: privateJsonHeaders,
+          },
+        );
+      }
+
+      if (url.pathname === "/api/private/riznica/remove") {
+        const verified = await verifyFirebaseUserFromRequest(request, env);
+        if (!verified) {
+          return new Response(JSON.stringify({ success: false, error: "unauthorized" }), {
+            status: 401,
+            headers: privateJsonHeaders,
+          });
+        }
+        if (request.method !== "POST") {
+          return new Response(JSON.stringify({ success: false, error: "method_not_allowed" }), {
+            status: 405,
+            headers: privateJsonHeaders,
+          });
+        }
+        const body = (await request.json().catch(() => null)) as { drinkId?: string } | null;
+        const drinkId = String(body?.drinkId || "").trim();
+        if (!drinkId) {
+          return new Response(JSON.stringify({ success: false, error: "invalid_payload" }), {
+            status: 400,
+            headers: privateJsonHeaders,
+          });
+        }
+        const accessToken = await getAccessToken(env);
+        const removeDebug = await removeFromRiznica(
+          {
+            projectId: String(env.FIREBASE_PROJECT_ID || ""),
+            databaseId: resolveFirestoreDatabaseId(env),
+            accessToken,
+          },
+          verified.uid,
+          drinkId,
+        );
+        invalidatePrivateRiznicaCache(env, verified.uid, ctx);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: { drinkId },
+            meta: { source: "worker", endpoint: "removeFromRiznica", totalFirestoreOps: removeDebug?.firestoreOpsTotal ?? 1 },
+          }),
+          {
+            headers: privateJsonHeaders,
+          },
+        );
+      }
+
+      if (url.pathname.startsWith("/api/public/riznica/")) {
+        return servePublicCached(request, env, ctx, async () => {
+          const uid = decodeURIComponent(url.pathname.replace("/api/public/riznica/", "").trim());
+          if (!uid) {
+            return new Response(JSON.stringify({ success: false, error: "invalid_uid", data: null }), {
+              status: 400,
+              headers: jsonHeaders,
+            });
+          }
+          const accessToken = await getAccessToken(env);
+          const result = await getPublicRiznica(
+            {
+              projectId: String(env.FIREBASE_PROJECT_ID || ""),
+              databaseId: resolveFirestoreDatabaseId(env),
+              accessToken,
+            },
+            uid,
+          );
+          if (!result.isPublic) {
+            return new Response(
+              JSON.stringify({
+                success: true,
+                data: {
+                  isPublic: false,
+                  ownerName: result.ownerName,
+                  ownerHandle: result.ownerHandle,
+                  ownerAvatar: result.ownerAvatar,
+                  items: [],
+                },
+                meta: { source: "worker-public" },
+              }),
+              { headers: jsonHeaders },
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              success: true,
+              data: result,
+              meta: { source: "worker-public" },
+            }),
+            { headers: jsonHeaders },
+          );
+        });
+      }
+
       if (url.pathname === "/api/public/distilleries") {
         return servePublicCached(request, env, ctx, async () => {
           const limitCount = parseLimit(url, PUBLIC_DISTILLERIES_LIST_DEFAULT, PUBLIC_DISTILLERIES_LIST_MAX);
-          const rows = await fetchCollection(env, "distilleries", limitCount);
-          const filtered = rows.filter((d) => d.isArchived !== true && d.isVerified === true);
-          const lightItems = filtered.map((row) => toDistilleryListItem(row));
+          const rows = await fetchPublicDistilleriesList(env, limitCount);
+          const lightItems = rows.map((row) => toDistilleryListItem(row));
           return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
         });
       }
@@ -1121,11 +1812,18 @@ export default {
       if (url.pathname === "/api/public/products") {
         return servePublicCached(request, env, ctx, async () => {
           const limitCount = parseLimit(url, PUBLIC_PRODUCTS_LIST_DEFAULT, PUBLIC_PRODUCTS_LIST_MAX);
-          const rows = await fetchCollection(env, "products", limitCount);
-          const filtered = rows.filter(
-            (p) => p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true,
+          const maxScan = Math.min(WORKER_CATALOG_MAX_SCAN, limitCount * WORKER_CATALOG_SCAN_MULTIPLIER);
+          const isPublicProduct = (p: Record<string, unknown>) =>
+            p.isApproved !== false && p.isArchivedByDistillery !== true && p.publicLabelDisabled !== true;
+          const rows = await listDocumentsMatching(
+            env,
+            "products",
+            limitCount,
+            maxScan,
+            isPublicProduct,
+            PRODUCT_LIST_FIELD_MASK,
           );
-          const lightItems = filtered.map((row) => toProductListItemWithDailyThumb(row));
+          const lightItems = rows.map((row) => toProductListItemWithDailyThumb(row));
           return new Response(JSON.stringify({ items: lightItems }), { headers: jsonHeaders });
         });
       }

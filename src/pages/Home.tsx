@@ -1,4 +1,4 @@
-import { ArrowRight, Trophy, Droplet, Flame, ArrowUpRight, Sparkles, Star, Clock, Download, ShieldAlert, X, Gift, Ticket, CheckCircle2 } from "lucide-react";
+import { ArrowRight, Trophy, ArrowUpRight, Sparkles, Star, Clock, Download, ShieldAlert, X, Gift, Ticket, CheckCircle2 } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
 import { auth } from "../lib/firebase";
@@ -8,7 +8,6 @@ import { isQuotaError, readCache } from "../lib/resilience";
 import type { HomeBundlePublic } from "../lib/dataService";
 import {
   fetchPublicHomeBundle,
-  fetchPublicClubMembershipsByVisitorId,
   fetchPublicLicenseByToken,
   pickHttpProductThumbForHome,
   stripHttpProductImgUrl,
@@ -16,6 +15,8 @@ import {
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { RAKIVINUM_MARK_FALLBACK, isImgFallbackUrl } from "../lib/imageFallback";
+import { isHardLockActive, isQuotaSaverActive } from "../lib/quotaSaver";
+import { meterSavedReads } from "../lib/requestMeter";
 
 type ProductLite = {
   id: string;
@@ -95,6 +96,8 @@ type ClubActionLite = {
 };
 
 export default function Home() {
+  const QUOTA_SAVER = isQuotaSaverActive();
+  const HARD_LOCK = isHardLockActive();
   const EMERGENCY_READ_FREEZE =
     String(import.meta.env.VITE_EMERGENCY_READ_FREEZE || "").trim() === "1" ||
     (typeof window !== "undefined" && localStorage.getItem("rakivinum_emergency_read_freeze") === "1");
@@ -124,7 +127,16 @@ export default function Home() {
   const [activeActions, setActiveActions] = useState<ClubActionLite[]>([]);
   const [distilleryMap, setDistilleryMap] = useState<Record<string, string>>({});
   const [quotaExceeded, setQuotaExceeded] = useState(false);
+  const [bootSafeUnlocked, setBootSafeUnlocked] = useState(false);
   const homeBundleRefreshInFlight = useRef(false);
+  useEffect(() => {
+    if (!QUOTA_SAVER) return;
+    console.info("[QuotaSaver] Home mount: cache-first enabled, expected read savings on repeated opens.");
+    if (HARD_LOCK) {
+      console.warn("[QuotaSaver] HARD LOCK active on Home: network refresh disabled.");
+      meterSavedReads(120, "Home hard lock cache-only");
+    }
+  }, [QUOTA_SAVER, HARD_LOCK]);
   const toDateSafe = (value: unknown): Date => {
     if (value && typeof (value as { toDate?: () => Date }).toDate === "function") {
       const d = (value as { toDate?: () => Date }).toDate?.();
@@ -134,6 +146,32 @@ export default function Home() {
     const d = new Date((value || 0) as string | number | Date);
     return Number.isNaN(d.getTime()) ? new Date(0) : d;
   };
+
+  useEffect(() => {
+    if (EMERGENCY_READ_FREEZE) {
+      setBootSafeUnlocked(false);
+      return;
+    }
+    let unlocked = false;
+    const unlock = () => {
+      if (unlocked) return;
+      unlocked = true;
+      setBootSafeUnlocked(true);
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      window.removeEventListener("touchstart", unlock);
+    };
+    window.addEventListener("pointerdown", unlock, { passive: true });
+    window.addEventListener("keydown", unlock);
+    window.addEventListener("touchstart", unlock, { passive: true });
+    const fallbackTimer = window.setTimeout(unlock, 10_000);
+    return () => {
+      window.clearTimeout(fallbackTimer);
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      window.removeEventListener("touchstart", unlock);
+    };
+  }, [EMERGENCY_READ_FREEZE]);
 
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
@@ -172,7 +210,8 @@ export default function Home() {
       applyBundle(cached);
       setIsLoadingRec(false);
     } else {
-      setIsLoadingRec(true);
+      // Boot-safe: do not show blocking loader while network is intentionally paused.
+      setIsLoadingRec(false);
     }
 
     const refreshBundle = async () => {
@@ -181,18 +220,8 @@ export default function Home() {
       try {
         const b = await fetchPublicHomeBundle();
         if (b) applyBundle(b);
-        if (visitorId) {
-          const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 30);
-          const clubs = memberships
-            .map((m) => m.distilleryId)
-            .filter((x): x is string => typeof x === "string" && x.trim() !== "");
-          setJoinedClubs(clubs);
-          try {
-            localStorage.setItem(`clubs_${visitorId}`, JSON.stringify(clubs));
-          } catch {
-            // ignore storage errors
-          }
-        }
+        // Home no longer refreshes memberships from network on app boot.
+        // Membership data is refreshed lazily on Menu/MyClubs routes.
       } catch (err) {
         console.error("Greška pri učitavanju Home paketa:", err);
         if (isQuotaError(err)) setQuotaExceeded(true);
@@ -206,15 +235,17 @@ export default function Home() {
 
     /** Jedan ključ za mount i focus/visibility — inače se pri povratku sa npr. etikete `home:focus-bundle` tretira kao „nov“ i pali drugi pun `home-bundle` na Workera iako je `readCache` svež. */
     const bundleRefreshGateKey = "home:public-bundle";
-    const shouldWarmNow = shouldRunRefresh(bundleRefreshGateKey, REFRESH_INTERVAL.USER_LIGHT_1H);
-    if (!cached || shouldWarmNow) void refreshBundle();
+    const bundleRefreshIntervalMs = QUOTA_SAVER ? 30 * 60 * 1000 : REFRESH_INTERVAL.USER_LIGHT_1H;
+    const shouldWarmNow = shouldRunRefresh(bundleRefreshGateKey, bundleRefreshIntervalMs);
+    if (bootSafeUnlocked && (!cached || shouldWarmNow)) void refreshBundle();
 
-    if (DISABLE_HOME_FOCUS_REFRESH) {
+    if (DISABLE_HOME_FOCUS_REFRESH || HARD_LOCK) {
       return undefined;
     }
     const onFocusRefresh = () => {
       if (document.visibilityState !== "visible") return;
-      if (!shouldRunRefresh(bundleRefreshGateKey, REFRESH_INTERVAL.USER_LIGHT_1H)) return;
+      if (!bootSafeUnlocked) return;
+      if (!shouldRunRefresh(bundleRefreshGateKey, bundleRefreshIntervalMs)) return;
       void refreshBundle();
     };
     const onVisibilityRefresh = () => {
@@ -228,7 +259,7 @@ export default function Home() {
       window.removeEventListener("focus", onFocusRefresh);
       document.removeEventListener("visibilitychange", onVisibilityRefresh);
     };
-  }, [EMERGENCY_READ_FREEZE, DISABLE_HOME_FOCUS_REFRESH]);
+  }, [EMERGENCY_READ_FREEZE, DISABLE_HOME_FOCUS_REFRESH, HARD_LOCK, bootSafeUnlocked, QUOTA_SAVER]);
 
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
@@ -328,7 +359,7 @@ export default function Home() {
           </p>
         </div>
       )}
-      
+
       {/* Brand Header according to Brand Guide */}
       <div className="flex flex-col items-center justify-center py-8 space-y-2 relative">
          <div className="w-24 h-[1px] bg-gradient-to-r from-transparent via-gold-500/50 to-transparent mb-4" />
@@ -432,6 +463,20 @@ export default function Home() {
           </Link>
         )}
       </section>
+      <Link
+        to="/tonight"
+        className="block rounded-[24px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
+      >
+        <section className="card-soft card-elevated card-interactive border-gold-500/25 rounded-[24px] p-4">
+          <div className="flex items-center gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-gold-400">Večernji izbor</p>
+              <h2 className="mt-1 text-base font-black italic text-white">Večernji izbor</h2>
+              <p className="mt-1 text-[11px] text-text-secondary">Personalizovana preporuka po raspoloženju, hrani i tvojoj riznici.</p>
+            </div>
+          </div>
+        </section>
+      </Link>
 
       {/* Club Actions & Perks */}
       <section className="space-y-4">
@@ -441,7 +486,7 @@ export default function Home() {
           </h3>
           <Link
             to="/my-clubs"
-            className="text-[9px] text-white/70 uppercase font-black hover:text-white transition-colors flex items-center gap-1 rounded-lg px-1 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
+            className="section-title text-white/70 hover:text-white transition-colors flex items-center gap-1 rounded-lg px-1 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
           >
             Moji Klubovi <ArrowUpRight className="w-2 h-2" />
           </Link>
@@ -524,7 +569,7 @@ export default function Home() {
       {/* Stats Quick View (Replaces Hero Dashboard) */}
       <section className="bg-gradient-to-r from-gold-500/10 to-transparent border-l-2 border-gold-500 p-4 rounded-r-2xl shadow-[0_10px_30px_rgba(212,175,55,0.08)] card-elevated">
         <Link
-          to="/collection"
+          to="/moja-riznica"
           className="flex items-center justify-between group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base -m-1 p-1"
         >
            <div className="flex items-center gap-4">
@@ -532,7 +577,7 @@ export default function Home() {
                  <Trophy className="w-5 h-5 text-gold-500" />
               </div>
               <div>
-                 <p className="text-[11px] text-gold-500 font-black uppercase tracking-widest">Vaša kolekcija</p>
+                 <p className="text-[11px] text-gold-500 font-black uppercase tracking-widest">Moja riznica</p>
                  <h4 className="text-white font-bold text-sm">
                    {savedCount} Boca <span className="text-text-secondary font-normal mx-1">|</span> {topRating ? `${topRating.toFixed(1)} ★` : 'Bez ocena'}
                  </h4>
@@ -549,7 +594,7 @@ export default function Home() {
             <h3 className="section-title">
               <Clock className="w-3 h-3" /> Nedavno Skenirano
             </h3>
-            <Link to="/collection" className="text-[9px] text-white/70 uppercase font-black hover:text-white transition-colors">Istraži Sve</Link>
+            <Link to="/moja-riznica" className="text-[9px] text-white/70 uppercase font-black hover:text-white transition-colors">Istraži Sve</Link>
           </div>
           <div className="flex gap-4 overflow-x-auto pb-2 snap-x hide-scrollbar">
             {recentScans.map((item) => (
@@ -601,41 +646,6 @@ export default function Home() {
           </div>
         </div>
       </button>
-
-      {/* Quick Tools - Compact */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="section-title">Brzi Alati</h3>
-        </div>
-        
-        <div className="grid grid-cols-2 gap-4">
-          <Link
-            to="/radionica?tab=razblazivanje"
-            className="card-soft card-elevated border border-white/10 rounded-[22px] p-4 flex flex-col gap-2 transition-all duration-200 active:scale-95 hover:border-gold-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
-          >
-            <div className="w-8 h-8 rounded-lg bg-gold-500/10 flex items-center justify-center text-gold-500">
-              <Droplet className="w-4 h-4" />
-            </div>
-            <div>
-              <p className="font-bold text-sm text-white">Razblaživanje</p>
-              <p className="text-[10px] text-text-secondary leading-tight opacity-70">Spuštanje jačine.</p>
-            </div>
-          </Link>
-          
-          <Link
-            to="/radionica?tab=prvenac"
-            className="card-soft card-elevated border border-white/10 rounded-[22px] p-4 flex flex-col gap-2 transition-all duration-200 active:scale-95 hover:border-gold-500/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gold-500/45 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base"
-          >
-            <div className="w-8 h-8 rounded-lg bg-gold-500/10 flex items-center justify-center text-gold-500">
-              <Flame className="w-4 h-4" />
-            </div>
-            <div>
-              <p className="font-bold text-sm text-white">Prvenac</p>
-              <p className="text-[10px] text-text-secondary leading-tight opacity-70">Čuvanje srca.</p>
-            </div>
-          </Link>
-        </div>
-      </section>
 
       {/* Bottom Action (Primary Button) */}
       <Link

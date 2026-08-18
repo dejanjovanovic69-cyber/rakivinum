@@ -14,7 +14,7 @@
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { isQuotaError, readCache, writeCache } from "./resilience";
-import { CACHE_TTL, REFRESH_INTERVAL } from "./cachePolicy";
+import { CACHE_TTL, PUBLIC_CATALOG_LIMIT, REFRESH_INTERVAL } from "./cachePolicy";
 import { meterDbRead, meterEdgeRequest } from "./requestMeter";
 import { RAKIVINUM_MARK_FALLBACK } from "./imageFallback";
 import { resolveEdgeApiBase } from "./edgeApiBase";
@@ -216,7 +216,7 @@ export async function fetchPublicDistilleries(options?: {
   cacheKey?: string;
   ttlMs?: number;
 }): Promise<DistilleryPublic[]> {
-  const limitCount = options?.limitCount ?? 100;
+  const limitCount = options?.limitCount ?? PUBLIC_CATALOG_LIMIT.DISTILLERIES;
   const cacheKey = options?.cacheKey ?? "rakivinum_cache_public_distilleries_v1";
   const ttlMs = options?.ttlMs ?? CACHE_TTL.DISTILLERY_LIST_6H;
 
@@ -250,7 +250,7 @@ export async function fetchPublicProducts(options?: {
   cacheKey?: string;
   ttlMs?: number;
 }): Promise<ProductPublic[]> {
-  const limitCount = options?.limitCount ?? 120;
+  const limitCount = options?.limitCount ?? PUBLIC_CATALOG_LIMIT.PRODUCTS;
   const cacheKey = options?.cacheKey ?? "rakivinum_cache_public_products_v2";
   const ttlMs = options?.ttlMs ?? CACHE_TTL.PRODUCTS_6H;
 
@@ -539,7 +539,9 @@ export async function fetchPublicDistilleriesByIds(ids: string[]): Promise<Disti
     const byId = new Map<string, DistilleryPublic>();
     for (let i = 0; i < safeIds.length; i += 10) {
       const chunk = safeIds.slice(i, i + 10);
-      const snap = await getDocs(query(collection(db, "distilleries"), where(documentId(), "in", chunk)));
+      const snap = await getDocs(
+        query(collection(db, "distilleries"), where(documentId(), "in", chunk), limit(chunk.length)),
+      );
       meterDbRead("dataService:distillery_by_ids", snap.size);
       snap.forEach((d) => {
         const row = { id: d.id, ...d.data() } as DistilleryPublic;
@@ -584,7 +586,9 @@ export async function fetchPublicProductsByIds(ids: string[]): Promise<ProductPu
     const byId = new Map<string, ProductPublic>();
     for (let i = 0; i < safeIds.length; i += 10) {
       const chunk = safeIds.slice(i, i + 10);
-      const snap = await getDocs(query(collection(db, "products"), where(documentId(), "in", chunk)));
+      const snap = await getDocs(
+        query(collection(db, "products"), where(documentId(), "in", chunk), limit(chunk.length)),
+      );
       meterDbRead("dataService:products_by_ids", snap.size);
       snap.forEach((d) => {
         const row = { id: d.id, ...d.data() } as ProductPublic;

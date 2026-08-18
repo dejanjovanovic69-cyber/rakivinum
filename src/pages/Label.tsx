@@ -15,6 +15,7 @@ import { readCache, writeCache } from "../lib/resilience";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { fetchPublicLabelView, stripHttpProductImgUrl } from "../lib/dataService";
 import { RAKIVINUM_MARK_FALLBACK } from "../lib/imageFallback";
+import { riznicaService } from "../services/riznicaService";
 import { 
   RadarChart, 
   PolarGrid, 
@@ -252,6 +253,7 @@ export default function Label() {
   const [reviewText, setReviewText] = useState("");
   const [userLocation, setUserLocation] = useState("");
   const [isSubmittingRating, setIsSubmittingRating] = useState(false);
+  const [saveNotice, setSaveNotice] = useState<{ text: string; type: "ok" | "err" } | null>(null);
   const [hasRatedToday, setHasRatedToday] = useState(false);
   const [showIntegrityNotice, setShowIntegrityNotice] = useState(false);
   const [ratingSuccess, setRatingSuccess] = useState<{
@@ -325,6 +327,12 @@ export default function Label() {
     } catch {
       // ignore local cache write errors
     }
+  };
+  const showSaveNotice = (text: string, type: "ok" | "err" = "ok") => {
+    setSaveNotice({ text, type });
+    window.setTimeout(() => {
+      setSaveNotice((prev) => (prev?.text === text ? null : prev));
+    }, 2200);
   };
 
   // Membership & Visitor Info
@@ -539,9 +547,8 @@ export default function Label() {
           setSaved(cachedSaved);
           return;
         }
-        const docRef = doc(db, 'users', auth.currentUser.uid, 'savedItems', productData.id);
-        const savedSnap = await getDoc(docRef);
-        const exists = savedSnap.exists();
+        const rows = riznicaService.getMyRiznicaSnapshot(auth.currentUser.uid);
+        const exists = rows.some((x) => x.drinkId === productData.id);
         setSaved(exists);
         writeSavedStateCache(productData.id, auth.currentUser.uid, null, exists);
       } catch (error) {
@@ -626,28 +633,51 @@ export default function Label() {
             createdAt: serverTimestamp(),
           }, { merge: true });
         }
-        alert(saved ? "Uklonjeno iz lokalne arhive." : "Sačuvano u lokalnu arhivu na ovom uređaju!");
+        showSaveNotice(saved ? "Uklonjeno iz lokalne arhive." : "Sačuvano u lokalnu arhivu na ovom uređaju!");
       } catch (e) {
         console.error("Error updating guest collection", e);
+        showSaveNotice("Greška pri čuvanju u lokalnu arhivu.", "err");
       }
       return;
     }
     
     setIsSaving(true);
     try {
-      const docRef = doc(db, 'users', auth.currentUser.uid, 'savedItems', productData.id);
       if (saved) {
-        await deleteDoc(docRef);
+        await riznicaService.removeFromRiznica(productData.id);
+        setSaved(false);
         writeSavedStateCache(productData.id, auth.currentUser.uid, null, false);
+        showSaveNotice("Uklonjeno iz Riznice.");
       } else {
-        await setDoc(docRef, {
-          productId: productData.id,
-          createdAt: serverTimestamp()
-        });
+        await riznicaService.addToRiznica(
+          productData.id,
+          {
+            category: "probano",
+            userRating: userRating > 0 ? userRating : null,
+          },
+          {
+            product: {
+              id: productData.id,
+              name: productData.name,
+              type: productData.type,
+              image: productData.image,
+              bottleImageUrl: productData.bottleImageUrl,
+              galleryImages: productData.galleryImages,
+            },
+          },
+        );
+        setSaved(true);
         writeSavedStateCache(productData.id, auth.currentUser.uid, null, true);
+        showSaveNotice("Dodato u Riznicu.");
       }
     } catch (error) {
-       console.error("Error saving/removing bottle", error);
+       console.error("Persistence failed:", error);
+       const msg = String((error as Error)?.message || "");
+       if (msg.includes("unauthorized")) {
+         showSaveNotice("Nalog nije verifikovan. Osvežite stranicu i pokušajte ponovo.", "err");
+       } else {
+         showSaveNotice("Greška pri čuvanju u bazu. Proverite internet vezu.", "err");
+       }
     } finally {
       setIsSaving(false);
     }
@@ -688,11 +718,20 @@ export default function Label() {
     }
 
     try {
-      const docRef = doc(db, 'users', auth.currentUser.uid, 'savedItems', productData.id);
-      await setDoc(docRef, {
-        productId: productData.id,
-        createdAt: serverTimestamp()
-      }, { merge: true });
+      await riznicaService.addToRiznica(
+        productData.id,
+        {},
+        {
+          product: {
+            id: productData.id,
+            name: productData.name,
+            type: productData.type,
+            image: productData.image,
+            bottleImageUrl: productData.bottleImageUrl,
+            galleryImages: productData.galleryImages,
+          },
+        },
+      );
       setSaved(true);
       writeSavedStateCache(productData.id, auth.currentUser.uid, null, true);
     } catch (error) {
@@ -724,10 +763,10 @@ export default function Label() {
       window.dispatchEvent(new Event('rakivinum_pending_ratings_changed'));
       // Backward compatibility for existing notification logic.
       localStorage.setItem('rakivinum_pending_rating', JSON.stringify(entry));
-      alert("Dodato u kolekciju i podsetnik za sutra je sačuvan.");
+      alert("Dodato u Riznicu i podsetnik za sutra je sačuvan.");
     } catch (e) {
       console.error("Error scheduling next-day rating", e);
-      alert("Sačuvano u kolekciju, ali podsetnik nije uspešno upisan.");
+      alert("Sačuvano u Riznicu, ali podsetnik nije uspešno upisan.");
     }
   };
 
@@ -1532,7 +1571,7 @@ export default function Label() {
                  <p className="text-[9px] font-black text-gold-500 uppercase tracking-widest leading-none italic">Zlatno Pravilo Integrity</p>
                  <p className="text-[8px] text-text-secondary leading-relaxed font-medium">
                   Danas ste već ocenili jedan proizvod. Zlatno pravilo (1 proizvod dnevno) čuva status Elite kluba. 
-                   <span className="text-white"> Sačuvajte u kolekciju i ocenite sutra!</span>
+                   <span className="text-white"> Sačuvajte u Riznicu i ocenite sutra!</span>
                  </p>
                </div>
             </div>
@@ -1548,7 +1587,7 @@ export default function Label() {
               } ${isSaving ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               <BookmarkPlus className={`w-5 h-5 ${saved ? 'text-gold-500' : ''}`} />
-              {saved ? 'U kolekciji' : 'U kolekciju'}
+              {saved ? 'U Riznici' : 'Dodaj u Riznicu'}
             </button>
 
             <button 
@@ -1742,6 +1781,14 @@ export default function Label() {
               Super, nastavi
             </button>
           </div>
+        </div>
+      )}
+      {saveNotice && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[220] rounded-full border border-gold-500/30 bg-black/90 px-4 py-2 text-[11px] font-bold text-gold-300 shadow-2xl">
+          <span className="inline-flex items-center gap-1.5">
+            {saveNotice.type === "ok" ? <CheckCircle className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5 text-red-400" />}
+            {saveNotice.text}
+          </span>
         </div>
       )}
     </div>

@@ -1,0 +1,18 @@
+RAKIVINUM — kratki indeks sažetka (2026-05-13)
+
+Kanonski usklađeni tekst (arhitektura + Firestore/keš + repomix upućivanje):
+  docs/SAZETAK-KODA-USKLADJENO.txt
+
+Operativa i deploy:
+  docs/STATUS-ZADATAKA.md
+  AGENTS.md
+
+Audit read-ova po stranicama:
+  docs/FIRESTORE-READ-AUDIT.md
+
+Repomix ceo repo (AI / review):
+  repomix-output.txt (repo root)
+
+Stari pojedinačni Firestore sažetak je uklopljen u USKLADJENO; ne održavati duplikat.
+
+KRAJ

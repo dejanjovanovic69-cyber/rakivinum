@@ -12,6 +12,9 @@ import {
 import { readCache, writeCache } from "../lib/resilience";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
 import { shouldRunRefresh } from "../lib/refreshGate";
+import { isQuotaSaverActive } from "../lib/quotaSaver";
+import { meterSavedReads } from "../lib/requestMeter";
+import { getOrCreateVisitorId } from "../lib/visitorIdentity";
 
 type ClubTarget = { label: string; current: number; target: number };
 type ClubAction = {
@@ -56,6 +59,7 @@ function safeCount(value: unknown): number {
 }
 
 export default function MyClubs() {
+  const QUOTA_SAVER = isQuotaSaverActive();
   const EMERGENCY_READ_FREEZE = false;
   const navigate = useNavigate();
   const location = useLocation();
@@ -74,7 +78,31 @@ export default function MyClubs() {
   };
   const [clubs, setClubs] = useState<ClubRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const visitorId = localStorage.getItem('rakivinum_visitor_id');
+  const [visitorId, setVisitorId] = useState<string | null>(() => {
+    try {
+      return getOrCreateVisitorId();
+    } catch {
+      return localStorage.getItem("rakivinum_visitor_id");
+    }
+  });
+  useEffect(() => {
+    if (!QUOTA_SAVER) return;
+    console.info("[QuotaSaver] MyClubs mount: progress query caps lowered and cached.");
+    meterSavedReads(80, "MyClubs:lowered progress scan/rating limits");
+  }, [QUOTA_SAVER]);
+
+  useEffect(() => {
+    const syncVisitor = () => {
+      try {
+        setVisitorId(getOrCreateVisitorId());
+      } catch {
+        setVisitorId(localStorage.getItem("rakivinum_visitor_id"));
+      }
+    };
+    syncVisitor();
+    window.addEventListener("storage", syncVisitor);
+    return () => window.removeEventListener("storage", syncVisitor);
+  }, []);
 
   useEffect(() => {
     if (!visitorId) {
@@ -102,7 +130,7 @@ export default function MyClubs() {
               query(
                 collection(db, "scans"),
                 where("visitorId", "==", visitorId),
-                limit(120),
+                limit(QUOTA_SAVER ? 15 : 25),
               ),
             ),
             getDocs(
@@ -110,7 +138,7 @@ export default function MyClubs() {
                 collection(db, "ratings"),
                 where("visitorId", "==", visitorId),
                 where("rating", ">=", 4.5),
-                limit(120),
+                limit(QUOTA_SAVER ? 15 : 25),
               ),
             ),
           ]);
@@ -137,7 +165,9 @@ export default function MyClubs() {
         }
 
         const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 40);
-        const joinedClubsIds = memberships.map((m) => m.distilleryId).filter((x): x is string => typeof x === "string" && x.length > 0);
+        const joinedClubsIds = memberships
+          .map((m) => m.distilleryId)
+          .filter((x): x is string => typeof x === "string" && x.length > 0);
         
         // Secondary fallback to local storage
         const storageKey = `clubs_${visitorId}`;
@@ -160,7 +190,7 @@ export default function MyClubs() {
         const actionsByDistilleryId = new Map<string, Awaited<ReturnType<typeof fetchPublicClubActionsForDistillery>>>();
         const actionLists = await Promise.all(
           allIds.map(async (clubId) => {
-            const rows = await fetchPublicClubActionsForDistillery(clubId, 60);
+            const rows = await fetchPublicClubActionsForDistillery(clubId, QUOTA_SAVER ? 5 : 60);
             return { clubId, rows };
           }),
         );
@@ -238,7 +268,7 @@ export default function MyClubs() {
     };
 
     fetchClubs();
-  }, [visitorId, EMERGENCY_READ_FREEZE]);
+  }, [visitorId, EMERGENCY_READ_FREEZE, QUOTA_SAVER]);
 
   const leaveClub = async (distilleryId: string) => {
     if (!confirm("Da li ste sigurni da želite da napustite ovaj klub? Sav vaš napredak ka nagradama u ovom klubu će biti izgubljen.")) return;
@@ -250,7 +280,7 @@ export default function MyClubs() {
       joined = joined.filter((id: string) => id !== distilleryId);
       localStorage.setItem(storageKey, JSON.stringify(joined));
 
-      const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, 80);
+      const memberships = await fetchPublicClubMembershipsByVisitorId(visitorId, QUOTA_SAVER ? 40 : 80);
       for (const m of memberships) {
         if (m.distilleryId === distilleryId && m.id) {
           await deleteDoc(doc(db, "club_memberships", m.id));

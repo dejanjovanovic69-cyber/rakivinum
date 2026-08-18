@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { WorkshopField, WorkshopResult, WorkshopCard } from "../components/WorkshopComponents";
+import { isQuotaSaverActive } from "../lib/quotaSaver";
 
 // --- History Logic ---
 type HistoryInputs = Record<string, string | number>;
@@ -182,7 +183,7 @@ function Prvenac({ onSave }: { onSave: ToolSaveHandler }) {
 
        <div className="grid grid-cols-1 gap-4">
           <WorkshopResult 
-            label="Strogo odvojiti prvenac" 
+            label="Preporuka odvojiti prvenac" 
             value={odvojiti.toFixed(2)} 
             unit="L" 
             variant="red" 
@@ -528,6 +529,11 @@ const TOOLS = [
 ];
 
 export default function Workshop() {
+  const QUOTA_SAVER = isQuotaSaverActive();
+  useEffect(() => {
+    if (!QUOTA_SAVER) return;
+    console.info("[QuotaSaver] Workshop mount: no network reads, calculator-only mode.");
+  }, [QUOTA_SAVER]);
   const navigate = useNavigate();
   const location = useLocation();
   const goBackSafe = () => {

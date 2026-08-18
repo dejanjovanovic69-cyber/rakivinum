@@ -8,6 +8,11 @@
       "database": "ai-studio-e4c0de88-b3b9-42ae-b6be-4bdfddca62ef",
       "rules": "firestore.rules",
       "indexes": "firestore.indexes.json"
+    },
+    {
+      "database": "ai-studio-30c2b57e-7f61-4113-b30b-ebbe6a941976",
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
     }
   ],
   "hosting": {

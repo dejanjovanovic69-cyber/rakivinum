@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, MapPin, Loader2, ChevronRight, Award, Search, X } from "lucide-react";
 import { isQuotaError } from "../lib/resilience";
 import { fetchPublicDistilleries } from "../lib/dataService";
+import { PUBLIC_CATALOG_LIMIT } from "../lib/cachePolicy";
 
 type DistilleryRow = {
   id: string;
@@ -45,8 +46,8 @@ export default function Distilleries() {
     async function fetchDistilleries() {
       try {
         const publicDistilleries = await fetchPublicDistilleries({
-          limitCount: 100,
-          cacheKey: "rakivinum_cache_distilleries_page_v2",
+          limitCount: PUBLIC_CATALOG_LIMIT.DISTILLERIES,
+          cacheKey: "rakivinum_cache_distilleries_page_v6",
           ttlMs: 30 * 60 * 1000,
         });
         setDistilleries(publicDistilleries);

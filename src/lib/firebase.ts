@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import {
   initializeAuth,
+  setPersistence,
   browserLocalPersistence,
   browserSessionPersistence,
   indexedDBLocalPersistence,
@@ -12,6 +13,8 @@ import {
   persistentLocalCache,
   persistentMultipleTabManager,
 } from "firebase/firestore";
+
+import { initAppCheck } from "./appCheck";
 
 // Import the Firebase configuration
 import firebaseConfig from "../../firebase-applet-config.json";
@@ -28,6 +31,14 @@ if (import.meta.env.DEV && typeof window !== "undefined") {
 
 // Initialize Firebase SDK
 export const app = initializeApp(firebaseConfig);
+
+/**
+ * MORA ostati ovde — između `initializeApp` i prvog `initializeFirestore`/`initializeAuth`.
+ * Ako se pomeri niže ili u React kod, prvi upiti odu bez App Check tokena i biće odbijeni
+ * čim uključiš enforcement u Firebase konzoli.
+ */
+initAppCheck(app);
+
 export const db = (() => {
   try {
     return initializeFirestore(
@@ -51,6 +62,9 @@ export const auth = initializeAuth(app, {
     browserSessionPersistence,
   ],
   popupRedirectResolver: browserPopupRedirectResolver,
+});
+void setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.warn("[Firebase] setPersistence failed:", err);
 });
 
 export enum OperationType {

@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, useNavigate } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, useNavigate, Navigate } from "react-router-dom";
 import MobileLayout from "./components/layout/MobileLayout";
 import React, { Suspense, lazy, useEffect, useState, useCallback } from "react";
 import AgeGate, { hasAgeGateConsent } from "./components/AgeGate";
@@ -10,13 +10,15 @@ import { isSuperuserEmail } from "./lib/authz";
 import { extractActivateTokenFromInput, isLicensedLocalStorage } from "./lib/extractActivateToken";
 import { initPresenceTracking } from "./lib/presence";
 import { DiagnosticRouteGate } from "./lib/routeDiagnostics";
+import { isQuotaSaverActive } from "./lib/quotaSaver";
+import { getSavedReadsToday } from "./lib/requestMeter";
 
 const Home = lazy(() => import("./pages/Home"));
 const Workshop = lazy(() => import("./pages/Workshop"));
 const Scanner = lazy(() => import("./pages/Scanner"));
 const Community = lazy(() => import("./pages/Community"));
 const Menu = lazy(() => import("./pages/Menu"));
-const Collection = lazy(() => import("./pages/Collection"));
+const MojaRiznica = lazy(() => import("./pages/MojaRiznica"));
 const Label = lazy(() => import("./pages/Label"));
 const Admin = lazy(() => import("./pages/Admin"));
 const Distillery = lazy(() => import("./pages/Distillery"));
@@ -26,6 +28,8 @@ const AdminAudit = lazy(() => import("./pages/AdminAudit"));
 const Activate = lazy(() => import("./pages/Activate"));
 const MyClubs = lazy(() => import("./pages/MyClubs"));
 const Distilleries = lazy(() => import("./pages/Distilleries"));
+const TonightRecommendations = lazy(() => import("./pages/TonightRecommendations"));
+const PublicRiznica = lazy(() => import("./pages/PublicRiznica"));
 
 // Initialize Visitor ID immediately before anything renders
 if (typeof window !== 'undefined' && !localStorage.getItem('rakivinum_visitor_id')) {
@@ -156,11 +160,22 @@ function LicenseGuard({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const [ageOk, setAgeOk] = useState(hasAgeGateConsent);
+  const [quotaSaverOn, setQuotaSaverOn] = useState(() => isQuotaSaverActive());
+  const [savedReadsToday, setSavedReadsToday] = useState(() => getSavedReadsToday());
   const onAgeConfirmed = useCallback(() => setAgeOk(true), []);
 
   useEffect(() => {
     return initPresenceTracking();
   }, []);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setQuotaSaverOn(isQuotaSaverActive());
+      setSavedReadsToday(getSavedReadsToday());
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, []);
+  const showQuotaBadge = quotaSaverOn || import.meta.env.DEV;
+  const savedPretty = savedReadsToday >= 1000 ? `${(savedReadsToday / 1000).toFixed(1)}k` : String(savedReadsToday);
 
   if (!ageOk) {
     return <AgeGate onConfirmed={onAgeConfirmed} />;
@@ -190,12 +205,16 @@ export default function App() {
             <Route path="menu" element={<DiagnosticRouteGate><Menu /></DiagnosticRouteGate>} />
             <Route path="my-clubs" element={<DiagnosticRouteGate><MyClubs /></DiagnosticRouteGate>} />
             <Route path="distilleries" element={<DiagnosticRouteGate><Distilleries /></DiagnosticRouteGate>} />
-            <Route path="collection" element={<DiagnosticRouteGate><Collection /></DiagnosticRouteGate>} />
+            <Route path="collection" element={<Navigate to="/moja-riznica" replace />} />
+            <Route path="moja-riznica" element={<DiagnosticRouteGate><MojaRiznica /></DiagnosticRouteGate>} />
           </Route>
 
           {/* Public Full screen routes */}
           <Route path="/label/:id" element={<DiagnosticRouteGate><Label /></DiagnosticRouteGate>} />
           <Route path="/distillery/:id" element={<DiagnosticRouteGate><Distillery /></DiagnosticRouteGate>} />
+          <Route path="/tonight" element={<DiagnosticRouteGate><TonightRecommendations /></DiagnosticRouteGate>} />
+          <Route path="/riznica/:uid" element={<DiagnosticRouteGate><PublicRiznica /></DiagnosticRouteGate>} />
+          <Route path="/public/riznica/:uid" element={<DiagnosticRouteGate><PublicRiznica /></DiagnosticRouteGate>} />
 
           {/* Professional/B2B routes */}
           <Route
@@ -230,6 +249,11 @@ export default function App() {
           />
         </Routes>
       </Suspense>
+      {showQuotaBadge && (
+        <div className="pointer-events-none fixed bottom-3 right-3 z-[120] rounded-full border border-gold-500/30 bg-black/70 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-gold-300">
+          Saved: {savedPretty} today
+        </div>
+      )}
     </Router>
   );
 }

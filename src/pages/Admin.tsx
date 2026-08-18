@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { ArrowLeft, Save, Loader2, CheckCircle, Database, Upload, ImageIcon, Trash2, Edit2, Search, ChevronDown, BookOpen, MapPin, Eye, Flag, ShieldAlert, AlertTriangle, Star, Mail, FileText, BarChart2, Building2, ClipboardCopy } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "../lib/firebase";
+import { cn } from "../lib/utils";
 import {
   collection,
   doc,
@@ -29,10 +30,20 @@ import { isSuperuserEmail } from "../lib/authz";
 import { waitForImages, addPngImageFitPageCentered } from "../lib/pdfFitImage";
 import { shouldRunRefresh } from "../lib/refreshGate";
 import { REFRESH_INTERVAL } from "../lib/cachePolicy";
-import { meterDbRead } from "../lib/requestMeter";
+import { getSavedReadsToday, meterDbRead, meterSavedReads, resetSavedReadsToday } from "../lib/requestMeter";
 import { DISABLE_ONLINE_PRESENCE_TRACKING } from "../lib/presence";
 import { readCache, writeCache } from "../lib/resilience";
 import { RAKIVINUM_MARK_FALLBACK, hasUsablePublicProductImage, isImgFallbackUrl, pickBestProductImageUrl } from "../lib/imageFallback";
+import { trackAnalyticsEvent } from "../lib/analytics";
+import {
+  getCurrentMode,
+  getDiagnostics,
+  getReadSavingEstimate,
+  isHardLockActive,
+  isQuotaSaverActive,
+  setHardLockOverride,
+  setQuotaSaverOverride,
+} from "../lib/quotaSaver";
 
 const ADMIN_DISTILLERIES_LIST_CACHE_KEY = "rakivinum_cache_admin_distilleries_list_v1";
 const ADMIN_PENDING_APPROVALS_CACHE_KEY = "rakivinum_cache_admin_pending_approvals_v1";
@@ -43,6 +54,8 @@ const ADMIN_FLAGGED_RATINGS_CACHE_KEY = "rakivinum_cache_admin_flagged_ratings_v
 const ADMIN_RECENT_RATINGS_CACHE_KEY = "rakivinum_cache_admin_recent_ratings_v1";
 const ADMIN_BLOCKED_USERS_CACHE_KEY = "rakivinum_cache_admin_blocked_users_v1";
 const ADMIN_LICENSES_CACHE_KEY = "rakivinum_cache_admin_licenses_v1";
+
+const QUOTA_SAVER_LOG_PREFIX = "[QuotaSaver]";
 
 // Helper function to resize and compress image to base64
 const processImageToDataURL = (file: File, maxWidth: number, maxHeight: number, quality: number = 0.6): Promise<string> => {
@@ -175,7 +188,39 @@ type WithToDate = { toDate?: () => Date };
 const hasToDate = (value: unknown): value is WithToDate => !!value && typeof (value as WithToDate).toDate === "function";
 
 export default function Admin() {
-  const EMERGENCY_READ_FREEZE = false;
+  const [quotaSaverEnabled, setQuotaSaverEnabled] = useState(() => isQuotaSaverActive());
+  const [savedReadsToday, setSavedReadsToday] = useState(() => getSavedReadsToday());
+  const [hardLockActive, setHardLockActive] = useState(() => isHardLockActive());
+  const [diagnostics, setDiagnostics] = useState(() => getDiagnostics());
+  const EMERGENCY_READ_FREEZE = quotaSaverEnabled && false; // easy flip if emergency hard-freeze is needed
+  const quotaSaverSkip = (
+    opts: { force?: boolean } | undefined,
+    cached: unknown,
+    gateKey: string,
+    reason: string,
+    estimatedReads = 50,
+    strictNoCache = true,
+  ) => {
+    if (opts?.force) return false;
+    if (quotaSaverEnabled && strictNoCache) {
+      const noCache = cached == null || (Array.isArray(cached) && cached.length === 0);
+      if (noCache) {
+        console.info(`${QUOTA_SAVER_LOG_PREFIX} SKIPPED: ${reason} (cache-only while saver ON)`);
+        meterSavedReads(estimatedReads, reason);
+        setSavedReadsToday(getSavedReadsToday());
+        return true;
+      }
+    }
+    if (cached == null) return false;
+    if (quotaSaverEnabled) {
+      console.info(`${QUOTA_SAVER_LOG_PREFIX} SKIPPED: ${reason}`);
+      meterSavedReads(estimatedReads, reason);
+      setSavedReadsToday(getSavedReadsToday());
+      return true;
+    }
+    if (!shouldRunRefresh(gateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M)) return true;
+    return false;
+  };
   const normalizeBarcode = (value: unknown) => String(value || "").replace(/\D/g, "");
   const navigate = useNavigate();
   const location = useLocation();
@@ -220,7 +265,7 @@ export default function Admin() {
   const [productToDelete, setProductToDelete] = useState<string | null>(null);
   const [adminProducts, setAdminProducts] = useState<ProductListItem[]>([]);
   const [distilleries, setDistilleries] = useState<DistilleryListItem[]>([]);
-  type AdminTab = 'approvals' | 'distilleries' | 'events' | 'moderation' | 'licensing';
+  type AdminTab = 'approvals' | 'distilleries' | 'events' | 'moderation' | 'licensing' | 'diagnostics';
   const [activeTab, setActiveTab] = useState<AdminTab>('distilleries');
   const [distilleryTab, setDistilleryTab] = useState<'profil' | 'pica' | 'licence' | 'ocene'>('profil');
   const [eventProposals, setEventProposals] = useState<EventProposalItem[]>([]);
@@ -240,6 +285,7 @@ export default function Admin() {
   const [loadedDataTabs, setLoadedDataTabs] = useState<Set<AdminTab>>(() => new Set());
   const adminProductsFetchKeyRef = useRef<string>("");
   const adminFetchInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
+  const trackedAdminTabRef = useRef<string>("");
   const [isModerating, setIsModerating] = useState(false);
   const [isGeneratingLicense, setIsGeneratingLicense] = useState(false);
   const [onlineUsersCount, setOnlineUsersCount] = useState<number | null>(null);
@@ -259,6 +305,80 @@ export default function Admin() {
   const [confirmDeleteLicenseId, setConfirmDeleteLicenseId] = useState<string | null>(null);
   const [licenseLogSearch, setLicenseLogSearch] = useState("");
   const productsMissingPublicImage = adminProducts.filter((p) => !hasUsablePublicProductImage(p));
+
+  useEffect(() => {
+    if (trackedAdminTabRef.current === activeTab) return;
+    trackedAdminTabRef.current = activeTab;
+    void trackAnalyticsEvent("admin_tab_switch", {
+      tab: activeTab,
+    });
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!quotaSaverEnabled) return;
+    // Rough estimate for dev sessions: each prevented full tab cycle avoids hundreds of reads.
+    console.info(`${QUOTA_SAVER_LOG_PREFIX} active: admin network refreshes are cache-first, estimated savings 500+ reads per repeated tab cycle.`);
+    const id = window.setInterval(() => {
+      setSavedReadsToday(getSavedReadsToday());
+      setHardLockActive(isHardLockActive());
+      setDiagnostics(getDiagnostics());
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [quotaSaverEnabled]);
+  useEffect(() => {
+    setDiagnostics(getDiagnostics());
+  }, [quotaSaverEnabled, hardLockActive, savedReadsToday]);
+  const formatSavedReads = (value: number) => {
+    if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+    return String(value);
+  };
+  const forceFullRefreshAll = async () => {
+    await Promise.all([
+      fetchDistilleries({ force: true }),
+      fetchPendingProductApprovals({ force: true }),
+      fetchEventProposals({ force: true }),
+      fetchCommunityLinks({ force: true }),
+      fetchCommunityEvents({ force: true }),
+      fetchFlaggedRatings({ force: true }),
+      fetchRecentRatings({ force: true }),
+      fetchBlockedUsers({ force: true }),
+      fetchLicenses({ force: true }),
+      selectedDistilleryId ? fetchAdminProducts({ force: true }) : Promise.resolve(),
+    ]);
+    setLoadedDataTabs(new Set(["approvals", "events", "moderation", "licensing"]));
+    setSavedReadsToday(getSavedReadsToday());
+    setHardLockActive(isHardLockActive());
+    setDiagnostics(getDiagnostics());
+  };
+  const resetDailySavedReads = () => {
+    resetSavedReadsToday();
+    setSavedReadsToday(getSavedReadsToday());
+    setHardLockActive(isHardLockActive());
+    setDiagnostics(getDiagnostics());
+  };
+  const forceHardLock = (next: boolean) => {
+    setHardLockOverride(next);
+    setHardLockActive(isHardLockActive());
+    setDiagnostics(getDiagnostics());
+    console.info(`[QuotaSaver] Force Hard Lock ${next ? "ON" : "OFF"} for testing.`);
+  };
+  const copyDiagnosticsJson = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(getDiagnostics(), null, 2));
+      alert("Diagnostics JSON je kopiran u clipboard.");
+    } catch (err) {
+      console.error("Copy diagnostics failed", err);
+      alert("Kopiranje nije uspelo na ovom uređaju/browseru.");
+    }
+  };
+  const requestForcedNetwork = async (factory: () => Promise<void>) => {
+    if (quotaSaverEnabled) {
+      console.info(`${QUOTA_SAVER_LOG_PREFIX} saver ON: redirecting manual refresh to Force Full Refresh`);
+      await forceFullRefreshAll();
+      return;
+    }
+    await factory();
+  };
 
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) {
@@ -798,7 +918,7 @@ export default function Admin() {
           if (current && cached.some((d) => d.id === current)) return current;
           return cached[0]?.id || "";
         });
-        if (!shouldRunRefresh("admin:distilleries:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+        if (quotaSaverSkip(opts, cached, "admin:distilleries:network", "fetchDistilleries", 120, false)) {
           return;
         }
       } else {
@@ -845,7 +965,7 @@ export default function Admin() {
       const cached = readCache<ProductListItem[]>(productsCacheKey);
       if (!opts?.force && cached != null) {
         setAdminProducts(cached);
-        if (!shouldRunRefresh(gateKey, REFRESH_INTERVAL.ADMIN_PANEL_10M)) {
+        if (quotaSaverSkip(opts, cached, gateKey, "fetchAdminProducts", 180, true)) {
           return;
         }
       } else {
@@ -893,7 +1013,7 @@ export default function Admin() {
       const cached = readCache<ProductListItem[]>(ADMIN_PENDING_APPROVALS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setPendingProductApprovals(cached);
-        if (!shouldRunRefresh("admin:pending_approvals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (quotaSaverSkip(opts, cached, "admin:pending_approvals:network", "fetchPendingProductApprovals", 120, true)) return;
       } else {
         shouldRunRefresh("admin:pending_approvals:network", 0);
       }
@@ -930,7 +1050,7 @@ export default function Admin() {
       const cached = readCache<EventProposalItem[]>(ADMIN_EVENT_PROPOSALS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setEventProposals(cached);
-        if (!shouldRunRefresh("admin:event_proposals:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (quotaSaverSkip(opts, cached, "admin:event_proposals:network", "fetchEventProposals", 80, true)) return;
       } else {
         shouldRunRefresh("admin:event_proposals:network", 0);
       }
@@ -960,7 +1080,7 @@ export default function Admin() {
       const cached = readCache<CommunityLinkItem[]>(ADMIN_COMMUNITY_LINKS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setCommunityLinks(cached);
-        if (!shouldRunRefresh("admin:community_links:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (quotaSaverSkip(opts, cached, "admin:community_links:network", "fetchCommunityLinks", 80, true)) return;
       } else {
         shouldRunRefresh("admin:community_links:network", 0);
       }
@@ -991,7 +1111,7 @@ export default function Admin() {
       const cached = readCache<CommunityEventItem[]>(ADMIN_COMMUNITY_EVENTS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setCommunityEvents(cached);
-        if (!shouldRunRefresh("admin:community_events:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (quotaSaverSkip(opts, cached, "admin:community_events:network", "fetchCommunityEvents", 80, true)) return;
       } else {
         shouldRunRefresh("admin:community_events:network", 0);
       }
@@ -1022,7 +1142,7 @@ export default function Admin() {
       const cached = readCache<RatingRow[]>(ADMIN_FLAGGED_RATINGS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setFlaggedRatings(cached);
-        if (!shouldRunRefresh("admin:ratings_flagged:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (quotaSaverSkip(opts, cached, "admin:ratings_flagged:network", "fetchFlaggedRatings", 120, true)) return;
       } else {
         shouldRunRefresh("admin:ratings_flagged:network", 0);
       }
@@ -1054,7 +1174,7 @@ export default function Admin() {
       const cached = readCache<RatingRow[]>(ADMIN_RECENT_RATINGS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setAllRatings(cached);
-        if (!shouldRunRefresh("admin:ratings_recent:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (quotaSaverSkip(opts, cached, "admin:ratings_recent:network", "fetchRecentRatings", 120, true)) return;
       } else {
         shouldRunRefresh("admin:ratings_recent:network", 0);
       }
@@ -1086,7 +1206,7 @@ export default function Admin() {
       const cached = readCache<string[]>(ADMIN_BLOCKED_USERS_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setBlockedUsers(cached);
-        if (!shouldRunRefresh("admin:blocked_users:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (quotaSaverSkip(opts, cached, "admin:blocked_users:network", "fetchBlockedUsers", 60, true)) return;
       } else {
         shouldRunRefresh("admin:blocked_users:network", 0);
       }
@@ -1159,7 +1279,7 @@ export default function Admin() {
       const cached = readCache<LicenseItem[]>(ADMIN_LICENSES_CACHE_KEY);
       if (!opts?.force && cached != null) {
         setLicenses(cached);
-        if (!shouldRunRefresh("admin:licenses:network", REFRESH_INTERVAL.ADMIN_PANEL_10M)) return;
+        if (quotaSaverSkip(opts, cached, "admin:licenses:network", "fetchLicenses", 120, true)) return;
       } else {
         shouldRunRefresh("admin:licenses:network", 0);
       }
@@ -1418,7 +1538,7 @@ export default function Admin() {
       // We will clear the count to 1 just in case
       setBatchCount(1);
       setBatchEmail("");
-      void fetchLicenses({ force: true });
+      void requestForcedNetwork(() => fetchLicenses({ force: true }));
     } catch (err: unknown) {
       console.error(err);
       alert("Greška pri generisanju licenci: " + ((err as { message?: string } | null)?.message || "Nepoznata greška"));
@@ -1435,7 +1555,7 @@ export default function Admin() {
           maxDevices: Number(newLimit),
           comment: `Limit povećan na ${newLimit} (${new Date().toLocaleDateString()})`
         });
-        void fetchLicenses({ force: true });
+        void requestForcedNetwork(() => fetchLicenses({ force: true }));
       } catch (err) {
         console.error(err);
       }
@@ -1444,15 +1564,20 @@ export default function Admin() {
 
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
-    // Emergency read-safety: do not hydrate every admin dataset on initial mount.
-    // Load only distilleries first; other datasets are fetched lazily by active tab.
-    fetchDistilleries();
+    // Quota nuclear mode: do not auto-load distilleries/licenses on mount (hundreds of reads).
+    // Use "Osveži destilerije" on Destilerije tab or "Force Full Refresh" in the quota banner.
   }, [EMERGENCY_READ_FREEZE]);
 
   useEffect(() => {
     if (EMERGENCY_READ_FREEZE) return;
 
     if (activeTab === "distilleries") {
+      if (!loadedDataTabs.has("distilleries")) {
+        void (async () => {
+          await fetchDistilleries();
+          setLoadedDataTabs((prev) => new Set(prev).add("distilleries"));
+        })();
+      }
       if (selectedDistilleryId && distilleryTab === "pica") {
         const productsFetchKey =
           selectedDistilleryId === "all" && isSuperAdminUser
@@ -1518,7 +1643,7 @@ export default function Admin() {
       }
       setLinkForm({ label: "", url: "" });
       setEditingLinkId(null);
-      void fetchCommunityLinks({ force: true });
+      void requestForcedNetwork(() => fetchCommunityLinks({ force: true }));
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju linka.");
@@ -1533,7 +1658,7 @@ export default function Admin() {
         setEditingLinkId(null);
         setLinkForm({ label: "", url: "" });
       }
-      void fetchCommunityLinks({ force: true });
+      void requestForcedNetwork(() => fetchCommunityLinks({ force: true }));
     } catch (err) {
       console.error(err);
       alert("Greška pri brisanju linka.");
@@ -1568,7 +1693,7 @@ export default function Admin() {
       }
       setEventForm({ title: "", eventDate: "", location: "", description: "", websiteUrl: "", mapsUrl: "" });
       setEditingEventId(null);
-      void fetchCommunityEvents({ force: true });
+      void requestForcedNetwork(() => fetchCommunityEvents({ force: true }));
     } catch (err) {
       console.error(err);
       alert("Greška pri čuvanju događaja.");
@@ -1628,8 +1753,8 @@ export default function Admin() {
           cursor = last;
         }
       }
-      void fetchDistilleries({ force: true });
-      void fetchAdminProducts({ force: true });
+      void requestForcedNetwork(() => fetchDistilleries({ force: true }));
+      void requestForcedNetwork(() => fetchAdminProducts({ force: true }));
     } catch (err) {
       console.error("Greška pri promeni statusa:", err);
       alert("Niste ovlašćeni za ovu akciju.");
@@ -1713,7 +1838,7 @@ export default function Admin() {
       setDistilleryData({ id: "", name: "", region: "Beograd i okolina", website: "", email: "", description: "", logoUrl: "", pib: "", address: "", city: "", mapsUrl: "", trialEndsAt: "" });
        clearGallerySlots();
        try {
-         await fetchDistilleries({ force: true });
+         await requestForcedNetwork(() => fetchDistilleries({ force: true }));
        } catch (e) {
          console.warn("Refresh list failed", e);
        }
@@ -1795,8 +1920,8 @@ export default function Admin() {
       await deleteDoc(doc(db, 'distilleries', id));
       
       setDistilleryToDelete(null);
-      void fetchDistilleries({ force: true });
-      void fetchAdminProducts({ force: true });
+      void requestForcedNetwork(() => fetchDistilleries({ force: true }));
+      void requestForcedNetwork(() => fetchAdminProducts({ force: true }));
       setManualResult("Destilerija i sve njene rakije su uspešno obrisane.");
     } catch (err: unknown) {
       console.error(err);
@@ -1857,8 +1982,8 @@ export default function Admin() {
       }
 
       setManualResult(nextArchived ? "Destilerija je arhivirana." : "Destilerija je vraćena iz arhive.");
-      void fetchDistilleries({ force: true });
-      void fetchAdminProducts({ force: true });
+      void requestForcedNetwork(() => fetchDistilleries({ force: true }));
+      void requestForcedNetwork(() => fetchAdminProducts({ force: true }));
     } catch (err: unknown) {
       console.error(err);
       setManualResult("Greška pri arhiviranju: " + ((err as { message?: string } | null)?.message || "Nepoznata greška."));
@@ -1929,7 +2054,7 @@ export default function Admin() {
         setManualResult("Nova rakija uspešno dodata u bazu!");
       }
       setFormData({ name: "", type: "", description: "", alcoholPercentage: 40, bottleImageUrl: "", barcode: "" });
-      void fetchAdminProducts({ force: true });
+      void requestForcedNetwork(() => fetchAdminProducts({ force: true }));
     } catch (error: unknown) {
       setManualResult("Greška pri unosu: " + ((error as { message?: string } | null)?.message || "Nepoznata greška."));
     } finally {
@@ -1941,7 +2066,7 @@ export default function Admin() {
     try {
       await deleteDoc(doc(db, 'products', id));
       setProductToDelete(null);
-      void fetchAdminProducts({ force: true });
+      void requestForcedNetwork(() => fetchAdminProducts({ force: true }));
     } catch(err) {
       console.error(err);
       setManualResult("Greška pri brisanju: Nemate dozvolu.");
@@ -1978,6 +2103,50 @@ export default function Admin() {
         <div>
           <h1 className="text-2xl font-serif font-bold text-white tracking-wide">Sistemski Admin</h1>
           <p className="text-sm text-text-secondary">Upravljanje podacima</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-widest",
+                quotaSaverEnabled
+                  ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                  : "border-red-500/40 bg-red-500/15 text-red-300",
+              )}
+            >
+              Quota Saver: {quotaSaverEnabled ? "ON" : "OFF"}
+            </span>
+            {isSuperAdminUser && (
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !quotaSaverEnabled;
+                  setQuotaSaverEnabled(next);
+                  setQuotaSaverOverride(next);
+                  setHardLockActive(isHardLockActive());
+                  console.info(`${QUOTA_SAVER_LOG_PREFIX} toggled ${next ? "ON" : "OFF"} by superadmin.`);
+                }}
+                className="rounded-full border border-white/20 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white/85 hover:border-gold-500/40 hover:text-gold-300"
+              >
+                Toggle Saver
+              </button>
+            )}
+            {quotaSaverEnabled && (
+              <button
+                type="button"
+                onClick={() => void forceFullRefreshAll()}
+                className="rounded-full border border-gold-500/40 bg-gold-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-gold-300 hover:bg-gold-500/20"
+              >
+                Force Full Refresh
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-[11px] text-text-secondary/90">
+            Mode: {getCurrentMode()} • Uštedeo: {formatSavedReads(savedReadsToday)} reads danas • Procena po ciklusu: ~{getReadSavingEstimate("admin")} reads
+          </p>
+          {hardLockActive && (
+            <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-red-300">
+              Hard Lock aktivan (saver threshold dostignut) — samo cache + Force Full Refresh
+            </p>
+          )}
           {isSuperAdminUser && (
             <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-gold-500/90">
               Online sada: {onlineUsersCount ?? "—"}
@@ -2001,6 +2170,7 @@ export default function Admin() {
             ['events', 'Događaji', BookOpen],
             ['moderation', 'Moderacija', ShieldAlert],
             ['licensing', 'Licence', Star],
+            ...(isSuperAdminUser ? ([['diagnostics', 'Quota Diagnostics', BarChart2]] as const) : []),
           ] as const
         ).map(([id, label, Icon]) => (
           <button
@@ -2020,6 +2190,77 @@ export default function Admin() {
           </button>
         ))}
       </div>
+
+      {activeTab === "diagnostics" && isSuperAdminUser && (
+        <div className="relative z-10 mb-4 rounded-2xl border border-gold-500/20 bg-bg-card p-5 space-y-4">
+          <h2 className="text-lg font-bold text-white">Quota Diagnostics</h2>
+          <p className="text-xs text-text-secondary">
+            Mode: <span className="text-white font-semibold">{diagnostics.mode}</span> • Hard Lock:{" "}
+            <span className={diagnostics.hardLockActive ? "text-red-300 font-semibold" : "text-emerald-300 font-semibold"}>
+              {diagnostics.hardLockActive ? "ACTIVE" : "OFF"}
+            </span>
+          </p>
+          <p className="text-xs text-text-secondary">
+            Saved reads danas: <span className="text-white font-semibold">{formatSavedReads(diagnostics.savedReadsToday)}</span>{" "}
+            • Procenjena mesečna ušteda: <span className="text-white font-semibold">${diagnostics.estimatedMonthlyCost}</span>
+          </p>
+          <div className="rounded-xl border border-white/10 bg-bg-base/50 p-3">
+            <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-text-secondary">Top 5 sekcija po uštedi</p>
+            <div className="space-y-1">
+              {diagnostics.topSkippedSections.length === 0 && (
+                <p className="text-xs text-text-secondary">Još nema dovoljno podataka.</p>
+              )}
+              {diagnostics.topSkippedSections.map((row) => (
+                <div key={row.section} className="flex items-center justify-between text-xs">
+                  <span className="text-text-secondary truncate pr-2">{row.section}</span>
+                  <span className="text-white font-semibold">{formatSavedReads(row.savedReads)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void copyDiagnosticsJson()}
+              className="rounded-full border border-gold-500/40 bg-gold-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-gold-300"
+            >
+              Copy Diagnostics JSON
+            </button>
+            <button
+              type="button"
+              onClick={resetDailySavedReads}
+              className="rounded-full border border-white/20 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white/85 hover:border-gold-500/40 hover:text-gold-300"
+            >
+              Reset Daily Counter
+            </button>
+            <button
+              type="button"
+              onClick={() => forceHardLock(true)}
+              className="rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-red-300"
+            >
+              Force Hard Lock ON
+            </button>
+            <button
+              type="button"
+              onClick={() => forceHardLock(false)}
+              className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-emerald-300"
+            >
+              Force Hard Lock OFF
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setHardLockOverride(null);
+                setHardLockActive(isHardLockActive());
+                setDiagnostics(getDiagnostics());
+              }}
+              className="rounded-full border border-white/20 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-white/75"
+            >
+              Clear Override
+            </button>
+          </div>
+        </div>
+      )}
 
       {(activeTab === 'approvals' || activeTab === 'distilleries' || activeTab === 'licensing') && (
       <div className="bg-bg-card border border-gold-500/20 rounded-[24px] p-6 shadow-xl relative z-[40] mb-4 space-y-4 animate-in fade-in duration-200">
@@ -2444,7 +2685,7 @@ export default function Admin() {
               </p>
             </div>
             <button
-              onClick={() => void fetchPendingProductApprovals({ force: true })}
+              onClick={() => void requestForcedNetwork(() => fetchPendingProductApprovals({ force: true }))}
               className="px-3 py-2 rounded-lg border border-border-subtle text-text-secondary hover:text-white hover:border-white/40 transition-colors text-xs font-bold uppercase"
             >
               Osveži
@@ -2512,6 +2753,20 @@ export default function Admin() {
                 {editingDistilleryId ? `Ažurirate podatke za ${distilleryData.name}` : "Dodajte nove destilerije/vinarije u sistem ili obrišite postojeće."}
              </p>
           </div>
+          {distilleries.length === 0 && (
+            <div className="rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-text-secondary leading-relaxed max-w-xl">
+                Lista destilerija nije učitana sa mreže (šteda read-ova). Kliknite da povučete podatke iz Firestore-a.
+              </p>
+              <button
+                type="button"
+                onClick={() => void requestForcedNetwork(() => fetchDistilleries({ force: true }))}
+                className="shrink-0 px-3 py-2 rounded-lg border border-gold-500/40 bg-gold-500/15 text-gold-200 text-xs font-black uppercase tracking-wide hover:bg-gold-500/25"
+              >
+                Osveži destilerije
+              </button>
+            </div>
+          )}
           {distilleryTab === 'profil' && (
           <>
           <form onSubmit={handleAddDistillery} className="space-y-4 pt-4 border-t border-border-subtle">
@@ -3132,7 +3387,7 @@ export default function Admin() {
                       onClick={async () => {
                         if (window.confirm("Obriši ovaj predlog?")) {
                           await deleteDoc(doc(db, 'eventProposals', ev.id));
-                          void fetchEventProposals({ force: true });
+                          void requestForcedNetwork(() => fetchEventProposals({ force: true }));
                         }
                       }}
                       className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors shrink-0"
@@ -3567,7 +3822,7 @@ export default function Admin() {
                            try {
                              await deleteDoc(doc(db, 'licenses', lic.id));
                              setConfirmDeleteLicenseId(null);
-                             void fetchLicenses({ force: true });
+                             void requestForcedNetwork(() => fetchLicenses({ force: true }));
                           } catch (e: unknown) {
                             alert("Greška pri brisanju: " + ((e as { message?: string } | null)?.message || "Nepoznata greška"));
                            }
